@@ -7,10 +7,10 @@
 
 // 桌宠内部数值状态
 struct PetState {
-    int mood = 60;          // 心情: -100 ~ 100
+    int mood = 75;          // 心情: 0 ~ 100 (默认元气满满)
     int energy = 100;       // 精力: 0 ~ 100
-    int stamina = 85;       // 体力: 0 ~ 100 (爬窗/跑/跳消耗，坐/趴恢复)
-    bool isRestingInCorner = false; // 是否正在角落休整回血
+    int stamina = 90;       // 体力: 0 ~ 100 (自然回血保持充沛)
+    bool isRestingInCorner = false; // 是否休整中
     int boredom = 0;        // 无聊度: 0 ~ 100
     int affection = 30;     // 亲密度: 0 ~ 100
     int social = 50;        // 社交渴望: 0 ~ 100
@@ -24,7 +24,7 @@ struct PetState {
     PetState() {
         qint64 now = QDateTime::currentMSecsSinceEpoch();
         lastInteractionTime = now;
-        lastTalkTime = now;
+        lastTalkTime = 0; // 初始为0，允许启动短时缓冲后触发登场问候
         lastDayResetTime = now;
     }
 

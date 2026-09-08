@@ -89,7 +89,9 @@ static VOID CALLBACK WinEventProc(HWINEVENTHOOK hWinEventHook, DWORD event, HWND
             payload["window_title"] = title;
 
             if (QCoreApplication::instance()) {
-                QMetaObject::invokeMethod(QCoreApplication::instance(), [payload]() {
+                QString bundleId = appName.toLower() + ".exe";
+                QMetaObject::invokeMethod(QCoreApplication::instance(), [appName, bundleId, title, payload]() {
+                    SystemObserver::instance()->recordAppActivation(appName, bundleId, title);
                     PetEventBus::instance()->emitEvent("system.app_activated", payload);
                 }, Qt::QueuedConnection);
             }
@@ -172,9 +174,60 @@ void SystemObserver::stop() {
 }
 
 QString SystemObserver::currentActiveAppName() const {
+    if (!m_activeAppName.isEmpty()) return m_activeAppName;
     HWND hwnd = GetForegroundWindow();
     if (hwnd) {
         return getProcessNameFromHwnd(hwnd);
     }
     return "";
+}
+
+QString SystemObserver::currentActiveWindowTitle() const {
+    return m_activeWindowTitle;
+}
+
+QString SystemObserver::currentActiveBundleId() const {
+    return m_activeBundleId;
+}
+
+#include "SensorManager.hpp"
+
+QJsonObject SystemObserver::currentSemanticActivity() const {
+    return SensorManager::instance()->currentContext();
+}
+
+void SystemObserver::recordAppActivation(const QString &appName, const QString &bundleId, const QString &windowTitle) {
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    m_activeAppName = appName;
+    m_activeBundleId = bundleId;
+    m_activeWindowTitle = windowTitle;
+    m_appStartTime = now;
+
+    SensorManager::instance()->onAppActivated(appName, bundleId, windowTitle);
+
+    bool isWorkApp = appName.contains("Code", Qt::CaseInsensitive) ||
+                     appName.contains("devenv", Qt::CaseInsensitive) ||
+                     appName.contains("cmd", Qt::CaseInsensitive) ||
+                     appName.contains("powershell", Qt::CaseInsensitive) ||
+                     appName.contains("WindowsTerminal", Qt::CaseInsensitive) ||
+                     appName.contains("idea", Qt::CaseInsensitive) ||
+                     appName.contains("clion", Qt::CaseInsensitive) ||
+                     appName.contains("pycharm", Qt::CaseInsensitive) ||
+                     appName.contains("antigravity", Qt::CaseInsensitive);
+
+    if (isWorkApp) {
+        if (m_workSessionStartTime == 0) {
+            m_workSessionStartTime = now;
+        }
+    } else {
+        if (m_appStartTime - now > 600000) {
+            m_workSessionStartTime = 0;
+        }
+    }
+}
+
+int SystemObserver::continuousWorkMinutes() const {
+    if (m_workSessionStartTime == 0) return 0;
+    qint64 diffMs = QDateTime::currentMSecsSinceEpoch() - m_workSessionStartTime;
+    return static_cast<int>(diffMs / 60000);
 }

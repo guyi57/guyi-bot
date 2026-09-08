@@ -22,9 +22,12 @@ enum class PetActionType {
     CustomBehavior  // 自定义底层 behavior 名字
 };
 
+#include "PetMotionController.hpp"
+
 // 动作指令结构体
 struct PetActionCommand {
     PetActionType type = PetActionType::Idle;
+    PetEmoteType emote = PetEmoteType::None; // 伴随触发的情绪贴纸
     QString customBehaviorName; // 当 type == CustomBehavior 或指定特定动画时使用
     QPoint targetPos;           // 目标坐标（可选）
     int durationMs = 0;         // 持续时间（0 表示按动画默认）

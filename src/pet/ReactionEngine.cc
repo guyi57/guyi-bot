@@ -69,11 +69,17 @@ void ReactionEngine::initDefaultRules()
         ReactionRule r;
         r.eventType = "user.click_pet";
         r.actions = { PetActionType::Jump, PetActionType::Happy };
-        r.speechOptions = { "戳我干嘛？", "摸摸头~", "陪我玩会儿吗？", "别光戳，写代码去！" };
-        r.speechProbability = 0.5;
-        r.boredomDelta = -15;
-        r.affectionDelta = +1;
-        r.moodDelta = +5;
+        r.speechOptions = { 
+            "戳我干嘛呀？想我了吗？💖", 
+            "抓到你啦！今天工作还顺利嘛？✨", 
+            "陪我玩会儿嘛~ (´▽`ʃ♡ƪ)", 
+            "别光戳我，今天也要元气满满哦！🌸", 
+            "再戳…再戳我就跳到你窗口顶上啦！🐾" 
+        };
+        r.speechProbability = 0.95;
+        r.boredomDelta = -20;
+        r.affectionDelta = +2;
+        r.moodDelta = +6;
         m_rules.push_back(r);
     }
 
@@ -82,9 +88,15 @@ void ReactionEngine::initDefaultRules()
         ReactionRule r;
         r.eventType = "user.drag_pet";
         r.actions = { PetActionType::Angry };
-        r.speechOptions = { "放开我！", "晕头转向啦！", "快停下，讨厌被拽着！" };
-        r.speechProbability = 0.6;
-        r.moodDelta = -5;
+        r.speechOptions = { 
+            "哇啊！怎么把我拎起来了！💦", 
+            "起飞咯~ (晃动小短手)", 
+            "快放我下来，恐高啦！🐾", 
+            "要带我去哪个新窗口看风景呀？✨" 
+        };
+        r.speechProbability = 0.75;
+        r.moodDelta = -1;
+        r.boredomDelta = -10;
         m_rules.push_back(r);
     }
 
@@ -411,6 +423,23 @@ bool ReactionEngine::evaluateReaction(const PetEvent &event, PetActionCommand &o
             outCommand.moodDelta = moodDelta;
             outCommand.affectionDelta = affectionDelta;
             outCommand.durationMs = 4000;
+
+            if (event.type == "music.playing") {
+                outCommand.emote = PetEmoteType::MusicNote;
+            } else if (event.type == "agent.task.completed" || event.type == "system.wake") {
+                outCommand.emote = PetEmoteType::Sparkle;
+            } else if (event.type == "agent.task.failed" || event.type == "system.disk_low") {
+                outCommand.emote = PetEmoteType::AngryVein;
+            } else if (event.type == "agent.task.started") {
+                outCommand.emote = PetEmoteType::ThinkingBulb;
+            } else if (event.type == "user.click_pet") {
+                outCommand.emote = PetEmoteType::HappyHeart;
+            } else if (event.type == "system.sleep") {
+                outCommand.emote = PetEmoteType::SleepZzz;
+            } else if (event.type == "system.memory_pressure") {
+                outCommand.emote = PetEmoteType::DizzySwirl;
+            }
+
             if (event.type.startsWith("agent.task.")) {
                 outCommand.moveToCenter = true; // 外部 Agent 重要推送通知才跳到中央
             } else {

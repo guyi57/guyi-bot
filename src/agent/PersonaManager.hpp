@@ -25,6 +25,7 @@ public:
     // 当前选中的人格与提示词
     QString activePersonaId() const;
     void setActivePersonaId(QString const& id);
+    PersonaDefinition currentPersona() const { return getPersona(activePersonaId()); }
 
     QString customPersonaPrompt() const;
     void setCustomPersonaPrompt(QString const& prompt);

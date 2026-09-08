@@ -8,6 +8,13 @@
 #include "PersonaManager.hpp"
 #include "SkillManager.hpp"
 #include "McpManager.hpp"
+#include "SettingsDb.hpp"
+#include "ShijimaManager.hpp"
+#include "UpdateManager.hpp"
+#include "UpdateDialog.hpp"
+#include "LongTermMemoryEngine.hpp"
+#include "SensorManager.hpp"
+#include <QInputDialog>
 #include <QFormLayout>
 #include <QMessageBox>
 #include <QScreen>
@@ -16,14 +23,15 @@
 #include <QScrollArea>
 #include <QDesktopServices>
 #include <QUrl>
+#include <QFileInfo>
 
 AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle("⚙️ 智能助理、角色人格与编程感知配置");
     setWindowFlags(Qt::Dialog | Qt::WindowStaysOnTopHint | Qt::WindowCloseButtonHint);
-    setMinimumWidth(560);
-    setMinimumHeight(520);
+    setMinimumWidth(620);
+    setMinimumHeight(560);
 
     auto mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(16, 16, 16, 16);
@@ -71,9 +79,33 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     auto personaTip = new QLabel("✨ 提示：模型回复开头附带 [action:jump]、[action:celebrate]、[action:sit] 等指令时，桌宠会自动执行对应动作动画！", personaGroup);
     personaTip->setStyleSheet("font-size: 11px; color: #909399;");
     personaTip->setWordWrap(true);
-    personaForm->addRow("", personaTip);
-
     personaLayout->addWidget(personaGroup);
+
+    // 自主搭讪与桌面关怀
+    auto banterGroup = new QGroupBox("💬 灵动拟人化与桌面关怀 (Contextual Banter)", personaPage);
+    banterGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto banterLayout = new QVBoxLayout(banterGroup);
+    banterLayout->setSpacing(8);
+
+    auto freqRow = new QHBoxLayout();
+    auto freqLabel = new QLabel("自主搭讪频率:", banterGroup);
+    freqLabel->setStyleSheet("font-size: 13px; color: #303133;");
+    m_banterFreqCombo = new QComboBox(banterGroup);
+    m_banterFreqCombo->addItem("关闭 (不主动搭讪)", 0);
+    m_banterFreqCombo->addItem("偶尔搭讪 (约 30 分钟一次)", 1);
+    m_banterFreqCombo->addItem("适度陪伴 (约 15 分钟一次，推荐)", 2);
+    m_banterFreqCombo->addItem("活跃互动 (约 8 分钟一次)", 3);
+    m_banterFreqCombo->setStyleSheet("padding: 4px 8px; font-size: 13px;");
+    freqRow->addWidget(freqLabel);
+    freqRow->addWidget(m_banterFreqCombo, 1);
+    banterLayout->addLayout(freqRow);
+
+    m_contextualCareCheck = new QCheckBox("启用前台应用感知与健康关怀 (写代码>45m揉肩/喝水提醒、深夜作息关怀、摸鱼抓包)", banterGroup);
+    m_contextualCareCheck->setStyleSheet("font-size: 12px; color: #475569;");
+    banterLayout->addWidget(m_contextualCareCheck);
+
+    personaLayout->addWidget(banterGroup);
+
     personaLayout->addStretch();
     tabWidget->addTab(personaPage, "🎭 角色人格");
 
@@ -90,20 +122,59 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     llmLayout->setSpacing(12);
 
     // 基础直连 LLM
-    auto llmGroup = new QGroupBox("⚡ 基础大模型配置 (用于直答、翻译与人格对话)", llmContainer);
+    auto llmGroup = new QGroupBox("⚡ 基础大模型配置池 (支持多服务商预设、随心切换与自动故障转移)", llmContainer);
     llmGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
     auto llmForm = new QFormLayout(llmGroup);
     llmForm->setSpacing(8);
     llmForm->setLabelAlignment(Qt::AlignRight);
 
+    // 配置选择与增删操作条
+    auto profileBarLayout = new QHBoxLayout();
+    m_profileCombo = new QComboBox(llmGroup);
+    m_profileCombo->setStyleSheet("padding: 4px; border-radius: 4px; border: 1px solid #dcdfe6; font-weight: bold;");
+    
+    m_setActiveProfileBtn = new QPushButton("⭐ 设为活动模型", llmGroup);
+    m_setActiveProfileBtn->setStyleSheet("padding: 4px 8px; border-radius: 4px; background: #ecf5ff; color: #409eff; border: 1px solid #b3d8ff; font-weight: bold; font-size: 11px;");
+    m_setActiveProfileBtn->setCursor(Qt::PointingHandCursor);
+
+    m_addProfileBtn = new QPushButton("➕ 新建", llmGroup);
+    m_addProfileBtn->setStyleSheet("padding: 4px 8px; border-radius: 4px; background: #e1f3d8; color: #67c23a; border: 1px solid #c2e7b0; font-size: 11px;");
+    m_addProfileBtn->setCursor(Qt::PointingHandCursor);
+    
+    m_delProfileBtn = new QPushButton("🗑️ 删除", llmGroup);
+    m_delProfileBtn->setStyleSheet("padding: 4px 8px; border-radius: 4px; background: #fef0f0; color: #f56c6c; border: 1px solid #fbc4c4; font-size: 11px;");
+    m_delProfileBtn->setCursor(Qt::PointingHandCursor);
+
+    profileBarLayout->addWidget(m_profileCombo, 1);
+    profileBarLayout->addWidget(m_setActiveProfileBtn);
+    profileBarLayout->addWidget(m_addProfileBtn);
+    profileBarLayout->addWidget(m_delProfileBtn);
+    llmForm->addRow("选择模型配置:", profileBarLayout);
+
+    auto switchesLayout = new QHBoxLayout();
+    m_profileEnabledCheck = new QCheckBox("启用此配置参与自动故障转移备用池", llmGroup);
+    m_autoFailoverCheck = new QCheckBox("🔄 接口异常时自动无缝切换备用模型重试", llmGroup);
+    m_autoFailoverCheck->setStyleSheet("font-weight: bold; color: #409eff;");
+    switchesLayout->addWidget(m_profileEnabledCheck);
+    switchesLayout->addWidget(m_autoFailoverCheck);
+    llmForm->addRow("故障转移策略:", switchesLayout);
+
+    m_profileNameEdit = new QLineEdit(llmGroup);
+    m_profileNameEdit->setPlaceholderText("例如: DeepSeek (官方 API)");
+    m_profileNameEdit->setStyleSheet("padding: 5px; border-radius: 4px; border: 1px solid #dcdfe6;");
+    llmForm->addRow("配置显示名称:", m_profileNameEdit);
+
     m_presetCombo = new QComboBox(llmGroup);
-    m_presetCombo->addItem("自定义配置 (Custom)", 0);
-    m_presetCombo->addItem("DeepSeek (官方 API)", 1);
-    m_presetCombo->addItem("OpenAI (官方 API)", 2);
-    m_presetCombo->addItem("腾讯云 / WorkBuddy (兼容 API)", 3);
-    m_presetCombo->addItem("本地 Ollama (127.0.0.1:11434 离线免费)", 4);
-    m_presetCombo->setStyleSheet("padding: 4px; border-radius: 4px; border: 1px solid #dcdfe6;");
-    llmForm->addRow("服务商预设:", m_presetCombo);
+    m_presetCombo->addItem("-- 选择预设模板快速填充 --", 0);
+    m_presetCombo->addItem("DeepSeek (官方 API: deepseek-chat)", 1);
+    m_presetCombo->addItem("硅基流动 (SiliconFlow: DeepSeek-V3)", 2);
+    m_presetCombo->addItem("通义千问 (阿里云百炼: qwen-plus)", 3);
+    m_presetCombo->addItem("智谱清言 (GLM 官方: glm-4-flash)", 4);
+    m_presetCombo->addItem("Moonshot AI (Kimi 官方: moonshot-v1-8k)", 5);
+    m_presetCombo->addItem("OpenAI (官方 API: gpt-4o-mini)", 6);
+    m_presetCombo->addItem("本地 Ollama (127.0.0.1:11434 离线免费)", 7);
+    m_presetCombo->setStyleSheet("padding: 4px; border-radius: 4px; border: 1px solid #dcdfe6; color: #606266;");
+    llmForm->addRow("快速填入模板:", m_presetCombo);
 
     m_apiBaseEdit = new QLineEdit(llmGroup);
     m_apiBaseEdit->setPlaceholderText("例如: https://api.deepseek.com/v1");
@@ -272,6 +343,11 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     m_hotkeyAskEdit->setStyleSheet("padding: 5px; border-radius: 4px; border: 1px solid #dcdfe6; font-weight: bold;");
     hkForm->addRow("划词提问快捷键:", m_hotkeyAskEdit);
 
+    m_hotkeyHistoryEdit = new QLineEdit(hkGroup);
+    m_hotkeyHistoryEdit->setPlaceholderText("例如: Option+H 或 Alt+H");
+    m_hotkeyHistoryEdit->setStyleSheet("padding: 5px; border-radius: 4px; border: 1px solid #dcdfe6; font-weight: bold;");
+    hkForm->addRow("📜 历史任务快捷键:", m_hotkeyHistoryEdit);
+
     m_hotkeyMusicToggleEdit = new QLineEdit(hkGroup);
     m_hotkeyMusicToggleEdit->setPlaceholderText("例如: Option+M");
     m_hotkeyMusicToggleEdit->setStyleSheet("padding: 5px; border-radius: 4px; border: 1px solid #dcdfe6; font-weight: bold;");
@@ -378,6 +454,229 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
 
     tabWidget->addTab(mcpPage, "🔌 MCP 服务");
 
+    // =========================================================================
+    // 🧠 TAB: 长期记忆与画像 (Long-Term Memory & Profile)
+    // =========================================================================
+    auto memoryPage = new QWidget(tabWidget);
+    auto memoryLayout = new QVBoxLayout(memoryPage);
+    memoryLayout->setSpacing(10);
+
+    // 1. 主人全局核心画像 (Core Profile)
+    auto profileGroup = new QGroupBox("👤 主人全局核心画像 (L1 Core Profile)", memoryPage);
+    profileGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto profileForm = new QFormLayout(profileGroup);
+    profileForm->setSpacing(6);
+    profileForm->setLabelAlignment(Qt::AlignRight);
+
+    m_ownerNameEdit = new QLineEdit(profileGroup);
+    m_ownerNameEdit->setPlaceholderText("例如: 古逸 / 主人");
+    profileForm->addRow("称呼/姓名:", m_ownerNameEdit);
+
+    m_ownerOccEdit = new QLineEdit(profileGroup);
+    m_ownerOccEdit->setPlaceholderText("例如: 资深桌面开发工程师 / 架构师");
+    profileForm->addRow("职业身份:", m_ownerOccEdit);
+
+    m_ownerTechEdit = new QLineEdit(profileGroup);
+    m_ownerTechEdit->setPlaceholderText("例如: C++, Qt, Python, Rust, Linux, macOS");
+    profileForm->addRow("常用技术栈:", m_ownerTechEdit);
+
+    m_ownerMusicEdit = new QLineEdit(profileGroup);
+    m_ownerMusicEdit->setPlaceholderText("例如: 华语流行, 摇滚, 轻音乐, 周杰伦");
+    profileForm->addRow("音乐偏好:", m_ownerMusicEdit);
+
+    m_ownerHabitEdit = new QLineEdit(profileGroup);
+    m_ownerHabitEdit->setPlaceholderText("例如: 经常高强度专注, 偶尔凌晨写代码");
+    profileForm->addRow("作息与习惯:", m_ownerHabitEdit);
+
+    m_ownerNotesEdit = new QTextEdit(profileGroup);
+    m_ownerNotesEdit->setPlaceholderText("例如: 正在开发 xuanfu 桌宠项目，喜好极简高效的代码风格...");
+    m_ownerNotesEdit->setFixedHeight(45);
+    profileForm->addRow("附加长期备忘:", m_ownerNotesEdit);
+
+    auto profileBtnLayout = new QHBoxLayout();
+    profileBtnLayout->addStretch();
+    m_saveOwnerProfileBtn = new QPushButton("💾 保存主人核心档案", profileGroup);
+    m_saveOwnerProfileBtn->setStyleSheet("padding: 4px 14px; border-radius: 4px; border: none; background: #67c23a; color: white; font-weight: bold; font-size: 12px;");
+    m_saveOwnerProfileBtn->setCursor(Qt::PointingHandCursor);
+    profileBtnLayout->addWidget(m_saveOwnerProfileBtn);
+    profileForm->addRow("", profileBtnLayout);
+
+    memoryLayout->addWidget(profileGroup);
+
+    // 2. 长程语义事实库 (Semantic Memories)
+    auto memGroup = new QGroupBox("🧠 语义事实记忆库 (L3 Semantic Memories)", memoryPage);
+    memGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto memGroupLayout = new QVBoxLayout(memGroup);
+    memGroupLayout->setSpacing(6);
+
+    auto searchRow = new QHBoxLayout();
+    m_memSearchEdit = new QLineEdit(memGroup);
+    m_memSearchEdit->setPlaceholderText("🔍 输入关键词或语义描述进行检索...");
+    m_memSearchBtn = new QPushButton("搜索", memGroup);
+    m_memSearchBtn->setStyleSheet("padding: 4px 12px; border-radius: 4px; border: 1px solid #dcdfe6; background: #f4f4f5; font-size: 12px;");
+    m_memSearchBtn->setCursor(Qt::PointingHandCursor);
+
+    m_memRefreshBtn = new QPushButton("刷新", memGroup);
+    m_memRefreshBtn->setStyleSheet("padding: 4px 12px; border-radius: 4px; border: 1px solid #dcdfe6; background: #f4f4f5; font-size: 12px;");
+    m_memRefreshBtn->setCursor(Qt::PointingHandCursor);
+
+    searchRow->addWidget(m_memSearchEdit);
+    searchRow->addWidget(m_memSearchBtn);
+    searchRow->addWidget(m_memRefreshBtn);
+    memGroupLayout->addLayout(searchRow);
+
+    m_memListWidget = new QListWidget(memGroup);
+    m_memListWidget->setStyleSheet("border: 1px solid #e4e7ed; border-radius: 6px; background: #ffffff; padding: 4px; font-size: 12px;");
+    m_memListWidget->setFixedHeight(120);
+    memGroupLayout->addWidget(m_memListWidget);
+
+    auto memActionsRow = new QHBoxLayout();
+    m_memStatsLabel = new QLabel("正在读取记忆统计...", memGroup);
+    m_memStatsLabel->setStyleSheet("color: #909399; font-size: 11px;");
+    memActionsRow->addWidget(m_memStatsLabel);
+    memActionsRow->addStretch();
+
+    m_memAddBtn = new QPushButton("➕ 记一条", memGroup);
+    m_memAddBtn->setStyleSheet("padding: 3px 9px; border-radius: 4px; border: 1px solid #dcdfe6; background: #f4f4f5; font-size: 12px;");
+    m_memAddBtn->setCursor(Qt::PointingHandCursor);
+
+    m_memDelBtn = new QPushButton("🗑️ 删除选中", memGroup);
+    m_memDelBtn->setStyleSheet("padding: 3px 9px; border-radius: 4px; border: 1px solid #f56c6c; background: #fef0f0; color: #f56c6c; font-size: 12px;");
+    m_memDelBtn->setCursor(Qt::PointingHandCursor);
+
+    m_memClearAllBtn = new QPushButton("⚠️ 清空全部", memGroup);
+    m_memClearAllBtn->setStyleSheet("padding: 3px 9px; border-radius: 4px; border: 1px solid #dcdfe6; background: #f4f4f5; color: #909399; font-size: 12px;");
+    m_memClearAllBtn->setCursor(Qt::PointingHandCursor);
+
+    memActionsRow->addWidget(m_memAddBtn);
+    memActionsRow->addWidget(m_memDelBtn);
+    memActionsRow->addWidget(m_memClearAllBtn);
+    memGroupLayout->addLayout(memActionsRow);
+
+    memoryLayout->addWidget(memGroup);
+
+    // 3. 实时应用感知与自进化探针足迹 (Live App Sensing & Probes)
+    auto sensorGroup = new QGroupBox("📡 实时应用感知与自进化探针 (App Sensing & Probes)", memoryPage);
+    sensorGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto sensorLayout = new QVBoxLayout(sensorGroup);
+    sensorLayout->setSpacing(6);
+
+    m_sensorCurrentStatusLabel = new QLabel(sensorGroup);
+    m_sensorCurrentStatusLabel->setStyleSheet("font-size: 12px; color: #409eff; background: #ecf5ff; padding: 6px 10px; border-radius: 6px; border: 1px solid #d9ecff;");
+    m_sensorCurrentStatusLabel->setWordWrap(true);
+    sensorLayout->addWidget(m_sensorCurrentStatusLabel);
+
+    m_sensorActivityList = new QListWidget(sensorGroup);
+    m_sensorActivityList->setStyleSheet("border: 1px solid #e4e7ed; border-radius: 6px; background: #ffffff; padding: 4px; font-size: 12px;");
+    m_sensorActivityList->setFixedHeight(110);
+    sensorLayout->addWidget(m_sensorActivityList);
+
+    auto sensorActionRow = new QHBoxLayout();
+    m_sensorStatsLabel = new QLabel(sensorGroup);
+    m_sensorStatsLabel->setStyleSheet("color: #909399; font-size: 11px;");
+    sensorActionRow->addWidget(m_sensorStatsLabel);
+    sensorActionRow->addStretch();
+
+    m_sensorRefreshBtn = new QPushButton("🔄 刷新感知", sensorGroup);
+    m_sensorRefreshBtn->setStyleSheet("padding: 3px 9px; border-radius: 4px; border: 1px solid #dcdfe6; background: #f4f4f5; font-size: 12px;");
+    m_sensorRefreshBtn->setCursor(Qt::PointingHandCursor);
+
+    m_sensorOpenFolderBtn = new QPushButton("📂 打开探针库", sensorGroup);
+    m_sensorOpenFolderBtn->setStyleSheet("padding: 3px 9px; border-radius: 4px; border: 1px solid #dcdfe6; background: #f4f4f5; font-size: 12px;");
+    m_sensorOpenFolderBtn->setCursor(Qt::PointingHandCursor);
+
+    sensorActionRow->addWidget(m_sensorRefreshBtn);
+    sensorActionRow->addWidget(m_sensorOpenFolderBtn);
+    sensorLayout->addLayout(sensorActionRow);
+
+    memoryLayout->addWidget(sensorGroup);
+
+    tabWidget->addTab(memoryPage, "🧠 长期记忆");
+
+    // =========================================================================
+    // ⚙️ TAB: 系统与更新 (System, Updates & Appearance)
+    // =========================================================================
+    auto sysPage = new QWidget(tabWidget);
+    auto sysLayout = new QVBoxLayout(sysPage);
+    sysLayout->setSpacing(12);
+
+    // 1. 软件版本与在线更新
+    auto updateGroup = new QGroupBox("🔄 软件版本与在线更新", sysPage);
+    updateGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto updateForm = new QFormLayout(updateGroup);
+    updateForm->setSpacing(10);
+    updateForm->setLabelAlignment(Qt::AlignRight);
+
+    auto verLabel = new QLabel(QString("v%1 (官方最新稳定构建)").arg(UpdateManager::instance()->currentVersion()), updateGroup);
+    verLabel->setStyleSheet("font-weight: bold; color: #409eff; font-size: 13px;");
+    updateForm->addRow("当前软件版本:", verLabel);
+
+    auto updateBtnRow = new QHBoxLayout();
+    m_checkUpdateBtn = new QPushButton("🔄 立即检查更新...", updateGroup);
+    m_checkUpdateBtn->setStyleSheet("padding: 5px 14px; border-radius: 4px; border: 1px solid #409eff; color: #409eff; background: #ecf5ff; font-weight: 500; font-size: 12px;");
+    m_checkUpdateBtn->setCursor(Qt::PointingHandCursor);
+
+    m_openReleaseUrlBtn = new QPushButton("🌐 GitHub 发布页", updateGroup);
+    m_openReleaseUrlBtn->setStyleSheet("padding: 5px 12px; border-radius: 4px; border: 1px solid #dcdfe6; color: #606266; background: #f4f4f5; font-size: 12px;");
+    m_openReleaseUrlBtn->setCursor(Qt::PointingHandCursor);
+
+    updateBtnRow->addWidget(m_checkUpdateBtn);
+    updateBtnRow->addWidget(m_openReleaseUrlBtn);
+    updateBtnRow->addStretch();
+    updateForm->addRow("版本更新操作:", updateBtnRow);
+
+    m_updateStatusLabel = new QLabel(updateGroup);
+    m_updateStatusLabel->setStyleSheet("font-size: 12px; color: #606266;");
+    m_updateStatusLabel->setWordWrap(true);
+    m_updateStatusLabel->setText("点击上方按钮联网检查 GitHub 最新发行版。");
+    updateForm->addRow("检查状态:", m_updateStatusLabel);
+
+    m_autoCheckUpdateCheck = new QCheckBox("应用启动时自动在后台静默检查新版本", updateGroup);
+    m_autoCheckUpdateCheck->setStyleSheet("font-size: 12px; color: #303133;");
+    updateForm->addRow("", m_autoCheckUpdateCheck);
+
+    sysLayout->addWidget(updateGroup);
+
+    // 2. 桌面外观与状态显示
+    auto displayGroup = new QGroupBox("🖥️ 桌面外观与状态微盘", sysPage);
+    displayGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto displayForm = new QFormLayout(displayGroup);
+    displayForm->setSpacing(8);
+    displayForm->setLabelAlignment(Qt::AlignRight);
+
+    m_showHeadStatusOrbCheck = new QCheckBox("头顶显示体力 (⚡) 与心情 (☻) 状态微盘", displayGroup);
+    m_showHeadStatusOrbCheck->setStyleSheet("font-size: 13px; font-weight: 500; color: #303133;");
+    displayForm->addRow("状态微盘开关:", m_showHeadStatusOrbCheck);
+
+    auto displayTip = new QLabel("开启后将在桌宠头顶实时渲染暗夜环形微盘指示器；关闭后头顶保持清爽纯净（默认关闭）。", displayGroup);
+    displayTip->setStyleSheet("font-size: 11px; color: #909399;");
+    displayTip->setWordWrap(true);
+    displayForm->addRow("", displayTip);
+
+    sysLayout->addWidget(displayGroup);
+
+    // 3. 本地数据与存储
+    auto dataGroup = new QGroupBox("📁 本地数据与缓存", sysPage);
+    dataGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto dataForm = new QFormLayout(dataGroup);
+    dataForm->setSpacing(8);
+    dataForm->setLabelAlignment(Qt::AlignRight);
+
+    auto dbPathLabel = new QLabel(SettingsDb::instance()->dbPath(), dataGroup);
+    dbPathLabel->setStyleSheet("font-size: 11px; color: #909399; font-family: monospace;");
+    dbPathLabel->setWordWrap(true);
+    dataForm->addRow("配置数据库:", dbPathLabel);
+
+    m_openDataDirBtn = new QPushButton("📂 打开数据存储目录", dataGroup);
+    m_openDataDirBtn->setStyleSheet("padding: 5px 12px; border-radius: 4px; border: 1px solid #dcdfe6; color: #606266; background: #f4f4f5; font-size: 12px;");
+    m_openDataDirBtn->setCursor(Qt::PointingHandCursor);
+    dataForm->addRow("数据快捷方式:", m_openDataDirBtn);
+
+    sysLayout->addWidget(dataGroup);
+
+    sysLayout->addStretch();
+    tabWidget->addTab(sysPage, "⚙️ 系统与更新");
+
     mainLayout->addWidget(tabWidget);
 
     // 底部按钮栏
@@ -398,11 +697,25 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     mainLayout->addLayout(btnLayout);
 
     // 信号连接
-    connect(m_personaCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &AgentSettingsDialog::onPersonaChanged);
-    connect(m_presetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &AgentSettingsDialog::applyPreset);
-    connect(m_testBtn, &QPushButton::clicked, this, &AgentSettingsDialog::testConnection);
-    connect(m_autoDetectKeyBtn, &QPushButton::clicked, this, &AgentSettingsDialog::autoDetectAipyKey);
-    connect(m_testAipyBtn, &QPushButton::clicked, this, &AgentSettingsDialog::testAipyConnection);
+    connect(m_profileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) { onProfileSelectionChanged(idx); });
+    connect(m_addProfileBtn, &QPushButton::clicked, this, [this]() { onAddProfileClicked(); });
+    connect(m_delProfileBtn, &QPushButton::clicked, this, [this]() { onDeleteProfileClicked(); });
+    connect(m_setActiveProfileBtn, &QPushButton::clicked, this, [this]() { onSetActiveProfileClicked(); });
+
+    connect(m_personaCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) { onPersonaChanged(idx); });
+    connect(m_presetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) { applyPreset(idx); });
+    connect(m_testBtn, &QPushButton::clicked, this, [this]() { testConnection(); });
+    connect(m_autoDetectKeyBtn, &QPushButton::clicked, this, [this]() { autoDetectAipyKey(); });
+    connect(m_testAipyBtn, &QPushButton::clicked, this, [this]() { testAipyConnection(); });
+
+    connect(m_checkUpdateBtn, &QPushButton::clicked, this, &AgentSettingsDialog::checkForUpdates);
+    connect(m_openReleaseUrlBtn, &QPushButton::clicked, this, []() {
+        QDesktopServices::openUrl(QUrl("https://github.com/" GUYI_BOT_REPO "/releases"));
+    });
+    connect(m_openDataDirBtn, &QPushButton::clicked, this, []() {
+        QString dir = QFileInfo(SettingsDb::instance()->dbPath()).absolutePath();
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    });
 
     connect(m_openSkillsDirBtn, &QPushButton::clicked, this, []() {
         QDesktopServices::openUrl(QUrl::fromLocalFile(SkillManager::instance()->skillsDirectory()));
@@ -454,6 +767,24 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
         }
     });
 
+    // 长期记忆信号连接
+    connect(m_saveOwnerProfileBtn, &QPushButton::clicked, this, &AgentSettingsDialog::onSaveOwnerProfileClicked);
+    connect(m_memSearchBtn, &QPushButton::clicked, this, &AgentSettingsDialog::onSearchMemoryClicked);
+    connect(m_memSearchEdit, &QLineEdit::returnPressed, this, &AgentSettingsDialog::onSearchMemoryClicked);
+    connect(m_memRefreshBtn, &QPushButton::clicked, this, &AgentSettingsDialog::refreshMemoryTab);
+    connect(m_memAddBtn, &QPushButton::clicked, this, &AgentSettingsDialog::onAddMemoryClicked);
+    connect(m_memDelBtn, &QPushButton::clicked, this, &AgentSettingsDialog::onDeleteMemoryClicked);
+    connect(m_memClearAllBtn, &QPushButton::clicked, this, &AgentSettingsDialog::onClearAllMemoriesClicked);
+    connect(m_sensorRefreshBtn, &QPushButton::clicked, this, &AgentSettingsDialog::refreshMemoryTab);
+    connect(m_sensorOpenFolderBtn, &QPushButton::clicked, this, []() {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(SensorManager::instance()->sensorDirectory()));
+    });
+    LongTermMemoryEngine::instance()->addMemoryListener([this]() {
+        QMetaObject::invokeMethod(this, [this]() {
+            refreshMemoryTab();
+        }, Qt::QueuedConnection);
+    });
+
     connect(m_cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     connect(m_saveBtn, &QPushButton::clicked, this, &AgentSettingsDialog::saveAndClose);
     
@@ -463,6 +794,129 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     });
 
     refreshValues();
+}
+
+void AgentSettingsDialog::checkForUpdates() {
+    m_checkUpdateBtn->setEnabled(false);
+    m_checkUpdateBtn->setText("⏳ 正在检查...");
+    m_updateStatusLabel->setStyleSheet("font-size: 12px; color: #409eff;");
+    m_updateStatusLabel->setText("正在连接 GitHub 获取最新版本信息...");
+
+    UpdateManager::instance()->checkForUpdates(false, [this](const UpdateInfo &info, const QString &err) {
+        m_checkUpdateBtn->setEnabled(true);
+        m_checkUpdateBtn->setText("🔄 立即检查更新...");
+        if (!err.isEmpty()) {
+            m_updateStatusLabel->setStyleSheet("font-size: 12px; color: #f56c6c; font-weight: bold;");
+            m_updateStatusLabel->setText("❌ 检查更新失败: " + err);
+            QMessageBox::warning(this, "检查更新失败", err);
+        } else if (info.hasUpdate) {
+            m_updateStatusLabel->setStyleSheet("font-size: 12px; color: #67c23a; font-weight: bold;");
+            m_updateStatusLabel->setText(QString("🎉 发现新版本 %1！").arg(info.remoteVersion));
+            auto dialog = new UpdateDialog(info, this);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            dialog->show();
+            dialog->raise();
+            dialog->activateWindow();
+        } else {
+            m_updateStatusLabel->setStyleSheet("font-size: 12px; color: #67c23a; font-weight: bold;");
+            m_updateStatusLabel->setText(QString("🎉 当前已是最新版本 (v%1)，无需更新！").arg(info.currentVersion));
+            QMessageBox::information(this, "检查更新", QString("🎉 当前已是最新版本 (v%1)！").arg(info.currentVersion));
+        }
+    });
+}
+
+void AgentSettingsDialog::saveCurrentProfileEdits() {
+    if (m_lastSelectedProfileIdx >= 0 && m_lastSelectedProfileIdx < m_tempProfiles.size()) {
+        auto &p = m_tempProfiles[m_lastSelectedProfileIdx];
+        QString name = m_profileNameEdit->text().trimmed();
+        if (!name.isEmpty()) p.name = name;
+        p.apiBase = m_apiBaseEdit->text().trimmed();
+        p.apiKey = m_apiKeyEdit->text().trimmed();
+        p.model = m_modelEdit->text().trimmed();
+        p.enabled = m_profileEnabledCheck->isChecked();
+    }
+}
+
+void AgentSettingsDialog::onProfileSelectionChanged(int index) {
+    if (index < 0 || index >= m_tempProfiles.size()) return;
+    saveCurrentProfileEdits();
+    m_lastSelectedProfileIdx = index;
+    const auto &p = m_tempProfiles[index];
+    m_profileNameEdit->setText(p.name);
+    m_apiBaseEdit->setText(p.apiBase);
+    m_apiKeyEdit->setText(p.apiKey);
+    m_modelEdit->setText(p.model);
+    m_profileEnabledCheck->setChecked(p.enabled);
+
+    bool isActive = (p.id == m_tempActiveId);
+    m_setActiveProfileBtn->setText(isActive ? "⭐ 当前活动模型" : "⭐ 设为活动模型");
+    m_setActiveProfileBtn->setEnabled(!isActive);
+}
+
+void AgentSettingsDialog::onAddProfileClicked() {
+    saveCurrentProfileEdits();
+    ModelProfile newProfile;
+    newProfile.id = "custom_" + QString::number(QDateTime::currentMSecsSinceEpoch());
+    newProfile.name = "自定义模型配置 " + QString::number(m_tempProfiles.size() + 1);
+    newProfile.apiBase = "https://api.deepseek.com/v1";
+    newProfile.apiKey = "";
+    newProfile.model = "deepseek-chat";
+    newProfile.enabled = true;
+    m_tempProfiles.append(newProfile);
+
+    m_profileCombo->blockSignals(true);
+    m_profileCombo->addItem(newProfile.name, newProfile.id);
+    m_profileCombo->setCurrentIndex(m_tempProfiles.size() - 1);
+    m_profileCombo->blockSignals(false);
+
+    onProfileSelectionChanged(m_tempProfiles.size() - 1);
+}
+
+void AgentSettingsDialog::onDeleteProfileClicked() {
+    if (m_tempProfiles.size() <= 1) {
+        QMessageBox::warning(this, "提示", "至少需要保留一个大模型配置！");
+        return;
+    }
+    int curIdx = m_profileCombo->currentIndex();
+    if (curIdx < 0 || curIdx >= m_tempProfiles.size()) return;
+
+    QString delId = m_tempProfiles[curIdx].id;
+    m_tempProfiles.removeAt(curIdx);
+    if (m_tempActiveId == delId) {
+        m_tempActiveId = m_tempProfiles.first().id;
+    }
+
+    m_profileCombo->blockSignals(true);
+    m_profileCombo->clear();
+    for (int i = 0; i < m_tempProfiles.size(); ++i) {
+        const auto &p = m_tempProfiles[i];
+        QString prefix = (p.id == m_tempActiveId) ? "⭐ " : "";
+        m_profileCombo->addItem(prefix + p.name, p.id);
+    }
+    int newIdx = std::min(curIdx, (int)m_tempProfiles.size() - 1);
+    m_profileCombo->setCurrentIndex(newIdx);
+    m_profileCombo->blockSignals(false);
+    m_lastSelectedProfileIdx = newIdx;
+    onProfileSelectionChanged(newIdx);
+}
+
+void AgentSettingsDialog::onSetActiveProfileClicked() {
+    int curIdx = m_profileCombo->currentIndex();
+    if (curIdx < 0 || curIdx >= m_tempProfiles.size()) return;
+    saveCurrentProfileEdits();
+    m_tempActiveId = m_tempProfiles[curIdx].id;
+
+    m_profileCombo->blockSignals(true);
+    for (int i = 0; i < m_tempProfiles.size(); ++i) {
+        const auto &p = m_tempProfiles[i];
+        QString prefix = (p.id == m_tempActiveId) ? "⭐ " : "";
+        m_profileCombo->setItemText(i, prefix + p.name);
+    }
+    m_profileCombo->blockSignals(false);
+
+    m_setActiveProfileBtn->setText("⭐ 当前活动模型");
+    m_setActiveProfileBtn->setEnabled(false);
+    QMessageBox::information(this, "提示", QString("已将【%1】设为当前活动模型！").arg(m_tempProfiles[curIdx].name));
 }
 
 void AgentSettingsDialog::onPersonaChanged(int index) {
@@ -481,12 +935,31 @@ void AgentSettingsDialog::onPersonaChanged(int index) {
 
 void AgentSettingsDialog::refreshValues() {
     auto cfg = AgentService::instance()->config();
-    m_apiBaseEdit->setText(cfg.apiBase);
-    m_apiKeyEdit->setText(cfg.apiKey);
-    m_modelEdit->setText(cfg.model);
+    m_tempProfiles = cfg.modelProfiles;
+    if (m_tempProfiles.isEmpty()) {
+        m_tempProfiles = AgentService::defaultBuiltinProfiles();
+    }
+    m_tempActiveId = cfg.activeProfileId;
+    m_autoFailoverCheck->setChecked(cfg.enableAutoFailover);
+
+    m_profileCombo->blockSignals(true);
+    m_profileCombo->clear();
+    int activeIdx = 0;
+    for (int i = 0; i < m_tempProfiles.size(); ++i) {
+        const auto &p = m_tempProfiles[i];
+        bool isActive = (p.id == m_tempActiveId);
+        if (isActive) activeIdx = i;
+        m_profileCombo->addItem(QString("%1%2").arg(isActive ? "⭐ " : "", p.name), p.id);
+    }
+    m_profileCombo->setCurrentIndex(activeIdx);
+    m_profileCombo->blockSignals(false);
+    m_lastSelectedProfileIdx = -1;
+    onProfileSelectionChanged(activeIdx);
+
     m_memoryTurnsSpin->setValue(cfg.maxMemoryTurns);
     m_hotkeyTranslateEdit->setText(cfg.hotkeyTranslate.isEmpty() ? "Option+T" : cfg.hotkeyTranslate);
     m_hotkeyAskEdit->setText(cfg.hotkeyAsk.isEmpty() ? "Option+Q" : cfg.hotkeyAsk);
+    m_hotkeyHistoryEdit->setText(cfg.hotkeyHistory.isEmpty() ? "Option+H" : cfg.hotkeyHistory);
 
     m_hotkeyMusicToggleEdit->setText(cfg.hotkeyMusicToggle.isEmpty() ? "Option+M" : cfg.hotkeyMusicToggle);
     m_hotkeyMusicPlayPauseEdit->setText(cfg.hotkeyMusicPlayPause.isEmpty() ? "Option+Space" : cfg.hotkeyMusicPlayPause);
@@ -517,11 +990,21 @@ void AgentSettingsDialog::refreshValues() {
     m_enableLlmNarrationCheck->setChecked(cfg.enableLlmTaskNarration);
     m_stateDebounceSpin->setValue(cfg.stateDebounceSec);
 
+    m_showHeadStatusOrbCheck->setChecked(SettingsDb::instance()->get("ui.show_head_status_orb", "false") == "true");
+    m_autoCheckUpdateCheck->setChecked(SettingsDb::instance()->getBool("sys.auto_check_update", true));
+    m_updateStatusLabel->setStyleSheet("font-size: 12px; color: #606266;");
+    m_updateStatusLabel->setText(QString("当前运行版本: v%1 (官方最新稳定构建)").arg(UpdateManager::instance()->currentVersion()));
+
+    int bIdx = m_banterFreqCombo->findData(cfg.banterFrequencyLevel);
+    if (bIdx >= 0) m_banterFreqCombo->setCurrentIndex(bIdx);
+    m_contextualCareCheck->setChecked(cfg.enableContextualCare);
+
     m_testStatusLabel->clear();
     m_agentStatusLabel->clear();
 
     refreshSkillsTab();
     refreshMcpTab();
+    refreshMemoryTab();
 }
 
 void AgentSettingsDialog::refreshSkillsTab() {
@@ -602,17 +1085,47 @@ void AgentSettingsDialog::applyPreset(int index) {
     if (index == 1) { // DeepSeek
         m_apiBaseEdit->setText("https://api.deepseek.com/v1");
         m_modelEdit->setText("deepseek-chat");
-    } else if (index == 2) { // OpenAI
+        if (m_profileNameEdit->text().isEmpty() || m_profileNameEdit->text().contains("自定义") || m_profileNameEdit->text().contains("新建")) {
+            m_profileNameEdit->setText("DeepSeek (官方 API)");
+        }
+    } else if (index == 2) { // 硅基流动
+        m_apiBaseEdit->setText("https://api.siliconflow.cn/v1");
+        m_modelEdit->setText("deepseek-ai/DeepSeek-V3");
+        if (m_profileNameEdit->text().isEmpty() || m_profileNameEdit->text().contains("自定义") || m_profileNameEdit->text().contains("新建")) {
+            m_profileNameEdit->setText("硅基流动 (SiliconFlow)");
+        }
+    } else if (index == 3) { // 通义千问
+        m_apiBaseEdit->setText("https://dashscope.aliyuncs.com/compatible-mode/v1");
+        m_modelEdit->setText("qwen-plus");
+        if (m_profileNameEdit->text().isEmpty() || m_profileNameEdit->text().contains("自定义") || m_profileNameEdit->text().contains("新建")) {
+            m_profileNameEdit->setText("通义千问 (阿里云百炼)");
+        }
+    } else if (index == 4) { // 智谱清言
+        m_apiBaseEdit->setText("https://open.bigmodel.cn/api/paas/v4");
+        m_modelEdit->setText("glm-4-flash");
+        if (m_profileNameEdit->text().isEmpty() || m_profileNameEdit->text().contains("自定义") || m_profileNameEdit->text().contains("新建")) {
+            m_profileNameEdit->setText("智谱清言 (GLM-4-Flash)");
+        }
+    } else if (index == 5) { // Moonshot
+        m_apiBaseEdit->setText("https://api.moonshot.cn/v1");
+        m_modelEdit->setText("moonshot-v1-8k");
+        if (m_profileNameEdit->text().isEmpty() || m_profileNameEdit->text().contains("自定义") || m_profileNameEdit->text().contains("新建")) {
+            m_profileNameEdit->setText("Moonshot (Kimi 官方)");
+        }
+    } else if (index == 6) { // OpenAI
         m_apiBaseEdit->setText("https://api.openai.com/v1");
         m_modelEdit->setText("gpt-4o-mini");
-    } else if (index == 3) { // 腾讯云 / WorkBuddy
-        m_apiBaseEdit->setText("https://api.lkeap.cloud.tencent.com/v1");
-        m_modelEdit->setText("deepseek-r1");
-    } else if (index == 4) { // Ollama
-        m_apiBaseEdit->setText("http://localhost:11434/v1");
+        if (m_profileNameEdit->text().isEmpty() || m_profileNameEdit->text().contains("自定义") || m_profileNameEdit->text().contains("新建")) {
+            m_profileNameEdit->setText("OpenAI (官方 API)");
+        }
+    } else if (index == 7) { // Ollama
+        m_apiBaseEdit->setText("http://127.0.0.1:11434/v1");
         m_modelEdit->setText("qwen2.5:7b");
         if (m_apiKeyEdit->text().isEmpty()) {
             m_apiKeyEdit->setText("ollama");
+        }
+        if (m_profileNameEdit->text().isEmpty() || m_profileNameEdit->text().contains("自定义") || m_profileNameEdit->text().contains("新建")) {
+            m_profileNameEdit->setText("本地 Ollama (127.0.0.1:11434)");
         }
     }
 }
@@ -626,12 +1139,12 @@ void AgentSettingsDialog::testConnection() {
         QMessageBox::warning(this, "提示", "请输入 API 地址");
         return;
     }
-    if (apiKey.isEmpty()) {
+    if (apiKey.isEmpty() && !apiBase.contains("127.0.0.1") && !apiBase.contains("localhost")) {
         QMessageBox::warning(this, "提示", "请输入 API 密钥 (Key)");
         return;
     }
     if (model.isEmpty()) {
-        model = "gpt-4o-mini";
+        model = "deepseek-chat";
     }
 
     m_testBtn->setEnabled(false);
@@ -656,13 +1169,27 @@ void AgentSettingsDialog::testConnection() {
 }
 
 void AgentSettingsDialog::saveAndClose() {
-    AgentConfig cfg;
-    cfg.apiBase = m_apiBaseEdit->text().trimmed();
-    cfg.apiKey = m_apiKeyEdit->text().trimmed();
-    cfg.model = m_modelEdit->text().trimmed();
+    saveCurrentProfileEdits();
+
+    AgentConfig cfg = AgentService::instance()->config();
+    cfg.modelProfiles = m_tempProfiles;
+    cfg.activeProfileId = m_tempActiveId;
+    cfg.enableAutoFailover = m_autoFailoverCheck->isChecked();
+
+    // 将活动模型数据同步回 cfg
+    for (const auto &p : m_tempProfiles) {
+        if (p.id == m_tempActiveId) {
+            cfg.apiBase = p.apiBase;
+            cfg.apiKey = p.apiKey;
+            cfg.model = p.model;
+            break;
+        }
+    }
+
     cfg.maxMemoryTurns = m_memoryTurnsSpin->value();
     cfg.hotkeyTranslate = m_hotkeyTranslateEdit->text().trimmed();
     cfg.hotkeyAsk = m_hotkeyAskEdit->text().trimmed();
+    cfg.hotkeyHistory = m_hotkeyHistoryEdit->text().trimmed();
     cfg.hotkeyMusicToggle = m_hotkeyMusicToggleEdit->text().trimmed();
     cfg.hotkeyMusicPlayPause = m_hotkeyMusicPlayPauseEdit->text().trimmed();
     cfg.hotkeyMusicNext = m_hotkeyMusicNextEdit->text().trimmed();
@@ -679,10 +1206,11 @@ void AgentSettingsDialog::saveAndClose() {
     cfg.enableLlmTaskNarration = m_enableLlmNarrationCheck->isChecked();
     cfg.stateDebounceSec = m_stateDebounceSpin->value();
 
-    if (cfg.apiBase.isEmpty()) cfg.apiBase = "https://api.openai.com/v1";
-    if (cfg.model.isEmpty()) cfg.model = "gpt-4o-mini";
+    if (cfg.apiBase.isEmpty()) cfg.apiBase = "https://api.deepseek.com/v1";
+    if (cfg.model.isEmpty()) cfg.model = "deepseek-chat";
     if (cfg.hotkeyTranslate.isEmpty()) cfg.hotkeyTranslate = "Option+T";
     if (cfg.hotkeyAsk.isEmpty()) cfg.hotkeyAsk = "Option+Q";
+    if (cfg.hotkeyHistory.isEmpty()) cfg.hotkeyHistory = "Option+H";
     if (cfg.hotkeyMusicToggle.isEmpty()) cfg.hotkeyMusicToggle = "Option+M";
     if (cfg.hotkeyMusicPlayPause.isEmpty()) cfg.hotkeyMusicPlayPause = "Option+Space";
     if (cfg.hotkeyMusicNext.isEmpty()) cfg.hotkeyMusicNext = "Option+Right";
@@ -697,6 +1225,142 @@ void AgentSettingsDialog::saveAndClose() {
         PersonaManager::instance()->setCustomPersonaPrompt(m_customPromptEdit->toPlainText().trimmed());
     }
 
+    // 保存外观、系统与自主搭讪设置
+    bool showOrb = m_showHeadStatusOrbCheck->isChecked();
+    SettingsDb::instance()->set("ui.show_head_status_orb", showOrb ? "true" : "false");
+    SettingsDb::instance()->setBool("sys.auto_check_update", m_autoCheckUpdateCheck->isChecked());
+    for (auto pet : ShijimaManager::defaultManager()->mascots()) {
+        if (pet) pet->repaint();
+    }
+
+    cfg.banterFrequencyLevel = m_banterFreqCombo->currentData().toInt();
+    cfg.enableContextualCare = m_contextualCareCheck->isChecked();
+
     AgentService::instance()->setConfig(cfg);
     accept();
 }
+
+void AgentSettingsDialog::refreshMemoryTab() {
+    auto profile = LongTermMemoryEngine::instance()->coreProfile();
+    m_ownerNameEdit->setText(profile.name);
+    m_ownerOccEdit->setText(profile.occupation);
+    m_ownerTechEdit->setText(profile.preferredLangs);
+    m_ownerMusicEdit->setText(profile.musicTaste);
+    m_ownerHabitEdit->setText(profile.workHabits);
+    m_ownerNotesEdit->setPlainText(profile.notes);
+
+    m_memListWidget->blockSignals(true);
+    m_memListWidget->clear();
+    auto memories = LongTermMemoryEngine::instance()->getAllActiveMemories();
+    for (const auto &mem : memories) {
+        auto item = new QListWidgetItem(m_memListWidget);
+        QString stars = QString("★").repeated(mem.importance);
+        QString timeStr = QDateTime::fromMSecsSinceEpoch(mem.createdAt).toString("MM-dd HH:mm");
+        item->setText(QString("[%1 | %2] %3 (%4)").arg(mem.category, stars, mem.content, timeStr));
+        item->setData(Qt::UserRole, mem.id);
+        item->setToolTip(QString("记忆ID: %1\n分类: %2 | 重要度: %3\n记录时间: %4\n检索引用: %5 次")
+            .arg(mem.id, mem.category, QString::number(mem.importance), timeStr, QString::number(mem.accessCount)));
+    }
+    m_memListWidget->blockSignals(false);
+
+    int count = memories.size();
+    m_memStatsLabel->setText(QString("📊 长期事实库共归档: %1 条 | 存储: guyi_bot_settings.db").arg(count));
+
+    // 刷新应用感知与探针足迹
+    auto curCtx = SensorManager::instance()->currentContext();
+    QString curApp = curCtx["app_name"].toString();
+    QString curAct = curCtx["semantic_activity"].toString();
+    QString curDet = curCtx["detail"].toString();
+    QString curFile = curCtx["active_file"].toString();
+    QString curUrl = curCtx["url"].toString();
+
+    if (!curApp.isEmpty()) {
+        QString statusText = QString("💡 <b>当前实时感知</b>: [%1] %2").arg(curApp, curAct);
+        if (!curFile.isEmpty()) statusText += QString(" | 编辑: <code>%1</code>").arg(curFile);
+        else if (!curUrl.isEmpty()) statusText += QString(" | 浏览: %1").arg(curUrl);
+        else if (!curDet.isEmpty()) statusText += QString(" | %1").arg(curDet);
+        m_sensorCurrentStatusLabel->setText(statusText);
+    } else {
+        m_sensorCurrentStatusLabel->setText("💡 <b>当前实时感知</b>: 等待前台应用切换与探针捕获中...");
+    }
+
+    m_sensorActivityList->blockSignals(true);
+    m_sensorActivityList->clear();
+    auto histList = SensorManager::instance()->recentActivityHistory();
+    for (const auto &histObj : histList) {
+        QString app = histObj["app_name"].toString();
+        QString act = histObj["semantic_activity"].toString();
+        QString det = histObj["detail"].toString();
+        qint64 ts = histObj["timestamp"].toVariant().toLongLong();
+        QString timeStr = QDateTime::fromMSecsSinceEpoch(ts).toString("HH:mm:ss");
+
+        auto item = new QListWidgetItem(m_sensorActivityList);
+        item->setText(QString("[%1] %2: %3 %4").arg(timeStr, app, act, det.isEmpty() ? "" : ("(" + det + ")")));
+    }
+    m_sensorActivityList->blockSignals(false);
+
+    int sensorCount = SensorManager::instance()->installedSensors().size();
+    m_sensorStatsLabel->setText(QString("📡 已部署专属探针: %1 个 | 内存足迹: %2 条 | 永久入库: episodic_events").arg(sensorCount).arg(histList.size()));
+}
+
+void AgentSettingsDialog::onSaveOwnerProfileClicked() {
+    CoreUserProfile p;
+    p.name = m_ownerNameEdit->text().trimmed();
+    p.occupation = m_ownerOccEdit->text().trimmed();
+    p.preferredLangs = m_ownerTechEdit->text().trimmed();
+    p.musicTaste = m_ownerMusicEdit->text().trimmed();
+    p.workHabits = m_ownerHabitEdit->text().trimmed();
+    p.notes = m_ownerNotesEdit->toPlainText().trimmed();
+    LongTermMemoryEngine::instance()->updateCoreProfile(p);
+    QMessageBox::information(this, "主人画像", "主人全局核心档案已成功保存至长期记忆数据库！");
+}
+
+void AgentSettingsDialog::onSearchMemoryClicked() {
+    QString q = m_memSearchEdit->text().trimmed();
+    if (q.isEmpty()) {
+        refreshMemoryTab();
+        return;
+    }
+
+    auto memories = LongTermMemoryEngine::instance()->searchMemories(q, 15);
+    m_memListWidget->blockSignals(true);
+    m_memListWidget->clear();
+    for (const auto &mem : memories) {
+        auto item = new QListWidgetItem(m_memListWidget);
+        QString stars = QString("★").repeated(mem.importance);
+        QString timeStr = QDateTime::fromMSecsSinceEpoch(mem.createdAt).toString("MM-dd HH:mm");
+        item->setText(QString("[%1 | %2] %3 (%4)").arg(mem.category, stars, mem.content, timeStr));
+        item->setData(Qt::UserRole, mem.id);
+    }
+    m_memListWidget->blockSignals(false);
+    m_memStatsLabel->setText(QString("🔍 检索到匹配「%1」的相关记忆: %2 条").arg(q, QString::number(memories.size())));
+}
+
+void AgentSettingsDialog::onAddMemoryClicked() {
+    bool ok = false;
+    QString fact = QInputDialog::getText(this, "记一条新事实", "请输入需要桌宠记住的关于您或项目的长期信息:", QLineEdit::Normal, "", &ok);
+    if (ok && !fact.trimmed().isEmpty()) {
+        LongTermMemoryEngine::instance()->addSemanticMemory("fact", fact.trimmed(), 3);
+        refreshMemoryTab();
+    }
+}
+
+void AgentSettingsDialog::onDeleteMemoryClicked() {
+    auto cur = m_memListWidget->currentItem();
+    if (!cur) {
+        QMessageBox::warning(this, "提示", "请先在上方列表中选中需要删除的记忆条目。");
+        return;
+    }
+    QString id = cur->data(Qt::UserRole).toString();
+    LongTermMemoryEngine::instance()->deleteSemanticMemory(id);
+    refreshMemoryTab();
+}
+
+void AgentSettingsDialog::onClearAllMemoriesClicked() {
+    auto reply = QMessageBox::question(this, "危险操作", "确定要彻底清空长期语义事实记忆库吗？该操作不可恢复。", QMessageBox::Yes | QMessageBox::No);
+    if (reply == QMessageBox::Yes) {
+        LongTermMemoryEngine::instance()->clearAllSemanticMemories();
+        refreshMemoryTab();
+    }
+}
+

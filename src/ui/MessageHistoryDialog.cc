@@ -1,4 +1,5 @@
 #include "MessageHistoryDialog.hpp"
+#include "MessageBubble.hpp"
 #include <QClipboard>
 #include <QGuiApplication>
 #include <QMessageBox>
@@ -132,7 +133,7 @@ void MessageHistoryDialog::setupUI()
     detailHeader->addWidget(m_timeLabel);
     rightLayout->addLayout(detailHeader);
 
-    // Markdown 完整内容预览
+    // Markdown 完整内容预览（升级至富文本排版）
     m_previewBrowser = new QTextBrowser(rightPanel);
     m_previewBrowser->setOpenExternalLinks(true);
     m_previewBrowser->setReadOnly(true);
@@ -141,10 +142,27 @@ void MessageHistoryDialog::setupUI()
         "  background: #ffffff;"
         "  border: 1px solid #e2e8f0;"
         "  border-radius: 8px;"
-        "  padding: 12px;"
-        "  font-size: 13px;"
-        "  line-height: 1.6;"
+        "  padding: 14px 18px;"
+        "  font-size: 13.5px;"
+        "  line-height: 1.65;"
         "  color: #1e293b;"
+        "}"
+        "QScrollBar:vertical {"
+        "  background: transparent;"
+        "  width: 6px;"
+        "  margin: 0px;"
+        "  border-radius: 3px;"
+        "}"
+        "QScrollBar::handle:vertical {"
+        "  background: #cbd5e1;"
+        "  min-height: 20px;"
+        "  border-radius: 3px;"
+        "}"
+        "QScrollBar::handle:vertical:hover {"
+        "  background: #94a3b8;"
+        "}"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {"
+        "  height: 0px;"
         "}"
     );
     rightLayout->addWidget(m_previewBrowser, 1);
@@ -205,6 +223,11 @@ void MessageHistoryDialog::refreshList()
     m_listWidget->clear();
 
     for (const auto &item : all) {
+        // 过滤宠物主动互动/碎碎念/闲聊，只显示用户任务与翻译、提问
+        if (item.type.isEmpty() || item.type == "notice" || item.type == "chat" || item.type == "banter") {
+            continue;
+        }
+
         // 类型过滤
         if (typeIdx == 1 && item.type != "agent_task") continue;
         if (typeIdx == 2 && item.type != "translate") continue;
@@ -270,7 +293,7 @@ void MessageHistoryDialog::onItemSelectionChanged()
     QDateTime dt = QDateTime::fromMSecsSinceEpoch(item.timestamp);
     m_timeLabel->setText(dt.toString("yyyy-MM-dd hh:mm:ss"));
 
-    m_previewBrowser->setMarkdown(item.content);
+    m_previewBrowser->setHtml(MessageBubble::markdownToRichHtml(item.content));
 }
 
 void MessageHistoryDialog::onSearchTextChanged(const QString &)
@@ -287,7 +310,8 @@ void MessageHistoryDialog::onCopyCurrentClicked()
 {
     int row = m_listWidget->currentRow();
     if (row >= 0 && row < m_currentItems.size()) {
-        QGuiApplication::clipboard()->setText(m_currentItems[row].content);
+        QString normalized = MessageBubble::normalizeMarkdownText(m_currentItems[row].content);
+        QGuiApplication::clipboard()->setText(normalized);
         m_copyBtn->setText("✅ 已复制");
         QTimer::singleShot(1500, [this]() {
             if (m_copyBtn) m_copyBtn->setText("📋 复制全文");

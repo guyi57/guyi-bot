@@ -14,6 +14,15 @@ struct MemoryItem {
     qint64 createdAt = 0;
 };
 
+struct UserProfile {
+    QString name = "主人";             // 称呼/昵称
+    QString occupation = "开发工程师";   // 职业身份
+    QString preferredLangs = "C++, Qt"; // 常用语言与工具
+    QString musicTaste = "华语流行, 轻音乐"; // 音乐喜好
+    QString workHabits = "经常高强度专注, 偶尔熬夜"; // 作息习惯
+    QString notes = "";                // 附加备忘
+};
+
 class PetMemory
 {
 public:
@@ -26,9 +35,17 @@ public:
     QList<MemoryItem> getTopMemories(int limit = 5);
     QString formatForPrompt(int limit = 5);
 
+    // 主人专属画像
+    UserProfile userProfile();
+    void updateUserProfile(const UserProfile &profile);
+    void updateProfileAttribute(const QString &key, const QString &val);
+    QString formatProfileForPrompt();
+
+    // 智能提取与分析对话中的个人特征
+    void autoLearnFromChat(const QString &userMsg, const QString &assistantMsg);
+
 private:
     PetMemory();
     QMutex m_mutex;
-    QList<MemoryItem> m_items;
-    QString m_filePath;
+    UserProfile m_profile;
 };

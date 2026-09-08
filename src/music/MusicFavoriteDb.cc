@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QMutexLocker>
 #include <iostream>
 
 
@@ -23,6 +24,7 @@ MusicFavoriteDb::MusicFavoriteDb()
 
 MusicFavoriteDb::~MusicFavoriteDb()
 {
+    QMutexLocker locker(&m_mutex);
     if (m_sqliteHandle) {
         sqlite3_close(static_cast<sqlite3*>(m_sqliteHandle));
         m_sqliteHandle = nullptr;
@@ -31,6 +33,7 @@ MusicFavoriteDb::~MusicFavoriteDb()
 
 bool MusicFavoriteDb::initDb()
 {
+    QMutexLocker locker(&m_mutex);
     if (m_sqliteHandle != nullptr) return true;
 
     QString configDir = QDir::homePath() + "/.config/guyi-bot";
@@ -123,6 +126,7 @@ bool MusicFavoriteDb::initDb()
 
 bool MusicFavoriteDb::addFavorite(const SongInfo &song)
 {
+    QMutexLocker locker(&m_mutex);
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
     if (!db) return false;
@@ -159,6 +163,7 @@ bool MusicFavoriteDb::addFavorite(const SongInfo &song)
 
 bool MusicFavoriteDb::removeFavorite(const QString &source, const QString &id)
 {
+    QMutexLocker locker(&m_mutex);
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
     if (!db) return false;
@@ -181,6 +186,7 @@ bool MusicFavoriteDb::removeFavorite(const QString &source, const QString &id)
 
 bool MusicFavoriteDb::isFavorite(const QString &source, const QString &id)
 {
+    QMutexLocker locker(&m_mutex);
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
     if (!db) return false;
@@ -204,6 +210,7 @@ bool MusicFavoriteDb::isFavorite(const QString &source, const QString &id)
 
 QVector<SongInfo> MusicFavoriteDb::getFavorites(const QString &keyword)
 {
+    QMutexLocker locker(&m_mutex);
     QVector<SongInfo> list;
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
@@ -248,6 +255,7 @@ QVector<SongInfo> MusicFavoriteDb::getFavorites(const QString &keyword)
 
 QJsonArray MusicFavoriteDb::getAllFavoritesJson()
 {
+    QMutexLocker locker(&m_mutex);
     QJsonArray arr;
     auto favs = getFavorites();
     for (const auto &song : favs) {
@@ -258,6 +266,7 @@ QJsonArray MusicFavoriteDb::getAllFavoritesJson()
 
 int MusicFavoriteDb::getFavoriteCount()
 {
+    QMutexLocker locker(&m_mutex);
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
     if (!db) return 0;
@@ -278,6 +287,7 @@ int MusicFavoriteDb::getFavoriteCount()
 
 void MusicFavoriteDb::savePlaylist(const QVector<SongInfo> &playlist, int currentIndex)
 {
+    QMutexLocker locker(&m_mutex);
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
     if (!db) return;
@@ -304,6 +314,7 @@ void MusicFavoriteDb::savePlaylist(const QVector<SongInfo> &playlist, int curren
 
 QVector<SongInfo> MusicFavoriteDb::loadPlaylist(int &outCurrentIndex)
 {
+    QMutexLocker locker(&m_mutex);
     QVector<SongInfo> list;
     outCurrentIndex = 0;
 
@@ -337,6 +348,7 @@ QVector<SongInfo> MusicFavoriteDb::loadPlaylist(int &outCurrentIndex)
 
 void MusicFavoriteDb::addSearchHistory(const QString &keyword)
 {
+    QMutexLocker locker(&m_mutex);
     QString kw = keyword.trimmed();
     if (kw.isEmpty()) return;
 
@@ -360,6 +372,7 @@ void MusicFavoriteDb::addSearchHistory(const QString &keyword)
 
 QStringList MusicFavoriteDb::getSearchHistories(int limit)
 {
+    QMutexLocker locker(&m_mutex);
     QStringList list;
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
@@ -385,6 +398,7 @@ QStringList MusicFavoriteDb::getSearchHistories(int limit)
 
 void MusicFavoriteDb::clearSearchHistory()
 {
+    QMutexLocker locker(&m_mutex);
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
     if (!db) return;
@@ -395,6 +409,7 @@ void MusicFavoriteDb::clearSearchHistory()
 
 void MusicFavoriteDb::removeSearchHistory(const QString &keyword)
 {
+    QMutexLocker locker(&m_mutex);
     QString kw = keyword.trimmed();
     if (kw.isEmpty()) return;
 
@@ -415,6 +430,7 @@ void MusicFavoriteDb::removeSearchHistory(const QString &keyword)
 
 QStringList MusicFavoriteDb::getPreferenceTags()
 {
+    QMutexLocker locker(&m_mutex);
     QStringList tags;
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
@@ -438,6 +454,7 @@ QStringList MusicFavoriteDb::getPreferenceTags()
 
 bool MusicFavoriteDb::addPreferenceTag(const QString &tag)
 {
+    QMutexLocker locker(&m_mutex);
     QString t = tag.trimmed();
     if (t.isEmpty()) return false;
 
@@ -462,6 +479,7 @@ bool MusicFavoriteDb::addPreferenceTag(const QString &tag)
 
 bool MusicFavoriteDb::removePreferenceTag(const QString &tag)
 {
+    QMutexLocker locker(&m_mutex);
     QString t = tag.trimmed();
     if (t.isEmpty()) return false;
 
@@ -483,6 +501,7 @@ bool MusicFavoriteDb::removePreferenceTag(const QString &tag)
 
 void MusicFavoriteDb::setPreferenceTags(const QStringList &tags)
 {
+    QMutexLocker locker(&m_mutex);
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
     if (!db) return;
@@ -509,6 +528,7 @@ void MusicFavoriteDb::setPreferenceTags(const QStringList &tags)
 
 void MusicFavoriteDb::clearPreferenceTags()
 {
+    QMutexLocker locker(&m_mutex);
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
     if (!db) return;
@@ -518,6 +538,7 @@ void MusicFavoriteDb::clearPreferenceTags()
 
 QString MusicFavoriteDb::getRecommendationMode()
 {
+    QMutexLocker locker(&m_mutex);
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
     if (!db) return "familiar";
@@ -537,6 +558,7 @@ QString MusicFavoriteDb::getRecommendationMode()
 
 void MusicFavoriteDb::setRecommendationMode(const QString &mode)
 {
+    QMutexLocker locker(&m_mutex);
     QString m = mode.trimmed().toLower();
     if (m != "familiar" && m != "explore" && m != "random") {
         m = "familiar";
@@ -557,6 +579,7 @@ void MusicFavoriteDb::setRecommendationMode(const QString &mode)
 
 void MusicFavoriteDb::recordRecentRecommendations(const QVector<SongInfo> &songs)
 {
+    QMutexLocker locker(&m_mutex);
     if (songs.isEmpty()) return;
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
@@ -590,6 +613,7 @@ void MusicFavoriteDb::recordRecentRecommendations(const QVector<SongInfo> &songs
 
 bool MusicFavoriteDb::isRecentlyRecommended(const QString &songName, const QString &artist)
 {
+    QMutexLocker locker(&m_mutex);
     if (songName.trimmed().isEmpty()) return false;
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
@@ -615,6 +639,7 @@ bool MusicFavoriteDb::isRecentlyRecommended(const QString &songName, const QStri
 
 QSet<QString> MusicFavoriteDb::getRecentRecommendationKeys()
 {
+    QMutexLocker locker(&m_mutex);
     QSet<QString> set;
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
@@ -640,6 +665,7 @@ QSet<QString> MusicFavoriteDb::getRecentRecommendationKeys()
 
 void MusicFavoriteDb::clearRecentRecommendations()
 {
+    QMutexLocker locker(&m_mutex);
     if (!m_sqliteHandle) initDb();
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
     if (!db) return;

@@ -10,7 +10,7 @@ UpdateDialog::UpdateDialog(const UpdateInfo &info, QWidget *parent)
     setWindowTitle("🎉 发现 guyi-bot 新版本");
     setWindowFlags(Qt::Dialog | Qt::WindowStaysOnTopHint | Qt::WindowCloseButtonHint);
     setFixedSize(520, 480);
-    setStyleSheet("QDialog { background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }");
+    setStyleSheet("QDialog { background-color: #ffffff; }");
 
     auto mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(20, 20, 20, 20);

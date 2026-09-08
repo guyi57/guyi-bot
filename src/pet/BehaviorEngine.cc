@@ -5,6 +5,10 @@
 #include "ShijimaWidget.hpp"
 #include "ShijimaManager.hpp"
 #include "ScoreBadgeWidget.hpp"
+#include "SystemObserver.hpp"
+#include "SensorManager.hpp"
+#include "MusicPlayerManager.hpp"
+#include "PetDiaryManager.hpp"
 #include <QRandomGenerator>
 #include <QDateTime>
 #include <QCursor>
@@ -64,9 +68,23 @@ void BehaviorEngine::handleEvent(const PetEvent &event)
     qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (event.type.startsWith("user.")) {
         m_state.lastInteractionTime = now;
+        if (event.type == "user.click_pet" || event.type == "user.petting") {
+            PetDiaryManager::instance()->recordPetting();
+        }
     }
     if (event.type == "agent.task.completed") {
         m_state.lastTaskCompletedTime = now;
+    }
+    if (event.type == "music.playing") {
+        PetDiaryManager::instance()->recordMusicPlayed();
+        for (auto *w : ShijimaManager::defaultManager()->mascots()) {
+            if (w != nullptr) {
+                w->motionController().triggerMusicDance(6.0f);
+            }
+        }
+    }
+    if (event.type == "system.trash_cleaned") {
+        PetDiaryManager::instance()->recordTrashCleaned();
     }
 
     // 1. 评估即时 Reaction 规则 (前台应用时序、系统内存、音乐播放等)
@@ -129,64 +147,14 @@ void BehaviorEngine::addAffection(int delta, int moodDelta)
               << ", 当前亲密度: " << m_state.affection << "%, 心情: " << m_state.mood << std::endl;
 }
 
-bool BehaviorEngine::handlePetClickedWhileResting(ShijimaWidget *target)
+bool BehaviorEngine::handlePetClickedWhileResting(ShijimaWidget *)
 {
-    if (!m_state.isRestingInCorner || target == nullptr) return false;
-
-    static const QStringList sleepyQuotes = {
-        "呜…别戳了，再让我睡一小会儿… 💤",
-        "好困好困…电量还没充好呢 🔋",
-        "呼噜噜…等我睡醒再陪你玩～ (´-ω-`)"
-    };
-    int idx = QRandomGenerator::global()->bounded(static_cast<int>(sleepyQuotes.size()));
-    target->showMessage(sleepyQuotes[idx], 3500);
-
-    // 稍微晃头或坐着发呆
-    auto spin = target->mascot().initial_behavior_list().find("SitAndSpinHead", false);
-    if (spin != nullptr) {
-        target->mascot().next_behavior("SitAndSpinHead");
-    }
-
-    addAffection(1, 1);
-    return true;
+    return false;
 }
 
-bool BehaviorEngine::handlePetClickedInPoutMode(ShijimaWidget *target)
+bool BehaviorEngine::handlePetClickedInPoutMode(ShijimaWidget *)
 {
-    if (moodTier() != MoodTier::ExtremelyLow || target == nullptr) return false;
-
-    m_poutClickCount++;
-    addAffection(2, 6); // 每次抚摸显著增加亲密度与心情，助力破冰
-
-    if (m_state.mood > -60) {
-        // 破冰成功！
-        m_poutClickCount = 0;
-        target->showMessage("好啦好啦…看在你这么诚恳的份上原谅你啦！✨", 4000);
-        auto happyBeh = target->mascot().initial_behavior_list().find("SitWhileDanglingLegs", false);
-        if (happyBeh != nullptr) target->mascot().next_behavior("SitWhileDanglingLegs");
-        return true;
-    }
-
-    // 50% 概率背过身或稍微躲避
-    if (QRandomGenerator::global()->generateDouble() < 0.5) {
-        if (target->mascot().state) {
-            target->mascot().state->looking_right = !target->mascot().state->looking_right;
-        }
-    }
-
-    static const QStringList poutQuotes = {
-        "哼，现在才想起我！(>д<)",
-        "闹别扭中，请勿打扰… 😤",
-        "才不理你呢，继续敲你的代码去！",
-        "不理我这么久，现在摸摸也没用… 哼！"
-    };
-    int idx = QRandomGenerator::global()->bounded(static_cast<int>(poutQuotes.size()));
-    target->showMessage(poutQuotes[idx], 3500);
-
-    auto sitBeh = target->mascot().initial_behavior_list().find("SitDown", false);
-    if (sitBeh != nullptr) target->mascot().next_behavior("SitDown");
-
-    return true;
+    return false;
 }
 
 void BehaviorEngine::updateFallRecoverySequence(qint64 now)
@@ -253,14 +221,13 @@ void BehaviorEngine::onTick()
         target->update(); // 触发头顶微盘实时刷新
     }
 
-    // 2. 寂寞感衰减：超过 1 分钟无互动，每分钟心情 -1% (内部 mood -2)
+    // 2. 寂寞感温和衰减：超过 3 分钟无互动，每分钟心情 -1，最低保持在 35 分（健康基准，绝不下探到极低负分）
     static qint64 s_lastMoodDecayTime = 0;
     if (s_lastMoodDecayTime == 0) s_lastMoodDecayTime = now;
-    if ((now - m_state.lastInteractionTime) >= 60000) {
+    if ((now - m_state.lastInteractionTime) >= 180000) {
         if ((now - s_lastMoodDecayTime) >= 60000) {
             s_lastMoodDecayTime = now;
-            m_state.mood = std::clamp(m_state.mood - 2, -100, 100);
-            std::cout << "[情绪衰减] 超过1分钟无互动，心情 -1% (当前: " << m_state.mood << ")" << std::endl;
+            m_state.mood = std::clamp(m_state.mood - 1, 35, 100);
         }
     } else {
         s_lastMoodDecayTime = now;
@@ -289,84 +256,46 @@ void BehaviorEngine::onTick()
     }
 
     // =========================================================================
-    // 5. 基于心情 4 阶区间与体力的阶段性行为决策
+    // 5. 灵动桌面感知与自然巡逻 (不强制干涉 Shimeji 原生探索动作)
     // =========================================================================
-    if (target != nullptr && !m_state.isRestingInCorner) {
+    // 允许 Shimeji 原生状态机自由探索 (爬墙、天花板爬行、掉落、奔跑、散步)
+    // 仅当桌宠长时间静止 (超过 8 秒)，轻微唤醒它继续巡逻探索
+    if (target != nullptr) {
+        static int s_idleNudgeTimer = 0;
         QString curBehavior = target->currentBehaviorName();
-        MoodTier tier = moodTier();
+        bool isMoving = (
+            curBehavior.contains("Walk", Qt::CaseInsensitive) ||
+            curBehavior.contains("Run", Qt::CaseInsensitive) ||
+            curBehavior.contains("Climb", Qt::CaseInsensitive) ||
+            curBehavior.contains("Crawl", Qt::CaseInsensitive) ||
+            curBehavior.contains("Jump", Qt::CaseInsensitive) ||
+            curBehavior.contains("Fall", Qt::CaseInsensitive) ||
+            curBehavior.contains("Throw", Qt::CaseInsensitive)
+        );
 
-        // A. 渐进式疲惫保护：当体力 < 30% 时，限制剧烈攀爬与跳跃，强制进入低能耗动作池
-        if (m_state.stamina < 30) {
-            if (curBehavior.contains("Climb", Qt::CaseInsensitive) ||
-                curBehavior.contains("Ceiling", Qt::CaseInsensitive) ||
-                curBehavior.contains("Jump", Qt::CaseInsensitive) ||
-                curBehavior.contains("Run", Qt::CaseInsensitive)) {
+        if (isMoving) {
+            s_idleNudgeTimer = 0;
+        } else {
+            s_idleNudgeTimer++;
+            // 原地发呆超过 8 秒 (200 ticks，每次 40ms)，给它一个轻盈随机动机
+            if (s_idleNudgeTimer >= 200) {
+                s_idleNudgeTimer = 0;
                 auto env = target->env();
-                if (env && target->mascot().state && target->mascot().state->anchor.y >= (env->floor.y - 25.0)) {
-                    static const std::vector<std::string> lowEnergyBehaviors = {
-                        "WalkAlongWorkAreaFloor",
-                        "SitDown",
-                        "LieDown",
-                        "SitAndFaceMouse"
-                    };
-                    int idx = QRandomGenerator::global()->bounded(static_cast<int>(lowEnergyBehaviors.size()));
-                    target->mascot().next_behavior(lowEnergyBehaviors[idx]);
-                }
-            }
-        }
-        // B. 体力充沛 (stamina >= 30%) 时的行为分级
-        else {
-            static qint64 s_lastBehaviorDecisionTime = 0;
-            if ((now - s_lastBehaviorDecisionTime) >= 3000) {
-                s_lastBehaviorDecisionTime = now;
-
-                bool isIdleOrGround = curBehavior.contains("Sit", Qt::CaseInsensitive) || 
-                                      curBehavior.contains("Lie", Qt::CaseInsensitive) ||
-                                      curBehavior.contains("Stand", Qt::CaseInsensitive) ||
-                                      curBehavior.contains("WalkAlongWorkAreaFloor", Qt::CaseInsensitive);
-
-                if (isIdleOrGround) {
-                    auto env = target->env();
-
-                    // 高心情 (+30 ~ +100): 高探索欲，主动追随光标、在活跃窗口顶部探头
-                    if (tier == MoodTier::High) {
-                        if (env && env->active_ie.visible()) {
-                            int r = rand() % 3;
-                            if (r == 0) target->mascot().next_behavior("WalkAlongIECeiling");
-                            else if (r == 1) target->mascot().next_behavior("JumpFromBottomOfIE");
-                            else target->mascot().next_behavior("ChaseMouse");
-                        } else {
-                            int r = rand() % 4;
-                            if (r == 0) target->mascot().next_behavior("ChaseMouse");
-                            else if (r == 1) target->mascot().next_behavior("RunAlongWorkAreaFloor");
-                            else if (r == 2) target->mascot().next_behavior("WalkAndGrabBottomLeftWall");
-                            else target->mascot().next_behavior("SitWhileDanglingLegs");
-                        }
-                    }
-                    // 中心情 (-20 ~ +30): 正常巡逻、窗口探秘、看光标
-                    else if (tier == MoodTier::Medium) {
-                        if (env && env->active_ie.visible()) {
-                            int r = rand() % 4;
-                            if (r == 0) target->mascot().next_behavior("WalkAlongIECeiling");
-                            else if (r == 1) target->mascot().next_behavior("JumpFromBottomOfIE");
-                            else if (r == 2) target->mascot().next_behavior("SitAndFaceMouse");
-                            else target->mascot().next_behavior("WalkAlongWorkAreaFloor");
-                        } else {
-                            int r = rand() % 3;
-                            if (r == 0) target->mascot().next_behavior("WalkAlongWorkAreaFloor");
-                            else if (r == 1) target->mascot().next_behavior("SitAndFaceMouse");
-                            else target->mascot().next_behavior("WalkAndGrabBottomRightWall");
-                        }
-                    }
-                    // 低心情 (-60 ~ -20): 拒绝剧烈攀爬，缩在屏幕角落漫步
-                    else if (tier == MoodTier::Low) {
-                        int r = rand() % 2;
-                        if (r == 0) target->mascot().next_behavior("WalkAlongWorkAreaFloor");
-                        else target->mascot().next_behavior("SitDown");
-                    }
-                    // 极低心情 (-100 ~ -60): 闹别扭状态，背对屏幕或趴着发呆
-                    else if (tier == MoodTier::ExtremelyLow) {
-                        target->mascot().next_behavior("SitDown");
+                auto state = target->mascot().state;
+                if (env && state) {
+                    bool onFloor = (state->anchor.y >= (env->floor.y - 25.0));
+                    bool onWindowCeiling = (env->active_ie.visible() && std::abs(state->anchor.y - env->active_ie.top) <= 20.0);
+                    if (onFloor) {
+                        int r = QRandomGenerator::global()->bounded(100);
+                        if (r < 35) target->mascot().next_behavior("WalkAlongWorkAreaFloor");
+                        else if (r < 65) target->mascot().next_behavior("RunAlongWorkAreaFloor");
+                        else if (r < 85) target->mascot().next_behavior("WalkAndGrabBottomLeftWall");
+                        else target->mascot().next_behavior("WalkAndGrabBottomRightWall");
+                    } else if (onWindowCeiling) {
+                        int r = QRandomGenerator::global()->bounded(100);
+                        if (r < 50) target->mascot().next_behavior("WalkAlongIECeiling");
+                        else if (r < 80) target->mascot().next_behavior("RunAlongIECeiling");
+                        else target->mascot().next_behavior("SitWhileDanglingLegs");
                     }
                 }
             }
@@ -374,140 +303,40 @@ void BehaviorEngine::onTick()
     }
 
     // 6. 适度主动闲聊（高颜值紧凑气泡，零失焦）
-    if (!m_state.isRestingInCorner && moodTier() != MoodTier::ExtremelyLow) {
-        checkInitiativeChat();
-    }
+    checkInitiativeChat();
 }
 
 void BehaviorEngine::updateStamina(const QString &curBehavior)
 {
-    static QString s_lastBehavior = "";
-    static int s_actionStepCount = 0;
-    static int s_movingTickCounter = 0;
+    // 简明而充满活力的生命力模型：
+    // 桌宠运动时微量波动，静止或坐下时迅速回充，体力始终充沛健康（70%~100%）
+    static int s_recoveryTick = 0;
+    s_recoveryTick++;
 
     bool isMovingActive = (
         curBehavior.contains("Climb", Qt::CaseInsensitive) ||
-        curBehavior.contains("Ceiling", Qt::CaseInsensitive) ||
-        curBehavior.contains("Wall", Qt::CaseInsensitive) ||
-        curBehavior.contains("Jump", Qt::CaseInsensitive) ||
         curBehavior.contains("Run", Qt::CaseInsensitive) ||
-        curBehavior.contains("Walk", Qt::CaseInsensitive) ||
-        curBehavior.contains("Throw", Qt::CaseInsensitive) ||
-        curBehavior.contains("Crawl", Qt::CaseInsensitive)
+        curBehavior.contains("Jump", Qt::CaseInsensitive)
     );
 
-    // 1. 动作切换结算：每完成 1 个探索大动作，适度扣减 2%
-    if (!curBehavior.isEmpty() && curBehavior != s_lastBehavior) {
-        if (!s_lastBehavior.isEmpty() && isMovingActive && !m_state.isRestingInCorner) {
-            s_actionStepCount++;
-            m_state.stamina = std::clamp(m_state.stamina - 2, 0, 100);
-            std::cout << "[体力消耗] 完成第 " << s_actionStepCount << " 个动作 (" 
-                      << s_lastBehavior.toStdString() << "), 体力 -2%, 剩余: " 
-                      << m_state.stamina << "%" << std::endl;
-        }
-        s_lastBehavior = curBehavior;
-    }
-
-    // 2. 持续运动温和消耗：每 2 秒消耗 1% 体力
     if (isMovingActive) {
-        s_movingTickCounter++;
-        if (s_movingTickCounter >= 2) {
-            s_movingTickCounter = 0;
-            m_state.stamina = std::clamp(m_state.stamina - 1, 0, 100);
+        if (s_recoveryTick % 5 == 0 && m_state.stamina > 70) {
+            m_state.stamina--;
         }
     } else {
-        s_movingTickCounter = 0;
-    }
-
-    // 3. 处于休整/静止状态时缓慢恢复体力 (+1%/秒，约 85 秒平缓恢复满血)
-    if (m_state.isRestingInCorner && (
-        curBehavior.contains("Sit", Qt::CaseInsensitive) ||
-        curBehavior.contains("Lie", Qt::CaseInsensitive) ||
-        curBehavior.contains("Sleep", Qt::CaseInsensitive) ||
-        curBehavior.contains("Sprawl", Qt::CaseInsensitive) ||
-        curBehavior.contains("Dangle", Qt::CaseInsensitive) ||
-        curBehavior.contains("Spin", Qt::CaseInsensitive) ||
-        curBehavior.isEmpty()
-    )) {
-        m_state.stamina = std::clamp(m_state.stamina + 1, 0, 100);
-    }
-
-    // 4. 体力耗尽 (stamina <= 10) 触发休整（平滑跌落与拍灰过渡）
-    if (m_state.stamina <= 10 && !m_state.isRestingInCorner) {
-        triggerRestInCorner();
-    }
-    // 5. 满血复活 (stamina >= 95)
-    else if (m_state.stamina >= 95 && m_state.isRestingInCorner) {
-        s_actionStepCount = 0;
-        triggerStaminaRecovered();
+        // 静止、端坐、发呆、看鼠标时，每秒自然恢复 2%
+        if (s_recoveryTick % 2 == 0 && m_state.stamina < 100) {
+            m_state.stamina = std::min(100, m_state.stamina + 1);
+        }
     }
 }
 
 void BehaviorEngine::triggerRestInCorner()
 {
-    m_state.isRestingInCorner = true;
-
-    PetActionCommand cmd;
-    cmd.speechText = "累瘫了...跑不动了，歇会儿 💤";
-    cmd.durationMs = 3500;
-    cmd.moveToCenter = false;
-    executeAction(cmd);
-
-    if (m_activeWidget != nullptr) {
-        auto &mascot = m_activeWidget->mascot();
-        auto env = mascot.state ? mascot.state->env : nullptr;
-        if (env && mascot.state->anchor.y < (env->floor.y - 25.0)) {
-            m_fallRecoveryPhase = FallRecoveryPhase::Falling;
-            mascot.detach_from_borders();
-            mascot.next_behavior("Fall");
-        } else {
-            m_fallRecoveryPhase = FallRecoveryPhase::LieDownBreathing;
-            m_fallPhaseStartTime = QDateTime::currentMSecsSinceEpoch();
-            auto lieBehavior = mascot.initial_behavior_list().find("LieDown", false);
-            if (lieBehavior != nullptr) {
-                mascot.next_behavior("LieDown");
-            } else {
-                mascot.next_behavior("SitDown");
-            }
-        }
-    }
 }
 
 void BehaviorEngine::triggerStaminaRecovered()
 {
-    m_state.isRestingInCorner = false;
-    m_fallRecoveryPhase = FallRecoveryPhase::None;
-
-    PetActionCommand cmd;
-    cmd.durationMs = 3500;
-    cmd.moveToCenter = false;
-
-    // 根据当前心情决定唤醒台词与动作
-    if (m_state.mood >= 0) {
-        cmd.type = PetActionType::Jump;
-        cmd.speechText = "充电完毕！继续巡逻！🌟";
-        cmd.moodDelta = +10;
-        executeAction(cmd);
-
-        if (m_activeWidget != nullptr) {
-            static const std::vector<std::string> exploreBehaviors = {
-                "RunAlongWorkAreaFloor",
-                "WalkAndGrabBottomLeftWall",
-                "WalkAndGrabBottomRightWall",
-                "JumpFromBottomOfIE"
-            };
-            int idx = QRandomGenerator::global()->bounded(static_cast<int>(exploreBehaviors.size()));
-            m_activeWidget->mascot().next_behavior(exploreBehaviors[idx]);
-        }
-    } else {
-        cmd.type = PetActionType::Sit;
-        cmd.speechText = "睡醒了，但还是有点无聊… 💭";
-        executeAction(cmd);
-
-        if (m_activeWidget != nullptr) {
-            m_activeWidget->mascot().next_behavior("WalkAlongWorkAreaFloor");
-        }
-    }
 }
 
 void BehaviorEngine::evaluateUtilityAI()
@@ -521,12 +350,44 @@ void BehaviorEngine::checkInitiativeChat()
     qint64 now = QDateTime::currentMSecsSinceEpoch();
     int userIdleSec = static_cast<int>((now - m_state.lastInteractionTime) / 1000);
 
+    QString activeApp = SystemObserver::instance()->currentActiveAppName();
+    QString windowTitle = SystemObserver::instance()->currentActiveWindowTitle();
+    int workMins = SystemObserver::instance()->continuousWorkMinutes();
+    bool isMusicPlaying = MusicPlayerManager::instance()->isPlaying();
+
+    QJsonObject semanticContext = SystemObserver::instance()->currentSemanticActivity();
+    QJsonObject prevWork = SensorManager::instance()->previousWorkContext();
+
+    bool isContextRecovery = false;
+    if (!prevWork.isEmpty()) {
+        QString prevApp = prevWork["app_name"].toString();
+        // 如果当前回到了高专注工作应用（如 Cursor, VSCode），且与上一工作区一致，而刚才曾切走
+        if (!prevApp.isEmpty() && prevApp == activeApp && semanticContext["focus_level"].toString() == "high") {
+            qint64 prevTime = prevWork["timestamp"].toVariant().toLongLong();
+            // 距离上次离开在 1~30 分钟内切回，判定为打断后重返工作
+            qint64 elapsedSec = (now - prevTime) / 1000;
+            if (elapsedSec >= 60 && elapsedSec <= 1800) {
+                isContextRecovery = true;
+            }
+        }
+    }
+
     QJsonObject contextInfo;
     contextInfo["user_idle_seconds"] = userIdleSec;
     contextInfo["mood"] = m_state.mood;
     contextInfo["energy"] = m_state.energy;
     contextInfo["boredom"] = m_state.boredom;
     contextInfo["affection"] = m_state.affection;
+    contextInfo["active_app"] = activeApp;
+    contextInfo["window_title"] = windowTitle;
+    contextInfo["work_minutes"] = workMins;
+    contextInfo["is_music_playing"] = isMusicPlaying;
+    contextInfo["hour"] = QTime::currentTime().hour();
+    contextInfo["app_semantic_context"] = semanticContext;
+    contextInfo["is_context_recovery"] = isContextRecovery;
+
+    // 检查夜间自动写日记
+    PetDiaryManager::instance()->checkAutoNightDiary();
 
     int score = 0;
     QString reason;
@@ -546,23 +407,48 @@ void BehaviorEngine::checkInitiativeChat()
                 cmd.durationMs = 6500;
                 cmd.moveToCenter = false;
 
-                // 配合 AI 意图生动执行对应小动作（若在地面）
+                // 解析情绪徽章与物理动作
+                PetEmoteType emoteType = PetEmoteType::None;
+                if (intent.emote == "💖" || intent.emotion == "happy") emoteType = PetEmoteType::HappyHeart;
+                else if (intent.emote == "✨" || intent.intent == "celebrate") emoteType = PetEmoteType::Sparkle;
+                else if (intent.emote == "💤" || intent.intent == "sleepy") emoteType = PetEmoteType::SleepZzz;
+                else if (intent.emote == "💢" || intent.emotion == "angry") emoteType = PetEmoteType::AngryVein;
+                else if (intent.emote == "💫") emoteType = PetEmoteType::DizzySwirl;
+                else if (intent.emote == "💡") emoteType = PetEmoteType::ThinkingBulb;
+                else if (intent.emote == "🎵") emoteType = PetEmoteType::MusicNote;
+
+                cmd.emote = emoteType;
+
+                // 配合 AI 意图生动执行对应小动作与 Q 弹形变
                 if (m_activeWidget != nullptr) {
+                    if (intent.action == "jump" || intent.action == "bounce") {
+                        m_activeWidget->motionController().triggerStretch(0.90f, 1.15f);
+                    }
+                    if (intent.blush) {
+                        m_activeWidget->motionController().spawnHeart(QPointF(0, -20.0f));
+                    }
+                    if (emoteType != PetEmoteType::None) {
+                        m_activeWidget->motionController().triggerEmote(emoteType, 3.0f);
+                    }
+
                     auto &mascot = m_activeWidget->mascot();
                     auto env = mascot.state ? mascot.state->env : nullptr;
                     if (env && mascot.state->anchor.y >= (env->floor.y - 25.0)) {
-                        if (intent.emotion == "happy" || intent.intent == "celebrate") {
+                        if (intent.action == "dangle" || intent.emotion == "happy" || intent.intent == "celebrate") {
                             mascot.next_behavior("SitWhileDanglingLegs");
+                        } else if (intent.action == "sleep" || intent.emotion == "sleepy") {
+                            mascot.next_behavior("LieDown");
                         } else if (intent.emotion == "curious" || intent.intent == "seek_attention") {
                             mascot.next_behavior("SitAndFaceMouse");
                         } else if (intent.emotion == "bored") {
                             mascot.next_behavior("SitAndSpinHead");
-                        } else if (intent.intent == "explore") {
+                        } else if (intent.intent == "explore" || intent.action == "walk") {
                             mascot.next_behavior("WalkAlongWorkAreaFloor");
                         }
                     }
                 }
 
+                PetDiaryManager::instance()->recordChat();
                 executeAction(cmd);
             }
         });

@@ -168,6 +168,9 @@ void HotkeyManager::registerAskHotkey(QString const& shortcutStr, std::function<
     registerWinHotKey(HK_ASK, shortcutStr);
 }
 
+void HotkeyManager::registerHistoryHotkey(QString const& /*shortcutStr*/, std::function<void()> /*callback*/) {
+}
+
 void HotkeyManager::registerMusicToggleHotkey(QString const& shortcutStr, std::function<void()> callback) {
     s_musicToggleCallback = callback;
     registerWinHotKey(HK_MUSIC_TOGGLE, shortcutStr);

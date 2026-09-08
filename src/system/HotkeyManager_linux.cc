@@ -39,6 +39,11 @@ void HotkeyManager::registerAskHotkey(QString const& shortcutStr, std::function<
     s_askCallback = callback;
 }
 
+void HotkeyManager::registerHistoryHotkey(QString const& shortcutStr, std::function<void()> callback) {
+    Q_UNUSED(shortcutStr);
+    Q_UNUSED(callback);
+}
+
 void HotkeyManager::registerMusicToggleHotkey(QString const& shortcutStr, std::function<void()> callback) {
     Q_UNUSED(shortcutStr);
     s_musicToggleCallback = callback;

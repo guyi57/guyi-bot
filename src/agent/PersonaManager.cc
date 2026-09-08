@@ -136,8 +136,17 @@ QString PersonaManager::buildEffectiveSystemPrompt() const
         "- [action:celebrate] (撒花庆祝/大功告成)\n"
         "- [action:resist] (傲娇摔倒/抗拒/摇头)\n"
         "- [action:walk] (走动/巡视)\n"
-        "示例：'[action:jump] 太棒了！这个 Bug 已经被我们彻底消灭啦喵~'\n"
-        "回答请保持精简（通常控制在 50~150 字以内），适合在桌面悬浮气泡中呈现。";
+        "示例：'[action:jump] 太棒了！这个 Bug 已经被我们彻底消灭啦喵~'\n\n"
+        "【排版与格式规范（必须严格遵守）】\n"
+        "桌面悬浮气泡阅读空间有限，无论回答天气、任务报告、还是日常问答，排版必须层级清晰、赏心悦目：\n"
+        "1. 禁止将所有信息无换行挤在一长段！段落之间必须空一行（两个换行符）。\n"
+        "2. 结构化信息（如天气预报、多步骤任务、数据概览）请使用标准 Markdown 规范组织：\n"
+        "   - 主标题：如 '### 城市天气（今明后三天）'\n"
+        "   - 地点/标签：如 '📍 成都 · 四川'\n"
+        "   - 日期/分块：如 '📅 今天 · 9月4日（周四）'\n"
+        "   - 列表项：必须换行使用 '- ' 或 '◦ ' 引导，项目名称加冒号（如 '- 天气：晴到多云'、'- 气温：23℃ ~ 29℃'）。\n"
+        "   - 小贴士/注意事项：如 '💡 温馨小贴士：' 后紧跟列表项。\n"
+        "3. 开头有招呼语，结尾可有简短关怀或总结，字句自然亲切。";
 
     QString skillExtensions = SkillManager::instance()->getSystemPromptExtensions();
     return basePrompt + skillExtensions + actionProtocol;

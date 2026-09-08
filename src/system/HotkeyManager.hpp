@@ -14,6 +14,7 @@ public:
 
     void registerTranslateHotkey(QString const& shortcutStr, std::function<void()> callback);
     void registerAskHotkey(QString const& shortcutStr, std::function<void()> callback);
+    void registerHistoryHotkey(QString const& shortcutStr, std::function<void()> callback);
 
     // 音乐播放器全局快捷键
     void registerMusicToggleHotkey(QString const& shortcutStr, std::function<void()> callback);
@@ -33,6 +34,7 @@ private:
 
     void *m_translateHotKeyRef = nullptr;
     void *m_askHotKeyRef = nullptr;
+    void *m_historyHotKeyRef = nullptr;
     void *m_musicToggleHotKeyRef = nullptr;
     void *m_musicPlayPauseHotKeyRef = nullptr;
     void *m_musicNextHotKeyRef = nullptr;

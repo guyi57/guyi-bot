@@ -79,12 +79,18 @@ void AipyAdapter::executeTask(QString const& instruction,
     request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     request.setRawHeader("Authorization", QString("Bearer %1").arg(key).toUtf8());
 
-    // 组合任务 instruction
+    // 组合任务 instruction，明确要求采用美观结构化的 Markdown 输出（带段落、小标题与列表）
+    QString formattingNotice = 
+        "\n\n【输出排版要求】: 最终回复将在桌面悬浮气泡与卡片中展示，请务必使用规范美观的 Markdown 格式输出：\n"
+        "- 严禁将所有文字挤成无换行的一长段；\n"
+        "- 合理使用小标题（如 ### 主题、📍 地点、📅 日期、💡 温馨提示）与空行；\n"
+        "- 各项参数与明细使用列表项（- 或 ◦）分行呈现，层次清晰。";
+
     QString fullInstruction;
     if (!contextText.trimmed().isEmpty()) {
-        fullInstruction = QString("【参考选中文本】:") + QChar(10) + contextText + QString(QChar(10)) + QString(QChar(10)) + QString("【任务需求】:") + QChar(10) + instruction;
+        fullInstruction = QString("【参考选中文本】:\n%1\n\n【任务需求】:\n%2%3").arg(contextText, instruction, formattingNotice);
     } else {
-        fullInstruction = instruction;
+        fullInstruction = instruction + formattingNotice;
     }
 
     QJsonObject taskParam;

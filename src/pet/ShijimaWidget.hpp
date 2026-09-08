@@ -59,6 +59,7 @@ public:
     int mascotId() { return m_mascotId; }
     void showInspector();
     void showAgentSettings();
+    void showDiary();
     void markForDeletion() { m_markedForDeletion = true; }
     bool isMarkedForDeletion() const { return m_markedForDeletion; }
     bool inspectorVisible();
@@ -98,6 +99,9 @@ public:
     void setWaitingForAgent(bool waiting);
     bool isWaitingForAgent() const { return m_isWaitingForAgent; }
     MessageBubble *messageBubble() const { return m_messageBubble; }
+
+    PetMotionController &motionController() { return m_motion; }
+    void triggerEmote(PetEmoteType type, float durationSec = 2.5f) { m_motion.triggerEmote(type, durationSec); }
 
     ~ShijimaWidget();
 protected:
@@ -151,6 +155,7 @@ private:
     AskDialog *m_askDialog = nullptr;
     AgentSettingsDialog *m_settingsDialog = nullptr;
     class TimerListDialog *m_timerDialog = nullptr;
+    class PetDiaryDialog *m_diaryDialog = nullptr;
 
     // 拖拽瞬时速度物理采样与抛物线动力学控制器
     void applyThrowPhysics(double vx, double vy);
@@ -171,4 +176,9 @@ private:
     PetInterruptedGoal m_interruptedGoal = PetInterruptedGoal::None;
     bool m_wasOnWindow = false;
     qint64 m_lastTantrumTime = 0;
+
+    // 灵动运动与情绪控制器 (节拍律动、Squash&Stretch、表情贴纸与摸头)
+    PetMotionController m_motion;
+    qint64 m_lastMotionUpdateTime = 0;
+    bool m_lastWasFalling = false;
 };

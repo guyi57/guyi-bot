@@ -72,7 +72,6 @@ private:
 
     FallRecoveryPhase m_fallRecoveryPhase = FallRecoveryPhase::None;
     qint64 m_fallPhaseStartTime = 0;
-    int m_poutClickCount = 0;
 };
 
 

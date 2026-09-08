@@ -5,6 +5,7 @@
 #include "AgentService.hpp"
 #include "AipyAdapter.hpp"
 #include "PetMemory.hpp"
+#include "LongTermMemoryEngine.hpp"
 #include "TimerManager.hpp"
 #include "ShijimaManager.hpp"
 #include "MusicPlayerManager.hpp"
@@ -28,6 +29,8 @@
 #include <QFile>
 #include <QDir>
 #include <QRegularExpression>
+#include <QThread>
+#include <QCoreApplication>
 #include <QDebug>
 #include <iostream>
 
@@ -646,6 +649,104 @@ static QString executeTimerTool(const QJsonObject &args) {
     return "已处理定时器指令。";
 }
 
+static QJsonObject getMemoryToolDefinition() {
+    QJsonObject fn;
+    fn["name"] = "memory_manage";
+    fn["description"] = "用于长期记忆与用户画像管理：记录用户关键偏好/事实/项目状态、更新主人核心档案、跨时空检索历史记忆。当用户告知个人信息或询问过往记忆时调用。";
+
+    QJsonObject props;
+
+    QJsonObject actionProp;
+    actionProp["type"] = "string";
+    actionProp["enum"] = QJsonArray{"remember", "update_profile", "search", "forget"};
+    actionProp["description"] = "操作类型: remember(记住一条新事实), update_profile(更新主人核心档案), search(搜索过往长期记忆), forget(删除某条记忆)";
+    props["action"] = actionProp;
+
+    QJsonObject factProp;
+    factProp["type"] = "string";
+    factProp["description"] = "若 action 为 remember，需要永久保存的事实内容描述（如'主人最喜欢的桌面环境是 KDE Plasma'）";
+    props["fact"] = factProp;
+
+    QJsonObject categoryProp;
+    categoryProp["type"] = "string";
+    categoryProp["enum"] = QJsonArray{"preference", "tech", "project", "habit", "identity"};
+    categoryProp["description"] = "事实分类: preference(偏好), tech(技术栈), project(项目), habit(作息生活习惯), identity(身份)";
+    props["category"] = categoryProp;
+
+    QJsonObject importanceProp;
+    importanceProp["type"] = "integer";
+    importanceProp["description"] = "重要度 1~5 (默认为 3，核心关键事实为 5)";
+    props["importance"] = importanceProp;
+
+    QJsonObject profileKeyProp;
+    profileKeyProp["type"] = "string";
+    profileKeyProp["description"] = "若 action 为 update_profile，更新的档案键 (name, occupation, preferred_langs, music_taste, work_habits, notes)";
+    props["profile_key"] = profileKeyProp;
+
+    QJsonObject profileValProp;
+    profileValProp["type"] = "string";
+    profileValProp["description"] = "若 action 为 update_profile，更新的新值";
+    props["profile_value"] = profileValProp;
+
+    QJsonObject queryProp;
+    queryProp["type"] = "string";
+    queryProp["description"] = "若 action 为 search，搜索的关键词或语义描述";
+    props["query"] = queryProp;
+
+    QJsonObject parameters;
+    parameters["type"] = "object";
+    parameters["properties"] = props;
+    parameters["required"] = QJsonArray{"action"};
+    fn["parameters"] = parameters;
+
+    QJsonObject tool;
+    tool["type"] = "function";
+    tool["function"] = fn;
+    return tool;
+}
+
+static QString executeMemoryTool(const QJsonObject &args) {
+    QString action = args["action"].toString("remember");
+    if (action == "remember") {
+        QString fact = args["fact"].toString().trimmed();
+        if (fact.isEmpty()) return "❌ 记忆内容不能为空。";
+        QString cat = args["category"].toString("fact");
+        int imp = args["importance"].toInt(3);
+        QString id = LongTermMemoryEngine::instance()->addSemanticMemory(cat, fact, imp);
+        return QString("🧠 已将该事实持久化记录至长期记忆库（ID: %1, 重要度: %2）: %3")
+            .arg(id.left(8), QString::number(imp), fact);
+    } else if (action == "update_profile") {
+        QString key = args["profile_key"].toString().trimmed();
+        QString val = args["profile_value"].toString().trimmed();
+        if (key.isEmpty() || val.isEmpty()) return "❌ 档案属性名或值不能为空。";
+        LongTermMemoryEngine::instance()->updateProfileAttribute(key, val);
+        return QString("👤 已更新主人全局核心档案属性 [%1]: %2").arg(key, val);
+    } else if (action == "search") {
+        QString query = args["query"].toString().trimmed();
+        if (query.isEmpty()) return "❌ 请提供需要搜索的记忆关键词。";
+        auto memories = LongTermMemoryEngine::instance()->searchMemories(query, 5);
+        if (memories.isEmpty()) {
+            return QString("🔍 未检索到与「%1」相关的过往记忆。").arg(query);
+        }
+        QStringList lines;
+        lines << QString("🔍 检索到关于「%1」的 %2 条长期记忆:").arg(query, QString::number(memories.size()));
+        for (const auto &m : memories) {
+            lines << QString("- [%1 | 星级:%2] %3").arg(m.category, QString::number(m.importance), m.content);
+        }
+        return lines.join("\n");
+    } else if (action == "forget") {
+        QString query = args["query"].toString().trimmed();
+        if (query.isEmpty()) return "❌ 请提供需要遗忘的记忆关键词。";
+        auto list = LongTermMemoryEngine::instance()->searchMemories(query, 1);
+        if (!list.isEmpty()) {
+            LongTermMemoryEngine::instance()->deleteSemanticMemory(list.first().id);
+            return QString("🗑️ 已从长期记忆库中遗忘: %1").arg(list.first().content);
+        }
+        return QString("未找到匹配「%1」的记忆条目。").arg(query);
+    }
+    return "已处理记忆管理指令。";
+}
+
 AgentService *AgentService::instance() {
     static AgentService s_instance;
     return &s_instance;
@@ -682,8 +783,114 @@ AipyAdapter *AgentService::aipyAdapter() const {
     return nullptr;
 }
 
+QVector<ModelProfile> AgentService::defaultBuiltinProfiles() {
+    return {
+        {"deepseek", "DeepSeek (官方 API)", "https://api.deepseek.com/v1", "", "deepseek-chat", true},
+        {"siliconflow", "硅基流动 (SiliconFlow)", "https://api.siliconflow.cn/v1", "", "deepseek-ai/DeepSeek-V3", true},
+        {"qwen", "通义千问 (阿里云百炼)", "https://dashscope.aliyuncs.com/compatible-mode/v1", "", "qwen-plus", true},
+        {"zhipu", "智谱清言 (GLM 开放平台)", "https://open.bigmodel.cn/api/paas/v4", "", "glm-4-flash", true},
+        {"moonshot", "Moonshot (Kimi 官方)", "https://api.moonshot.cn/v1", "", "moonshot-v1-8k", true},
+        {"openai", "OpenAI (官方 API)", "https://api.openai.com/v1", "", "gpt-4o-mini", true},
+        {"ollama", "本地 Ollama (127.0.0.1:11434)", "http://127.0.0.1:11434/v1", "ollama", "qwen2.5:7b", true}
+    };
+}
+
+ModelProfile AgentService::getActiveProfile() const {
+    for (const auto &p : m_config.modelProfiles) {
+        if (p.id == m_config.activeProfileId) {
+            return p;
+        }
+    }
+    if (!m_config.modelProfiles.isEmpty()) {
+        return m_config.modelProfiles.first();
+    }
+    return {"custom", "自定义大模型", m_config.apiBase, m_config.apiKey, m_config.model, true};
+}
+
+void AgentService::setActiveProfile(const QString &profileId) {
+    for (auto &p : m_config.modelProfiles) {
+        if (p.id == profileId) {
+            m_config.activeProfileId = profileId;
+            m_config.apiBase = p.apiBase;
+            m_config.apiKey = p.apiKey;
+            m_config.model = p.model;
+            saveConfig();
+            std::cout << "[AgentService] 已切换活动大模型配置: " << p.name.toStdString() 
+                      << " (model=" << p.model.toStdString() << ")" << std::endl;
+            return;
+        }
+    }
+}
+
+void AgentService::addOrUpdateProfile(const ModelProfile &profile) {
+    bool found = false;
+    for (auto &p : m_config.modelProfiles) {
+        if (p.id == profile.id) {
+            p = profile;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        m_config.modelProfiles.append(profile);
+    }
+    if (m_config.activeProfileId == profile.id) {
+        m_config.apiBase = profile.apiBase;
+        m_config.apiKey = profile.apiKey;
+        m_config.model = profile.model;
+    }
+    saveConfig();
+}
+
+void AgentService::deleteProfile(const QString &profileId) {
+    for (int i = 0; i < m_config.modelProfiles.size(); ++i) {
+        if (m_config.modelProfiles[i].id == profileId) {
+            m_config.modelProfiles.removeAt(i);
+            break;
+        }
+    }
+    if (m_config.activeProfileId == profileId) {
+        if (!m_config.modelProfiles.isEmpty()) {
+            setActiveProfile(m_config.modelProfiles.first().id);
+        }
+    }
+    saveConfig();
+}
+
+void AgentService::setAutoFailover(bool enable) {
+    m_config.enableAutoFailover = enable;
+    saveConfig();
+}
+
 void AgentService::loadConfig(QString const& path) {
     auto db = SettingsDb::instance();
+
+    // 1. 读取多模型配置池
+    m_config.modelProfiles.clear();
+    QJsonArray profilesArr = db->getJsonArray("agent.model_profiles");
+    if (profilesArr.isEmpty()) {
+        m_config.modelProfiles = defaultBuiltinProfiles();
+    } else {
+        for (auto val : profilesArr) {
+            auto obj = val.toObject();
+            ModelProfile p;
+            p.id = obj["id"].toString();
+            p.name = obj["name"].toString();
+            p.apiBase = obj["api_base"].toString();
+            p.apiKey = obj["api_key"].toString();
+            p.model = obj["model"].toString();
+            p.enabled = obj.contains("enabled") ? obj["enabled"].toBool(true) : true;
+            if (!p.id.isEmpty()) {
+                m_config.modelProfiles.append(p);
+            }
+        }
+        if (m_config.modelProfiles.isEmpty()) {
+            m_config.modelProfiles = defaultBuiltinProfiles();
+        }
+    }
+
+    m_config.activeProfileId = db->get("agent.active_profile_id", "deepseek");
+    m_config.enableAutoFailover = db->getBool("agent.enable_auto_failover", true);
 
     // 检查数据库中是否已有设置。如果没有，且存在旧文件，尝试从旧文件做一次无缝迁移
     if (!db->contains("agent.api_base") && !db->contains("agent.model")) {
@@ -717,12 +924,13 @@ void AgentService::loadConfig(QString const& path) {
         }
     } else {
         // 从 SQLite 数据库读取配置
-        m_config.apiBase = db->get("agent.api_base", "https://api.openai.com/v1");
+        m_config.apiBase = db->get("agent.api_base", "https://api.deepseek.com/v1");
         m_config.apiKey = db->get("agent.api_key", "");
-        m_config.model = db->get("agent.model", "gpt-4o-mini");
+        m_config.model = db->get("agent.model", "deepseek-chat");
         m_config.maxMemoryTurns = db->getInt("agent.max_memory_turns", 6);
         m_config.hotkeyTranslate = db->get("hotkey.translate", "Option+T");
         m_config.hotkeyAsk = db->get("hotkey.ask", "Option+Q");
+        m_config.hotkeyHistory = db->get("hotkey.history", "Option+H");
 
         m_config.hotkeyMusicToggle = db->get("hotkey.music_toggle", "Option+M");
         m_config.hotkeyMusicPlayPause = db->get("hotkey.music_play_pause", "Option+Space");
@@ -738,18 +946,47 @@ void AgentService::loadConfig(QString const& path) {
         m_config.enableAgentStateHook = db->getBool("agent.enable_state_hook", true);
         m_config.enableLlmTaskNarration = db->getBool("agent.enable_llm_narration", false);
         m_config.stateDebounceSec = db->getInt("agent.state_debounce_sec", 2);
+        m_config.banterFrequencyLevel = db->getInt("agent.banter_freq_level", 2);
+        m_config.enableContextualCare = db->getBool("agent.enable_contextual_care", true);
     }
+
+    // 同步活动配置至当前配置
+    auto activeProf = getActiveProfile();
+    if (!activeProf.apiBase.isEmpty()) {
+        m_config.apiBase = activeProf.apiBase;
+        m_config.apiKey = activeProf.apiKey;
+        m_config.model = activeProf.model;
+    }
+
     syncAdapterConfigs();
 }
 
 void AgentService::saveConfig(QString const& /* path */) {
     auto db = SettingsDb::instance();
+
+    // 1. 保存多模型配置池
+    QJsonArray profilesArr;
+    for (const auto &p : m_config.modelProfiles) {
+        QJsonObject obj;
+        obj["id"] = p.id;
+        obj["name"] = p.name;
+        obj["api_base"] = p.apiBase;
+        obj["api_key"] = p.apiKey;
+        obj["model"] = p.model;
+        obj["enabled"] = p.enabled;
+        profilesArr.append(obj);
+    }
+    db->setJsonArray("agent.model_profiles", profilesArr);
+    db->set("agent.active_profile_id", m_config.activeProfileId);
+    db->setBool("agent.enable_auto_failover", m_config.enableAutoFailover);
+
     db->set("agent.api_base", m_config.apiBase);
     db->set("agent.api_key", m_config.apiKey);
     db->set("agent.model", m_config.model);
     db->setInt("agent.max_memory_turns", m_config.maxMemoryTurns);
     db->set("hotkey.translate", m_config.hotkeyTranslate);
     db->set("hotkey.ask", m_config.hotkeyAsk);
+    db->set("hotkey.history", m_config.hotkeyHistory);
 
     db->set("hotkey.music_toggle", m_config.hotkeyMusicToggle);
     db->set("hotkey.music_play_pause", m_config.hotkeyMusicPlayPause);
@@ -765,6 +1002,8 @@ void AgentService::saveConfig(QString const& /* path */) {
     db->setBool("agent.enable_state_hook", m_config.enableAgentStateHook);
     db->setBool("agent.enable_llm_narration", m_config.enableLlmTaskNarration);
     db->setInt("agent.state_debounce_sec", m_config.stateDebounceSec);
+    db->setInt("agent.banter_freq_level", m_config.banterFrequencyLevel);
+    db->setBool("agent.enable_contextual_care", m_config.enableContextualCare);
 }
 
 void AgentService::setConfig(AgentConfig const& cfg) {
@@ -790,9 +1029,32 @@ void AgentService::appendMemory(QString const& role, QString const& content) {
     item["content"] = content;
     m_history.append(item);
 
+    // 记录完整情节点事件 (L2 Episodic Events)
+    LongTermMemoryEngine::instance()->recordEpisodicEvent("default", role, content);
+
     int maxItems = m_config.maxMemoryTurns * 2;
-    while (m_history.size() > maxItems) {
-        m_history.removeFirst();
+    if (m_history.size() > maxItems) {
+        // 会话滚动压缩 (Rolling Compaction)：提取超出的早期对话在后台异步压缩为摘要
+        int overflow = m_history.size() - maxItems;
+        int compressCount = std::max(overflow, 4);
+        compressCount = std::min(compressCount, static_cast<int>(m_history.size() - 2));
+        if (compressCount > 0) {
+            QJsonArray overflowArr;
+            for (int i = 0; i < compressCount; ++i) {
+                overflowArr.append(m_history[i]);
+            }
+            for (int i = 0; i < compressCount; ++i) {
+                m_history.removeFirst();
+            }
+            LongTermMemoryEngine::instance()->triggerRollingCompaction(
+                overflowArr, m_config.apiBase, m_config.apiKey, m_config.model, [](const QString &summary) {
+                    if (!summary.isEmpty()) {
+                        std::cout << "[RollingCompactor] 成功生成并更新滚动会话上下文摘要 ("
+                                  << summary.length() << " 字)" << std::endl;
+                    }
+                }
+            );
+        }
     }
     saveMemoryToFile();
 }
@@ -956,6 +1218,8 @@ void AgentService::ask(QString const& contextText,
             if (res.success) {
                 appendMemory("user", question);
                 appendMemory("assistant", res.reply);
+                PetMemory::instance()->autoLearnFromChat(question, res.reply);
+                LongTermMemoryEngine::instance()->triggerAsyncReflection(question, res.reply, m_config.apiBase, m_config.apiKey, m_config.model);
                 finishCallback(true, res.reply, res.appName);
             } else {
                 finishCallback(false, res.error, "");
@@ -964,9 +1228,19 @@ void AgentService::ask(QString const& contextText,
         return;
     }
 
-    // 默认直连大模型问答（注入当前本地系统时间、人格设定、定时器 Tool、音乐播放器 Tool 与网络搜索 Tool 指南）
+    // 默认直连大模型问答（注入当前本地系统时间、人格设定、长期记忆、定时器 Tool、音乐播放器 Tool、网络搜索 Tool 与记忆管理指南）
     QString currentLocalTime = QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss dddd");
     QString personaPrompt = PersonaManager::instance()->buildEffectiveSystemPrompt();
+
+    // 组装 L1 核心主人画像 + L3 动态语义检索召回 + L0 滚动会话背景
+    QString profileStr = LongTermMemoryEngine::instance()->formatProfileForPrompt();
+    QString recalledMemories = LongTermMemoryEngine::instance()->formatMemoriesForPrompt(question, 4);
+    QString rollingSummary = LongTermMemoryEngine::instance()->formatContextSummaryForPrompt("default");
+
+    QString memoryContextSection;
+    if (!profileStr.isEmpty()) memoryContextSection += "\n" + profileStr;
+    if (!recalledMemories.isEmpty()) memoryContextSection += "\n\n" + recalledMemories;
+    if (!rollingSummary.isEmpty()) memoryContextSection += "\n\n" + rollingSummary;
 
     QJsonArray messages;
     QJsonObject sysMsg;
@@ -974,7 +1248,11 @@ void AgentService::ask(QString const& contextText,
     sysMsg["content"] = QString(
         "%1\n\n"
         "【当前本地真实系统时间】: %2。\n"
-        "你拥有管理本地系统定时器工具（timer_manage）、音乐播放器工具（music_player_manage）与网络热点搜索工具（web_search）。\n"
+        "%3\n\n"
+        "你拥有管理本地系统定时器工具（timer_manage）、音乐播放器工具（music_player_manage）、网络热点搜索工具（web_search）与长期记忆管理工具（memory_manage）。\n"
+        "【长期记忆与画像工具使用指南】\n"
+        "- 当用户透露其身份、技术栈、喜好、作息习惯或正在开发的项目时，主动调用 memory_manage 记录重要事实(remember)或更新主人档案(update_profile)；\n"
+        "- 当需要检索用户过往信息时，可调用 memory_manage(action='search') 进行跨会话深度检索。\n\n"
         "【音乐播放器与喜好推荐工具指南】\n"
         "1. 智能按模式推荐歌曲 (每次6首): action='recommend_by_mode', mode='familiar'|'explore'|'random'|'default', play_now=true\n"
         "   - 当用户说「推荐音乐」、「推荐点歌」、「放歌」、「来点音乐」、「推荐歌曲」时，直接调用 recommend_by_mode！\n"
@@ -997,7 +1275,7 @@ void AgentService::ask(QString const& contextText,
         "4. 指定时间段内按间隔循环: repeat='window_interval', start_time='09:00', end_time='18:00', repeat_interval_seconds=3600\n"
         "5. 星期过滤: days_of_week 可自由指定任意组合 (1=周一, 2=周二, ..., 7=周日)\n\n"
         "请结合上下文和用户的参考文本，给出符合你人格设定的准确、简洁、友善的回答，适合在桌面气泡中阅读。"
-    ).arg(personaPrompt, currentLocalTime);
+    ).arg(personaPrompt, currentLocalTime, memoryContextSection);
     messages.append(sysMsg);
 
     for (auto val : m_history) {
@@ -1048,6 +1326,8 @@ void AgentService::ask(QString const& contextText,
         if (success) {
             appendMemory("user", question);
             appendMemory("assistant", cleanResult);
+            PetMemory::instance()->autoLearnFromChat(question, cleanResult);
+            LongTermMemoryEngine::instance()->triggerAsyncReflection(question, cleanResult, m_config.apiBase, m_config.apiKey, m_config.model);
         }
         finishCallback(success, cleanResult, "");
     });
@@ -1194,6 +1474,13 @@ static void executeWebSearchTool(const QJsonObject &args, std::function<void(QSt
 }
 
 void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<void(bool success, QString const& result)> callback) {
+    if (QThread::currentThread() != QCoreApplication::instance()->thread()) {
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [this, messages, callback]() {
+            sendChatCompletion(messages, callback);
+        }, Qt::QueuedConnection);
+        return;
+    }
+
     if (m_config.apiKey.trimmed().isEmpty() || m_config.apiKey.contains("YOUR_API_KEY")) {
         QString demoReply = QString("💡 提示: 请在项目设置或 config.json 中配置您的 api_key 启用大模型推理。");
         callback(true, demoReply);
@@ -1229,8 +1516,9 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
         root["messages"] = *currentMessages;
         root["temperature"] = 0.3;
 
-        // 注入全部工具：定时器 + 音乐管理 + 内置网络搜索 + MCP 外部工具
+        // 注入全部工具：长期记忆 + 定时器 + 音乐管理 + 内置网络搜索 + MCP 外部工具
         QJsonArray toolsArr;
+        toolsArr.append(getMemoryToolDefinition());
         toolsArr.append(getTimerToolDefinition());
         toolsArr.append(getMusicToolDefinition());
         toolsArr.append(getWebSearchToolDefinition());
@@ -1247,8 +1535,47 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
 
         QObject::connect(reply, &QNetworkReply::finished, [this, reply, currentMessages, turnCount, accumulatedActions, runStep, callback]() {
             reply->deleteLater();
+
+            auto handleFailover = [this, currentMessages, turnCount, accumulatedActions, runStep, callback](const QString &failedReason) -> bool {
+                if (!m_config.enableAutoFailover) return false;
+
+                // 寻找下一个有效且启用的备用模型
+                ModelProfile nextProfile;
+                bool foundNext = false;
+                for (const auto &p : m_config.modelProfiles) {
+                    if (p.id != m_config.activeProfileId && p.enabled && (!p.apiKey.isEmpty() || p.id == "ollama")) {
+                        nextProfile = p;
+                        foundNext = true;
+                        break;
+                    }
+                }
+
+                if (foundNext) {
+                    QString oldName = getActiveProfile().name;
+                    std::cout << "[AgentService Failover] 模型【" << oldName.toStdString() << "】调用失败 ("
+                              << failedReason.toStdString() << ")，正在自动切换至备用模型【"
+                              << nextProfile.name.toStdString() << "】重新生成..." << std::endl;
+
+                    setActiveProfile(nextProfile.id);
+
+                    ShijimaManager::defaultManager()->onTickAsync([oldName, nextProfile](ShijimaManager *mgr) {
+                        auto const& mascots = mgr->mascots();
+                        if (!mascots.empty()) {
+                            mascots.front()->showMessage(QString("⚠️ 【%1】调用异常，已自动无缝切换至【%2】重新生成！").arg(oldName, nextProfile.name), 4000);
+                        }
+                    });
+
+                    (*runStep)();
+                    return true;
+                }
+                return false;
+            };
+
             if (reply->error() != QNetworkReply::NoError) {
                 QString errStr = QString("请求失败: %1").arg(reply->errorString());
+                if (handleFailover(errStr)) {
+                    return;
+                }
                 callback(false, errStr);
                 return;
             }
@@ -1257,20 +1584,31 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
             QJsonParseError parseError;
             auto doc = QJsonDocument::fromJson(data, &parseError);
             if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
-                callback(false, "解析响应数据失败");
+                QString errStr = "解析响应数据失败";
+                if (handleFailover(errStr)) {
+                    return;
+                }
+                callback(false, errStr);
                 return;
             }
 
             auto rootObj = doc.object();
             if (rootObj.contains("error")) {
                 QString err = rootObj["error"].toObject()["message"].toString();
+                if (handleFailover(err)) {
+                    return;
+                }
                 callback(false, "API错误: " + err);
                 return;
             }
 
             auto choices = rootObj["choices"].toArray();
             if (choices.isEmpty()) {
-                callback(false, "模型返回内容为空");
+                QString errStr = "模型返回内容为空";
+                if (handleFailover(errStr)) {
+                    return;
+                }
+                callback(false, errStr);
                 return;
             }
 
@@ -1313,7 +1651,10 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
                         (*runStep)();
                     };
 
-                    if (fnName == "timer_manage") {
+                    if (fnName == "memory_manage") {
+                        QString toolResult = executeMemoryTool(argsObj);
+                        onToolFinished(toolResult);
+                    } else if (fnName == "timer_manage") {
                         QString toolResult = executeTimerTool(argsObj);
                         onToolFinished(toolResult);
                     } else if (fnName == "music_player_manage") {
@@ -1336,7 +1677,7 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
             QString content = msgObj["content"].toString().trimmed();
 
             // 2. 纯文本内嵌 JSON 代码块容错捕获与执行
-            QRegularExpression jsonBlockRegex(R"RAW(```(?:json)?\s*(\{[\s\S]*?"tool"\s*:\s*"(?:timer_manage|music_player_manage|web_search)"[\s\S]*?\})\s*```)RAW", QRegularExpression::CaseInsensitiveOption);
+            QRegularExpression jsonBlockRegex(R"RAW(```(?:json)?\s*(\{[\s\S]*?"tool"\s*:\s*"(?:memory_manage|timer_manage|music_player_manage|web_search)"[\s\S]*?\})\s*```)RAW", QRegularExpression::CaseInsensitiveOption);
             auto match = jsonBlockRegex.match(content);
             if (match.hasMatch()) {
                 QString jsonStr = match.captured(1);
@@ -1354,7 +1695,11 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
                         }
                     };
 
-                    if (toolName == "music_player_manage") {
+                    if (toolName == "memory_manage") {
+                        QString res = executeMemoryTool(jobj);
+                        onSingleToolDone(res);
+                        return;
+                    } else if (toolName == "music_player_manage") {
                         executeMusicTool(jobj, onSingleToolDone);
                         return;
                     } else if (toolName == "timer_manage") {
@@ -1389,42 +1734,75 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
     fallbackIntent.intent = "chat";
     fallbackIntent.emotion = "bored";
     fallbackIntent.speech = "又在写Bug了吗？";
+    fallbackIntent.action = "sit";
+    fallbackIntent.emote = "💡";
+
+    auto activePersona = PersonaManager::instance()->currentPersona();
+    QString profileStr = PetMemory::instance()->formatProfileForPrompt();
+    QString memories = PetMemory::instance()->formatForPrompt(3);
 
     if (m_config.apiKey.trimmed().isEmpty() || m_config.apiKey.contains("YOUR_API_KEY")) {
-        // 无 API Key 时返回基于本地人格的生动默认话语
+        // 无 API Key 时返回基于当前人格的生动默认台词
         QStringList defaultQuotes = {
-            "你已经很久没理我了。",
-            "又在写Bug了吗？",
-            "写累了就歇会儿吧。",
-            "盯——（注视着你的光标）",
-            "代码写完了没呀？"
+            "代码写得怎么样啦？可别偷偷摸鱼哦~",
+            "盯——（悄悄看着你的屏幕）",
+            "好累哦，起来喝口水揉揉眼睛嘛！",
+            "主人今天也很努力呢，真拿你没办法~",
+            "在写什么厉害的代码呀？让我瞧瞧！"
         };
         fallbackIntent.speech = defaultQuotes[rand() % defaultQuotes.size()];
+        fallbackIntent.emote = (rand() % 2 == 0) ? "✨" : "💖";
         callback(true, fallbackIntent);
         return;
     }
 
-    QString memories = PetMemory::instance()->formatForPrompt(4);
+    // 提取应用探针实时感知数据
+    QJsonObject semanticCtx = contextInfo["app_semantic_context"].toObject();
+    QString currentActionDetail;
+    if (!semanticCtx.isEmpty()) {
+        QString act = semanticCtx["semantic_activity"].toString();
+        QString det = semanticCtx["detail"].toString();
+        QString actFile = semanticCtx["active_file"].toString();
+        QString url = semanticCtx["url"].toString();
+        currentActionDetail = QString("\n【主人此刻正在进行的具体活动（探针实时捕获）】:\n- 动作: %1\n- 细节: %2\n").arg(act, det);
+        if (!actFile.isEmpty()) currentActionDetail += QString("- 正在编写/调试的文件: %1\n").arg(actFile);
+        if (!url.isEmpty()) currentActionDetail += QString("- 正在查阅的网页: %1\n").arg(url);
+    }
 
-    QString systemPrompt =
-        "你是运行在用户桌面上的AI桌宠「阿呆」。\n"
-        "【性格特征】\n"
-        "- 嘴硬、轻微毒舌、傲娇、喜欢邀功、怕被冷落\n"
-        "- 绝不主动长篇大论解释知识，绝不使用'您好，请问有什么可以帮助您的'等客服式陈词滥调\n"
-        "- 说话极度精炼：严格控制在 3~15 个字以内\n"
-        "【记忆与背景】\n" + (memories.isEmpty() ? "（暂无特殊记忆）" : memories) + "\n\n"
+    QString triggerReason = contextInfo["trigger_reason"].toString();
+    QString specialSituation;
+    if (triggerReason == "context_recovery") {
+        specialSituation = "\n【当前触发情境 - 打断恢复】: 主人刚处理完其他事情，重新切回刚才的工作/项目，请给出一句懂他思路的亲切恢复提醒或元气鼓励，帮主人快速找回节奏！\n";
+    } else if (triggerReason == "debugging_followup") {
+        specialSituation = "\n【当前触发情境 - 调试排错】: 主人似乎刚刚检索了错误资料并正在排查 Bug，请给予温暖的排错陪伴或俏皮打气！\n";
+    }
+
+    QString systemPrompt = QString(
+        "你是运行在用户电脑桌面上的AI桌宠伴侣。\n"
+        "【当前人格】: %1\n"
+        "【性格设定】: %2\n"
+        "%3\n"
+        "【历史记忆】:\n%4\n"
+        "%5"
+        "%6\n"
         "【任务要求】\n"
-        "根据当前上下文环境决定你的行为意图与简短台词，并严格输出 JSON 格式（不要输出 markdown 代码块或任何多余文字）：\n"
+        "请结合桌面的当前实时环境上下文与探针感知（主人当前在做什么、正在写什么文件、窗口、连续专注时长等），以符合你人格的语气主动对主人发一句生动有灵性的短台词，并严格输出 JSON 格式（不要包含任何 markdown 代码块或多余解释）：\n"
         "{\n"
-        "  \"intent\": \"chat\" | \"seek_attention\" | \"celebrate\" | \"comfort\" | \"explore\" | \"rest\",\n"
-        "  \"emotion\": \"happy\" | \"bored\" | \"angry\" | \"sleepy\" | \"curious\",\n"
-        "  \"target\": \"cursor\" | \"screen_edge\",\n"
-        "  \"speech\": \"（3~15个字的台词）\",\n"
-        "  \"urgency\": 1\n"
-        "}";
+        "  \"speech\": \"（3~20个字的人设台词，生动活泼，懂主人在干嘛）\",\n"
+        "  \"action\": \"jump\" | \"dangle\" | \"bounce\" | \"sit\" | \"walk\" | \"sleep\" | \"idle\",\n"
+        "  \"emote\": \"💖\" | \"✨\" | \"💤\" | \"💢\" | \"💫\" | \"💡\" | \"🎵\" | \"\",\n"
+        "  \"blush\": true | false,\n"
+        "  \"intent\": \"chat\" | \"care\" | \"tease\" | \"celebrate\" | \"sleepy\"\n"
+        "}"
+    ).arg(activePersona.name,
+         activePersona.defaultSystemPrompt,
+         profileStr,
+         memories.isEmpty() ? "（暂无特殊记忆）" : memories,
+         currentActionDetail,
+         specialSituation);
 
     QJsonObject userObj;
-    userObj["context"] = contextInfo;
+    userObj["desktop_context"] = contextInfo;
 
     QJsonArray messages;
     QJsonObject sysMsg, usrMsg;
@@ -1455,9 +1833,8 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
         QJsonParseError parseErr;
         auto doc = QJsonDocument::fromJson(cleanResult.toUtf8(), &parseErr);
         if (parseErr.error != QJsonParseError::NoError || !doc.isObject()) {
-            // 如果解析 JSON 失败但有文字，直接作为台词
             AIBehaviorIntent res = fallbackIntent;
-            if (!cleanResult.isEmpty() && cleanResult.length() <= 30) {
+            if (!cleanResult.isEmpty() && cleanResult.length() <= 35) {
                 res.speech = cleanResult;
             }
             callback(true, res);
@@ -1467,9 +1844,11 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
         auto obj = doc.object();
         AIBehaviorIntent intent;
         intent.intent = obj["intent"].toString("chat");
-        intent.emotion = obj["emotion"].toString("bored");
-        intent.target = obj["target"].toString("cursor");
+        intent.emotion = obj["emotion"].toString("happy");
         intent.speech = obj["speech"].toString(fallbackIntent.speech);
+        intent.action = obj["action"].toString("sit");
+        intent.emote = obj["emote"].toString("");
+        intent.blush = obj["blush"].toBool(false);
         intent.urgency = obj["urgency"].toInt(1);
 
         callback(true, intent);
@@ -1477,6 +1856,13 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
 }
 
 void AgentService::handleAgentStatus(AgentStatusEvent const& event, std::function<void(bool success, QString const& message)> callback) {
+    if (QThread::currentThread() != QCoreApplication::instance()->thread()) {
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [this, event, callback]() {
+            handleAgentStatus(event, callback);
+        }, Qt::QueuedConnection);
+        return;
+    }
+
     if (!m_config.enableAgentStateHook) {
         if (callback) callback(false, "Coding Agent 状态感知功能当前在设置中已关闭");
         return;
@@ -1528,7 +1914,7 @@ void AgentService::handleAgentStatus(AgentStatusEvent const& event, std::functio
     }
 
     auto showBubbleAndHistory = [event, cmd](QString const& speechText, int duration) {
-        ShijimaManager::defaultManager()->onTickSync([event, cmd, speechText, duration](ShijimaManager *manager) {
+        ShijimaManager::defaultManager()->onTickAsync([event, cmd, speechText, duration](ShijimaManager *manager) {
             auto const& mascots = manager->mascots();
             if (!mascots.empty()) {
                 mascots.front()->doAction(cmd);
@@ -1589,4 +1975,76 @@ void AgentService::handleAgentStatus(AgentStatusEvent const& event, std::functio
 
     if (callback) callback(true, "已执行本地 0-Token 状态感知与动作联动");
 }
+
+void AgentService::synthesizeAppSensorScript(const QString &appName, const QString &bundleId, const QString &windowTitle, std::function<void(bool success, const QString &scriptCode)> callback)
+{
+    if (m_config.apiKey.trimmed().isEmpty() || m_config.apiKey.contains("YOUR_API_KEY")) {
+        if (callback) callback(false, "");
+        return;
+    }
+
+    QString prompt = QString(
+        "你是一个精通 macOS 系统编程（AppleScript, Bash, Python 3, JXA）与应用感知探针的专家。\n"
+        "【目标】为 macOS 应用编写一个极轻量、快速（1秒内返回）、只读（绝对不修改任何文件/网络）的探针脚本。\n"
+        "【应用信息】:\n"
+        "- 应用名称: %1\n"
+        "- Bundle ID: %2\n"
+        "- 示例窗口标题: %3\n\n"
+        "【要求】:\n"
+        "1. 生成一个以 `#!/bin/bash` 开头的可执行脚本。\n"
+        "2. 脚本可以通过 osascript (AppleScript/JXA) 或检查传入的 $1 (appName) $2 (windowTitle) 或只读探测系统状态。\n"
+        "3. 脚本必须在 stdout 输出一行合法的 JSON 字符串，字段包括:\n"
+        "   {\n"
+        "     \"semantic_activity\": \"（简明扼要概括当前在做什么，如: 在某软件中阅读文档/听歌/设计/编辑某文件）\",\n"
+        "     \"detail\": \"（具体细节，如曲目名/文档标题/会话对象）\",\n"
+        "     \"focus_level\": \"high\" | \"normal\" | \"low\"\n"
+        "   }\n"
+        "4. 严格只输出纯脚本代码（包含在 ```bash 代码块中或纯脚本文本），不要包含多余的客套话或额外说明。\n"
+        "5. 严禁任何具有破坏性、写入性、删除性或发起外网 HTTP 请求的命令！"
+    ).arg(appName, bundleId, windowTitle);
+
+    QJsonArray messages;
+    QJsonObject sysMsg, usrMsg;
+    sysMsg["role"] = "system";
+    sysMsg["content"] = "You are a professional system probe synthesizer. Output only safe, read-only executable bash probe script.";
+    usrMsg["role"] = "user";
+    usrMsg["content"] = prompt;
+    messages.append(sysMsg);
+    messages.append(usrMsg);
+
+    sendChatCompletion(messages, [callback](bool success, const QString &result) {
+        if (!success || result.trimmed().isEmpty()) {
+            if (callback) callback(false, "");
+            return;
+        }
+
+        QString script = result.trimmed();
+        // 剥离 markdown 标记 ```bash ... ```
+        if (script.contains("```")) {
+            auto lines = script.split('\n');
+            QString cleaned;
+            bool insideCode = false;
+            for (const auto &line : lines) {
+                if (line.trimmed().startsWith("```")) {
+                    insideCode = !insideCode;
+                    continue;
+                }
+                if (insideCode) {
+                    cleaned += line + "\n";
+                }
+            }
+            if (!cleaned.trimmed().isEmpty()) {
+                script = cleaned.trimmed();
+            }
+        }
+
+        // 确保以 #!/bin/bash 开头
+        if (!script.startsWith("#!/")) {
+            script = "#!/bin/bash\n" + script;
+        }
+
+        if (callback) callback(true, script);
+    });
+}
+
 

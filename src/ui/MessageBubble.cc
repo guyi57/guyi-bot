@@ -16,7 +16,7 @@
 #include "MessageHistoryDialog.hpp"
 
 // ==========================================
-// 1:1 对标截图的高质感胶囊按钮组件（独立彩色图标徽章 + 深色文字）
+// 现代化液态毛玻璃胶囊按钮组件（高质感微光图标 + 深邃字形）
 // ==========================================
 class IconCardButton : public QWidget {
 
@@ -28,23 +28,23 @@ public:
         setAttribute(Qt::WA_Hover);
         
         auto layout = new QHBoxLayout(this);
-        layout->setContentsMargins(5, 3, 10, 3);
+        layout->setContentsMargins(6, 4, 10, 4);
         layout->setSpacing(6);
 
         m_iconLabel = new QLabel(icon, this);
-        m_iconLabel->setFixedSize(22, 22);
+        m_iconLabel->setFixedSize(20, 20);
         m_iconLabel->setAlignment(Qt::AlignCenter);
         m_iconLabel->setStyleSheet(QString(
             "QLabel {"
-            "  background-color: %1;"
+            "  background: %1;"
             "  color: #ffffff;"
-            "  border-radius: 7px;"
-            "  font-size: 11px;"
+            "  border-radius: 6px;"
+            "  font-size: 10.5px;"
             "}"
         ).arg(iconBg));
 
         m_textLabel = new QLabel(text, this);
-        m_textLabel->setStyleSheet("QLabel { color: #1e293b; font-size: 12px; font-weight: 600; background: transparent; }");
+        m_textLabel->setStyleSheet("QLabel { color: #334155; font-size: 11.5px; font-weight: 600; background: transparent; letter-spacing: 0.2px; }");
 
         layout->addWidget(m_iconLabel);
         layout->addWidget(m_textLabel);
@@ -82,9 +82,10 @@ private:
             "IconCardButton {"
             "  background-color: %1;"
             "  border: 1px solid %2;"
-            "  border-radius: 11px;"
+            "  border-radius: 12px;"
             "}"
-        ).arg(hover ? "#f8fafc" : "#ffffff", hover ? "#cbd5e1" : "#e2e8f0"));
+        ).arg(hover ? "rgba(255, 255, 255, 0.95)" : "rgba(248, 250, 252, 0.82)",
+              hover ? "rgba(203, 213, 225, 0.9)" : "rgba(226, 232, 240, 0.7)"));
     }
 
     QLabel *m_iconLabel = nullptr;
@@ -96,11 +97,19 @@ private:
 static QString highlightCodeSyntax(QString const& code) {
     QString escaped = code.toHtmlEscaped();
     
-    // 字符串高亮 (绿色)
+    // 字符串高亮 (森林翠绿)
     QRegularExpression strRe(R"(&quot;.*?&quot;|&#39;.*?&#39;|".*?"|'.*?')");
     escaped.replace(strRe, "<span style=\"color:#059669;\">\\0</span>");
 
-    // 关键字高亮 (粉紫色)
+    // 数字字面量高亮 (温暖琥珀)
+    QRegularExpression numRe(R"(\b\d+(\.\d+)?\b)");
+    escaped.replace(numRe, "<span style=\"color:#d97706;\">\\0</span>");
+
+    // 注释高亮 (冷杉灰)
+    QRegularExpression commentRe(R"((\/\/[^\n]*|#[^\n]*))");
+    escaped.replace(commentRe, "<span style=\"color:#94a3b8; font-style:italic;\">\\0</span>");
+
+    // 关键字高亮 (梦幻紫罗兰)
     QStringList keywords = {
         "import", "from", "as", "def", "return", "class", "if", "elif", "else", 
         "for", "while", "in", "try", "except", "finally", "with", "lambda", "yield",
@@ -110,7 +119,7 @@ static QString highlightCodeSyntax(QString const& code) {
     };
     for (const auto &kw : keywords) {
         QRegularExpression kwRe(QString(R"(\b%1\b)").arg(kw));
-        escaped.replace(kwRe, QString("<span style=\"color:#9333ea; font-weight:600;\">%1</span>").arg(kw));
+        escaped.replace(kwRe, QString("<span style=\"color:#7c3aed; font-weight:600;\">%1</span>").arg(kw));
     }
 
     return escaped;
@@ -121,26 +130,55 @@ static QString renderInlineMarkdown(QString text) {
     QRegularExpression boldRe(R"(\*\*(.*?)\*\*)");
     text.replace(boldRe, "<b style=\"color:#0f172a; font-weight:700;\">\\1</b>");
 
-    // 2. 斜体
-    QRegularExpression italicRe(R"(\*(.*?)\*)");
-    text.replace(italicRe, "<i>\\1</i>");
-
-    // 3. 行内代码
+    // 2. 行内代码 (精致轻巧胶囊)
     QRegularExpression codeRe(R"(`(.*?)`)");
-    text.replace(codeRe, "<code style=\"background-color:#f1f5f9; color:#475569; padding:2px 6px; border-radius:4px; font-family:ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px;\">\\1</code>");
+    text.replace(codeRe, "<code style=\"background-color:rgba(241, 245, 249, 0.9); color:#475569; padding:2px 6px; border-radius:5px; font-family:monospace; font-size:11.8px; border:1px solid rgba(226, 232, 240, 0.7);\">\\1</code>");
 
-    // 4. 超链接
+    // 3. 超链接 (柔和苹果蓝)
     QRegularExpression linkRe(R"(\[(.*?)\]\((.*?)\))");
-    text.replace(linkRe, "<a href=\"\\2\" style=\"color:#2563eb; text-decoration:none; font-weight:500;\">\\1</a>");
+    text.replace(linkRe, "<a href=\"\\2\" style=\"color:#3b82f6; text-decoration:none; font-weight:500;\">\\1</a>");
+
+    // 4. 斜体 (仅在非双星号粗体时生效)
+    QRegularExpression italicRe(R"((?<!\*)\*([^\*\n]+?)\*(?!\*))");
+    text.replace(italicRe, "<i>\\1</i>");
 
     return text;
 }
 
-static QString markdownToRichHtml(QString const& raw) {
+QString MessageBubble::normalizeMarkdownText(QString const& raw) {
     QString text = raw;
     text.replace("\\n", "\n");
     text.replace("\r\n", "\n");
     text.replace("\r", "\n");
+
+    // 1. 拆分连在一行的表格行: | | -> |\n|
+    static QRegularExpression tableRowRe(R"(\|\s*\|)");
+    text.replace(tableRowRe, "|\n|");
+
+    // 2. 保护数值/时间/单位范围连字符（如 09:00 - 18:00, 20 - 25°C, 10 - 20cm, 3% - 11%）
+    static QRegularExpression rangeRe(R"((\d+(?::\d+)?(?:°C|℃|cm|mm|m|km|h|kg|g|%|s|ms)?)\s*[-–—~]\s*(\d+(?::\d+)?))");
+    text.replace(rangeRe, "\\1 __DASH_RANGE__ \\2");
+
+    // 3. 将行内剩余的 ' - ' 或 ' • ' 或 ' ◦ '（带有明确空格分隔的列表项符号）安全转为换行列表项
+    static QRegularExpression inlineDashListRe(R"(([^\n\s])\s+[-•◦]\s+)");
+    text.replace(inlineDashListRe, "\\1\n- ");
+
+    // 4. 还原被保护的范围连字符为标准区间符号 '~'
+    text.replace("__DASH_RANGE__", " ~ ");
+
+    // 5. 数字标号列表项换行: "。 1. " -> "。\n1. "
+    static QRegularExpression numListRe(R"(([。！？；：\)）])\s*(\d+\.\s+))");
+    text.replace(numListRe, "\\1\n\\2");
+
+    // 6. 规范多余连续空行
+    static QRegularExpression multiNewlineRe(R"(\n{3,})");
+    text.replace(multiNewlineRe, "\n\n");
+
+    return text.trimmed();
+}
+
+QString MessageBubble::markdownToRichHtml(QString const& raw) {
+    QString text = normalizeMarkdownText(raw);
 
     QStringList lines = text.split('\n');
     QString bodyHtml;
@@ -155,7 +193,7 @@ static QString markdownToRichHtml(QString const& raw) {
         if (trimmed.startsWith("```")) {
             if (inCodeBlock) {
                 bodyHtml += QString(
-                    "<pre style=\"background-color:#f8fafc; color:#334155; border:1px solid #e2e8f0; padding:10px 14px; border-radius:8px; font-family:'SF Mono', Menlo, Monaco, Consolas, monospace; font-size:12.5px; line-height:1.5; margin:8px 0; overflow-x:auto;\">"
+                    "<pre style=\"background-color:#f8fafc; color:#1e293b; border:1px solid #e2e8f0; padding:10px 14px; border-radius:6px; font-family:monospace; font-size:12px; line-height:1.5; margin:8px 0;\">"
                     "<code>%1</code>"
                     "</pre>"
                 ).arg(highlightCodeSyntax(codeBlockContent));
@@ -175,10 +213,22 @@ static QString markdownToRichHtml(QString const& raw) {
 
         // 2. 空行
         if (trimmed.isEmpty()) {
+            bodyHtml += "<div style=\"height:8px;\"></div>";
             continue;
         }
 
-        // 3. 表格解析 (精准 1:1 还原截图无竖线整洁斑马纹表格)
+        // 3. 引用块 / Callout (> 文本)
+        if (trimmed.startsWith("> ")) {
+            QString quoteText = trimmed.mid(2).trimmed();
+            bodyHtml += QString(
+                "<table style=\"border-collapse:collapse; width:100%; margin:8px 0; border-left:3.5px solid #6366f1; background-color:#f8fafc; border-radius:4px;\">"
+                "<tr><td style=\"padding:8px 12px; color:#475569; font-size:12.5px; line-height:1.55;\">%1</td></tr>"
+                "</table>"
+            ).arg(renderInlineMarkdown(quoteText));
+            continue;
+        }
+
+        // 4. 表格解析 (极简 Notion / Apple 风格斑马纹表格，兼容 Qt 富文本引擎)
         if (trimmed.startsWith("|") && trimmed.endsWith("|") && trimmed.count("|") >= 2) {
             QStringList tableLines;
             while (i < lines.size() && lines[i].trimmed().startsWith("|") && lines[i].trimmed().endsWith("|")) {
@@ -188,14 +238,14 @@ static QString markdownToRichHtml(QString const& raw) {
             i--; // 还原多加的索引
 
             if (tableLines.size() >= 2) {
-                QString htmlTable = "<table style=\"border-collapse:separate; border-spacing:0; width:100%; margin:8px 0; background-color:#ffffff; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden;\">\n";
+                QString htmlTable = "<table style=\"border-collapse:collapse; width:100%; margin:10px 0; background-color:#ffffff; border:1px solid #e2e8f0; border-radius:6px;\">\n";
                 
                 // 表头 (第 0 行)
                 QStringList headerCells = tableLines[0].split("|", Qt::SkipEmptyParts);
-                htmlTable += "<thead>\n<tr style=\"background-color:#f1f5f9;\">\n";
+                htmlTable += "<thead>\n<tr style=\"background-color:#f8fafc;\">\n";
                 for (int c = 0; c < headerCells.size(); ++c) {
-                    QString colWidth = (c == 0) ? "width:36%;" : "";
-                    htmlTable += QString("<th style=\"padding:7px 12px; font-weight:700; text-align:left; color:#0f172a; border-bottom:1px solid #e2e8f0; font-size:13px; %1\">%2</th>\n")
+                    QString colWidth = (c == 0) ? "width:34%;" : "";
+                    htmlTable += QString("<th style=\"padding:8px 12px; font-weight:bold; text-align:left; color:#334155; border:1px solid #e2e8f0; font-size:12px; %1\">%2</th>\n")
                         .arg(colWidth, renderInlineMarkdown(headerCells[c].trimmed()));
                 }
                 htmlTable += "</tr>\n</thead>\n<tbody>\n";
@@ -212,9 +262,8 @@ static QString markdownToRichHtml(QString const& raw) {
                     htmlTable += QString("<tr style=\"background-color:%1;\">\n").arg(bgColor);
                     
                     for (int c = 0; c < dataCells.size(); ++c) {
-                        QString fontStyle = (c == 0) ? "color:#334155; font-weight:500;" : "color:#0f172a; font-weight:600;";
-                        htmlTable += QString("<td style=\"padding:7px 12px; text-align:left; border-bottom:1px solid #f1f5f9; font-size:13px; %1\">%2</td>\n")
-                            .arg(fontStyle, renderInlineMarkdown(dataCells[c].trimmed()));
+                        htmlTable += QString("<td style=\"padding:7px 12px; text-align:left; border:1px solid #e2e8f0; font-size:12.5px; color:#1e293b;\">%1</td>\n")
+                            .arg(renderInlineMarkdown(dataCells[c].trimmed()));
                     }
                     htmlTable += "</tr>\n";
                     rowIndex++;
@@ -225,44 +274,68 @@ static QString markdownToRichHtml(QString const& raw) {
             }
         }
 
-        // 4. 标题 (以 # 开头，或者像 📍、📅、📝 开头的独立标题行)
-        if (trimmed.startsWith("#") || 
-            trimmed.startsWith("📍") ||
-            trimmed.startsWith("📅") ||
-            trimmed.startsWith("📝")) {
-            QString headingText = trimmed;
-            if (headingText.startsWith("#")) {
-                headingText = headingText.remove(QRegularExpression("^#+\\s*")).trimmed();
+        // 5. 标题 (以 # 开头，精准支持 #, ##, ### 等多级标题)
+        if (trimmed.startsWith("#")) {
+            int level = 0;
+            while (level < trimmed.length() && trimmed[level] == '#') {
+                level++;
             }
+            QString headingText = trimmed.mid(level).trimmed();
+            QString fontSize = (level == 1) ? "15.5px" : ((level == 2) ? "14.5px" : "13.5px");
             bodyHtml += QString(
-                "<div style=\"color:#0f172a; font-size:14px; font-weight:700; margin-top:8px; margin-bottom:6px; line-height:1.4;\">%1</div>"
-            ).arg(renderInlineMarkdown(headingText));
+                "<div style=\"color:#0f172a; font-size:%1; font-weight:bold; margin-top:10px; margin-bottom:5px; line-height:1.4;\">%2</div>"
+            ).arg(fontSize, renderInlineMarkdown(headingText));
             continue;
         }
 
-        // 5. 列表项 (以 -、*、•、◦ 或 1. 开头)
+        // 独立粗体小节标题 (如 **今日预报** 或 **场景一：功能改名**)
+        if (trimmed.startsWith("**") && trimmed.endsWith("**") && trimmed.count("**") == 2 && trimmed.length() >= 6) {
+            bodyHtml += QString(
+                "<div style=\"color:#0f172a; font-size:14px; font-weight:bold; margin-top:10px; margin-bottom:5px; line-height:1.4;\">%1</div>"
+            ).arg(renderInlineMarkdown(trimmed));
+            continue;
+        }
+
+        // 独立 Emoji 提示标题 (📍, 📅, 📝, 💡, 📌, 🚀, 🤖, 🌤, ✨)
+        if (trimmed.startsWith("📍") || trimmed.startsWith("📅") || trimmed.startsWith("📝") ||
+            trimmed.startsWith("💡") || trimmed.startsWith("📌") || trimmed.startsWith("🚀") || 
+            trimmed.startsWith("🤖") || trimmed.startsWith("🌤") || trimmed.startsWith("✨")) {
+            bodyHtml += QString(
+                "<div style=\"color:#0f172a; font-size:14px; font-weight:bold; margin-top:9px; margin-bottom:4px; line-height:1.4;\">%1</div>"
+            ).arg(renderInlineMarkdown(trimmed));
+            continue;
+        }
+
+        // 6. 列表项 (以 -、*、•、◦ 或 1. 开头)
         if (trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("• ") || trimmed.startsWith("◦ ") || QRegularExpression("^[0-9]+\\.\\s+").match(trimmed).hasMatch()) {
             QString itemText = trimmed;
-            itemText = itemText.remove(QRegularExpression("^([-\\*•◦]|[0-9]+\\.)\\s+")).trimmed();
+            QString prefixHtml = "<span style=\"color:#64748b; font-size:12px; margin-right:8px;\">◦</span>";
+            auto numMatch = QRegularExpression("^([0-9]+)\\.\\s+").match(trimmed);
+            if (numMatch.hasMatch()) {
+                prefixHtml = QString("<span style=\"color:#4f46e5; font-weight:bold; margin-right:6px;\">%1.</span>").arg(numMatch.captured(1));
+                itemText = itemText.remove(QRegularExpression("^[0-9]+\\.\\s+")).trimmed();
+            } else {
+                itemText = itemText.remove(QRegularExpression("^([-\\*•◦])\\s+")).trimmed();
+            }
             bodyHtml += QString(
-                "<div style=\"margin-left:6px; margin-bottom:4px; line-height:1.55; font-size:13px; color:#1e293b;\">"
-                "<span style=\"color:#94a3b8; margin-right:6px; font-weight:bold;\">◦</span>%1"
+                "<div style=\"margin-left:10px; margin-bottom:5px; line-height:1.55; font-size:13px; color:#1e293b;\">"
+                "%1%2"
                 "</div>"
-            ).arg(renderInlineMarkdown(itemText));
+            ).arg(prefixHtml, renderInlineMarkdown(itemText));
             continue;
         }
 
-        // 6. 普通段落
+        // 7. 普通段落
         bodyHtml += QString(
-            "<div style=\"margin-bottom:6px; line-height:1.55; font-size:13px; color:#1e293b;\">%1</div>"
+            "<div style=\"margin-bottom:6px; line-height:1.65; font-size:13px; color:#1e293b;\">%1</div>"
         ).arg(renderInlineMarkdown(trimmed));
     }
 
     return QString(
         "<html><head><style>"
-        "body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; font-size: 13px; color: #1e293b; margin: 0; padding: 0; }"
-        "b, strong { color: #0f172a; font-weight: 700; }"
-        "table { border-collapse: separate; border-spacing: 0; }"
+        "body { font-size: 13px; color: #1e293b; margin: 0; padding: 0; }"
+        "strong, b { color: #0f172a; font-weight: bold; }"
+        "table { border-collapse: collapse; }"
         "</style></head><body>%1</body></html>"
     ).arg(bodyHtml);
 }
@@ -360,7 +433,6 @@ MessageBubble::MessageBubble(QWidget *parent)
         "QTextBrowser {"
         "  background-color: transparent;"
         "  color: #1e293b;"
-        "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;"
         "  font-size: 13.5px;"
         "  line-height: 1.6;"
         "  border: none;"
@@ -412,10 +484,22 @@ MessageBubble::MessageBubble(QWidget *parent)
 
     connect(m_closeBtn, &QPushButton::clicked, this, &MessageBubble::hideMessage);
 
-    // 为气泡本身及所有子控件安装统一事件过滤器
+    // 为气泡本身及所有子控件（包括文本视口 viewport）安装统一事件过滤器
     this->installEventFilter(this);
-    if (m_topBarWidget) m_topBarWidget->installEventFilter(this);
-    if (m_textBrowser) m_textBrowser->installEventFilter(this);
+    setMouseTracking(true);
+
+    if (m_topBarWidget) {
+        m_topBarWidget->installEventFilter(this);
+        m_topBarWidget->setMouseTracking(true);
+    }
+    if (m_textBrowser) {
+        m_textBrowser->installEventFilter(this);
+        m_textBrowser->setMouseTracking(true);
+        if (m_textBrowser->viewport()) {
+            m_textBrowser->viewport()->installEventFilter(this);
+            m_textBrowser->viewport()->setMouseTracking(true);
+        }
+    }
     if (m_openAppBtn) m_openAppBtn->installEventFilter(this);
     if (m_historyBtn) m_historyBtn->installEventFilter(this);
     if (m_copyBtn) m_copyBtn->installEventFilter(this);
@@ -428,6 +512,18 @@ MessageBubble::MessageBubble(QWidget *parent)
 
     m_countdownTimer = new QTimer(this);
     connect(m_countdownTimer, &QTimer::timeout, this, [this]() {
+        // 核心防护：实时检查鼠标指针全局坐标是否位于气泡窗口范围内
+        QPoint globalMousePos = QCursor::pos();
+        QRect globalRect = QRect(mapToGlobal(QPoint(0, 0)), size());
+        if (globalRect.contains(globalMousePos)) {
+            // 鼠标正悬停在气泡内，绝对不倒计时，绝对不隐藏！
+            if (!m_isCountdownPaused) {
+                m_isCountdownPaused = true;
+                updateCountdownDisplay();
+            }
+            return;
+        }
+
         if (!m_isCountdownPaused && m_remainingSeconds > 0) {
             m_remainingSeconds--;
             updateCountdownDisplay();
@@ -463,10 +559,7 @@ void MessageBubble::openAppTarget()
 
 void MessageBubble::showMessage(QString const& text, int duration, QString const& appTarget)
 {
-    m_text = text.trimmed();
-    m_text.replace("\\n", "\n");
-    m_text.replace("\r\n", "\n");
-    m_text.replace("\r", "\n");
+    m_text = normalizeMarkdownText(text);
     m_lastDuration = duration;
     m_appTarget = appTarget.trimmed();
 
@@ -475,24 +568,33 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
         return;
     }
 
-    // 仅在存在明确跳转目标、或长篇/结构化 Markdown (代码块、表格、长列表、大段落) 时才展示大卡片
-    bool hasMarkdownStructure = m_text.contains("```") ||
-                               (m_text.contains("|") && m_text.count("|") >= 4) ||
-                               m_text.contains("###") ||
-                               m_text.startsWith("# ") ||
-                               ((m_text.contains("- ") || m_text.contains("1. ")) && m_text.count('\n') >= 2);
+    // 关键：更灵敏、全面的 Markdown 与结构化内容识别机制
+    bool hasMarkdown = m_text.contains("```") ||
+                       m_text.contains("|") ||
+                       m_text.contains("###") ||
+                       m_text.contains("##") ||
+                       m_text.startsWith("#") ||
+                       m_text.contains("\n#") ||
+                       m_text.startsWith("> ") ||
+                       m_text.contains("\n> ") ||
+                       m_text.startsWith("- ") ||
+                       m_text.contains("\n- ") ||
+                       m_text.startsWith("* ") ||
+                       m_text.contains("\n* ") ||
+                       m_text.startsWith("1. ") ||
+                       m_text.contains("\n1. ") ||
+                       m_text.contains("**") ||
+                       m_text.contains("`") ||
+                       !m_appTarget.isEmpty() ||
+                       m_text.length() > 50 ||
+                       m_text.count('\n') >= 2;
 
-    bool isComplexNotification = !m_appTarget.isEmpty() ||
-                                 hasMarkdownStructure ||
-                                 m_text.length() > 90 ||
-                                 m_text.count('\n') >= 3;
-
-    m_isCompactCuteMode = !isComplexNotification;
+    m_isCompactCuteMode = !hasMarkdown;
 
     if (m_isCompactCuteMode) {
         if (m_topBarWidget) m_topBarWidget->hide();
         if (layout()) {
-            layout()->setContentsMargins(12, 6, 12, 12);
+            layout()->setContentsMargins(16, 8, 16, 14);
             layout()->setSpacing(0);
         }
         m_textBrowser->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
@@ -500,36 +602,42 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
         m_textBrowser->document()->setDocumentMargin(0);
 
         QFont font = m_textBrowser->font();
+        font.setFamilies({"PingFang SC", "SF Pro", "Segoe UI"});
         font.setPointSize(13);
-        font.setWeight(QFont::DemiBold);
+        font.setWeight(QFont::Bold);
         m_textBrowser->setFont(font);
 
+        // 处理短句气泡内部的行内高亮与换行，带萌系小徽标
+        QString cuteText = m_text;
+        cuteText.replace("\n", "<br/>");
+        QString formattedInline = renderInlineMarkdown(cuteText);
+
         m_textBrowser->setHtml(QString(
-            "<div style=\"text-align: center; font-size: 13px; font-weight: 600; color: #1e293b; line-height: 1.35;\">"
-            "%1"
+            "<div style=\"text-align: center; font-size: 13.5px; font-weight: bold; color: #0f172a; line-height: 1.45;\">"
+            "<span style=\"color:#6366f1; margin-right:5px; font-size:13px;\">🐾</span>%1"
             "</div>"
-        ).arg(m_text.toHtmlEscaped()));
+        ).arg(formattedInline));
 
         QFontMetrics fm(font);
-        int textWidth = fm.horizontalAdvance(m_text);
+        int textWidth = fm.horizontalAdvance(m_text) + 26;
 
         int bubbleWidth = 0;
         int bubbleHeight = 0;
 
         if (textWidth <= 340 && !m_text.contains('\n')) {
-            bubbleWidth = std::clamp(textWidth + 36, 100, 390);
-            bubbleHeight = 44;
+            bubbleWidth = std::clamp(textWidth + 52, 130, 420);
+            bubbleHeight = 48;
             m_textBrowser->document()->setTextWidth(-1);
-            m_textBrowser->setFixedWidth(bubbleWidth - 24);
-            m_textBrowser->setFixedHeight(bubbleHeight - 12);
+            m_textBrowser->setFixedWidth(bubbleWidth - 28);
+            m_textBrowser->setFixedHeight(bubbleHeight - 16);
         } else {
-            bubbleWidth = std::clamp(std::min(textWidth + 36, 360), 220, 380);
-            int innerW = bubbleWidth - 24;
+            bubbleWidth = std::clamp(std::min(textWidth + 52, 380), 220, 400);
+            int innerW = bubbleWidth - 28;
             m_textBrowser->setFixedWidth(innerW);
             m_textBrowser->document()->setTextWidth(innerW);
             int docH = static_cast<int>(std::ceil(m_textBrowser->document()->size().height()));
-            bubbleHeight = std::clamp(docH + 22, 54, 110);
-            m_textBrowser->setFixedHeight(bubbleHeight - 14);
+            bubbleHeight = std::clamp(docH + 26, 56, 120);
+            m_textBrowser->setFixedHeight(bubbleHeight - 18);
         }
 
         setFixedSize(bubbleWidth, bubbleHeight);
@@ -537,8 +645,8 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
 
         if (m_topBarWidget) m_topBarWidget->show();
         if (layout()) {
-            layout()->setContentsMargins(18, 14, 18, 14);
-            layout()->setSpacing(8);
+            layout()->setContentsMargins(18, 14, 18, 16);
+            layout()->setSpacing(9);
         }
         m_textBrowser->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
         m_textBrowser->document()->setDocumentMargin(2);
@@ -557,9 +665,9 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
         }
 
         // 自适应排版宽度与精确高度计算，防止上下文字被截断
-        int bubbleWidth = 480;
+        int bubbleWidth = 490;
         if (m_text.contains("|") || m_text.contains("```") || m_text.length() > 150) {
-            bubbleWidth = 520;
+            bubbleWidth = 530;
         }
 
         int contentWidth = bubbleWidth - 36;
@@ -568,22 +676,24 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
         m_textBrowser->setHtml(richHtml);
 
         int docHeight = static_cast<int>(std::ceil(m_textBrowser->document()->size().height()));
-        int bubbleHeight = std::clamp(docHeight + 82, 110, 580);
+        int bubbleHeight = std::clamp(docHeight + 84, 120, 580);
 
         setFixedSize(bubbleWidth, bubbleHeight);
-        m_textBrowser->setFixedHeight(bubbleHeight - 48);
+        m_textBrowser->setFixedHeight(bubbleHeight - 50);
     }
 
-    // 自动记录重要消息到历史消息管理器 (长篇 Markdown 或任务结果)
-    if (!m_text.isEmpty() && (!m_isCompactCuteMode || m_text.length() > 20)) {
-        QString type = "notice";
+    // 自动记录重要任务到历史任务管理器 (仅记录真实任务与问答，不收录桌宠主动闲聊/互动)
+    if (!m_text.isEmpty() && !m_isCompactCuteMode) {
+        QString type;
         if (m_text.startsWith("🔍") || m_text.contains("翻译")) type = "translate";
         else if (m_text.startsWith("🤖") || !m_appTarget.isEmpty() || m_text.contains("aipy") || m_text.contains("Agent")) type = "agent_task";
         else if (m_text.startsWith("🤔") || m_text.contains("问题")) type = "ask";
 
-        QString title = m_text.left(30).trimmed();
-        if (title.contains('\n')) title = title.split('\n').first();
-        MessageHistoryManager::instance()->addRecord(type, title, m_text, m_appTarget);
+        if (!type.isEmpty()) {
+            QString title = m_text.left(30).trimmed();
+            if (title.contains('\n')) title = title.split('\n').first();
+            MessageHistoryManager::instance()->addRecord(type, title, m_text, m_appTarget);
+        }
     }
 
     show();
@@ -712,6 +822,15 @@ void MessageBubble::leaveEvent(QEvent *)
     }
 }
 
+void MessageBubble::setTailPosition(int x, bool flippedBelow)
+{
+    if (m_tailX != x || m_tailFlipped != flippedBelow) {
+        m_tailX = x;
+        m_tailFlipped = flippedBelow;
+        update();
+    }
+}
+
 void MessageBubble::paintEvent(QPaintEvent *)
 {
     if (m_text.isEmpty()) {
@@ -720,85 +839,106 @@ void MessageBubble::paintEvent(QPaintEvent *)
 
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform);
 
     if (m_isCompactCuteMode) {
-        // === 萌系漫画风高颜值圆润气泡 ===
+        // === 萌系灵动胶囊 (高饱和 Aurora 极光渐变边框 + 梦幻粉紫柔光光晕) ===
         int tailSize = 8;
         int bubbleWidth = width();
         int bubbleHeight = height() - tailSize;
-        int radius = std::min(18, bubbleHeight / 2);
+        int radius = std::min(22, bubbleHeight / 2);
+        int tailCenterX = (m_tailX >= 0) ? std::clamp(m_tailX, 22, bubbleWidth - 22) : (bubbleWidth / 2);
 
         QPainterPath path;
         path.addRoundedRect(0, 0, bubbleWidth, bubbleHeight, radius, radius);
 
-        // 底部小巧尖角指向桌宠头顶
+        // 底部水滴微角自然指向桌宠头顶
         QPolygon tail;
-        tail << QPoint(bubbleWidth / 2 - 6, bubbleHeight - 1)
-             << QPoint(bubbleWidth / 2, bubbleHeight + tailSize)
-             << QPoint(bubbleWidth / 2 + 6, bubbleHeight - 1);
+        tail << QPoint(tailCenterX - 8, bubbleHeight - 1)
+             << QPoint(tailCenterX, bubbleHeight + tailSize)
+             << QPoint(tailCenterX + 8, bubbleHeight - 1);
         path.addPolygon(tail);
 
-        // 柔和微光弥散阴影
-        for (int i = 3; i > 0; --i) {
+        // 1. 梦幻紫罗兰柔光光晕 (5 层扩散柔光)
+        for (int i = 5; i > 0; --i) {
             QPainterPath shadowPath;
             shadowPath.addRoundedRect(1, 1 + i, bubbleWidth - 2, bubbleHeight - 2, radius, radius);
             QPolygon shadowTail;
-            shadowTail << QPoint(bubbleWidth / 2 - 6, bubbleHeight - 1 + i)
-                       << QPoint(bubbleWidth / 2, bubbleHeight + tailSize + i)
-                       << QPoint(bubbleWidth / 2 + 6, bubbleHeight - 1 + i);
+            shadowTail << QPoint(tailCenterX - 8, bubbleHeight - 1 + i)
+                       << QPoint(tailCenterX, bubbleHeight + tailSize + i)
+                       << QPoint(tailCenterX + 8, bubbleHeight - 1 + i);
             shadowPath.addPolygon(shadowTail);
-            painter.fillPath(shadowPath, QColor(15, 23, 42, 6 * i));
+            painter.fillPath(shadowPath, QColor(139, 92, 246, 3 * i));
         }
 
-        // 高透纯白晶莹底色
+        // 2. 润泽晶莹珍珠白底色
         QLinearGradient bgGrad(0, 0, 0, bubbleHeight);
-        bgGrad.setColorAt(0.0, QColor(255, 255, 255, 252));
-        bgGrad.setColorAt(1.0, QColor(250, 250, 255, 250));
+        bgGrad.setColorAt(0.0, QColor(255, 255, 255, 255));
+        bgGrad.setColorAt(0.55, QColor(253, 252, 255, 252));
+        bgGrad.setColorAt(1.0, QColor(246, 248, 255, 250));
         painter.fillPath(path, bgGrad);
 
-        // 梦幻微蓝紫描边
+        // 3. 顶部微米级高光反光层
+        QPainterPath topHighlight;
+        topHighlight.addRoundedRect(1.5, 1.5, bubbleWidth - 3, std::min(14, bubbleHeight / 3), radius, radius);
+        QLinearGradient highlightGrad(0, 1.5, 0, 14);
+        highlightGrad.setColorAt(0.0, QColor(255, 255, 255, 240));
+        highlightGrad.setColorAt(1.0, QColor(255, 255, 255, 0));
+        painter.fillPath(topHighlight, highlightGrad);
+
+        // 4. 大胆惊艳的极光霓虹渐变边框 (靛蓝 -> 梦幻紫 -> 樱花粉)
         QLinearGradient borderGrad(0, 0, bubbleWidth, bubbleHeight);
-        borderGrad.setColorAt(0.0, QColor(199, 210, 254, 240));
-        borderGrad.setColorAt(1.0, QColor(165, 180, 252, 230));
-        painter.setPen(QPen(borderGrad, 1.2));
+        borderGrad.setColorAt(0.0, QColor(99, 102, 241, 240));  // Electric Indigo
+        borderGrad.setColorAt(0.5, QColor(168, 85, 247, 240));  // Lavender
+        borderGrad.setColorAt(1.0, QColor(244, 114, 182, 240)); // Sakura Pink
+        painter.setPen(QPen(borderGrad, 1.8)); // 鲜明 1.8px 极光边框
         painter.drawPath(path);
     } else {
-        // === 专业通知卡片 (用于 Markdown / 表格 / 长文本) ===
-        int tailSize = 10;
-        int radius = 14;
+        // === 专业通知卡片 (用于 Markdown / 表格 / 长文本 / 任务通知) ===
+        int tailSize = 9;
+        int radius = 18;
 
         int bubbleWidth = width();
         int bubbleHeight = height() - tailSize;
+        int tailCenterX = (m_tailX >= 0) ? std::clamp(m_tailX, 24, bubbleWidth - 24) : (bubbleWidth / 2);
 
         QPainterPath path;
         path.addRoundedRect(0, 0, bubbleWidth, bubbleHeight, radius, radius);
 
         QPolygon tail;
-        tail << QPoint(bubbleWidth / 2 - tailSize / 2, bubbleHeight)
-             << QPoint(bubbleWidth / 2, bubbleHeight + tailSize)
-             << QPoint(bubbleWidth / 2 + tailSize / 2, bubbleHeight);
+        tail << QPoint(tailCenterX - 7, bubbleHeight - 1)
+             << QPoint(tailCenterX, bubbleHeight + tailSize)
+             << QPoint(tailCenterX + 7, bubbleHeight - 1);
         path.addPolygon(tail);
 
-        // 绘制多重弥散阴影
-        for (int i = 4; i > 0; --i) {
+        // 1. 绘制多重天鹅绒扩散阴影 (6 级真实景深感)
+        for (int i = 6; i > 0; --i) {
             QPainterPath shadowPath;
-            shadowPath.addRoundedRect(1, 1 + i, bubbleWidth - 2, bubbleHeight - 2, radius, radius);
+            shadowPath.addRoundedRect(1, 2 + i * 1.2, bubbleWidth - 2, bubbleHeight - 2, radius, radius);
             QPolygon shadowTail;
-            shadowTail << QPoint(bubbleWidth / 2 - tailSize / 2, bubbleHeight + i / 2)
-                       << QPoint(bubbleWidth / 2, bubbleHeight + tailSize + i)
-                       << QPoint(bubbleWidth / 2 + tailSize / 2, bubbleHeight + i / 2);
+            shadowTail << QPoint(tailCenterX - 7, bubbleHeight - 1 + i)
+                       << QPoint(tailCenterX, bubbleHeight + tailSize + i)
+                       << QPoint(tailCenterX + 7, bubbleHeight - 1 + i);
             shadowPath.addPolygon(shadowTail);
-            painter.fillPath(shadowPath, QColor(15, 23, 42, 4 * i));
+            painter.fillPath(shadowPath, QColor(15, 23, 42, 2.5 * i));
         }
 
+        // 2. 润泽晶莹白底色
         QLinearGradient bgGrad(0, 0, 0, bubbleHeight);
-        bgGrad.setColorAt(0.0, QColor(255, 255, 255, 252));
-        bgGrad.setColorAt(1.0, QColor(248, 250, 252, 252));
+        bgGrad.setColorAt(0.0, QColor(255, 255, 255, 255));
+        bgGrad.setColorAt(0.65, QColor(252, 253, 255, 252));
+        bgGrad.setColorAt(1.0, QColor(248, 250, 254, 250));
         painter.fillPath(path, bgGrad);
 
-        QLinearGradient borderGrad(0, 0, bubbleWidth, bubbleHeight);
-        borderGrad.setColorAt(0.0, QColor(226, 232, 240, 240));
-        borderGrad.setColorAt(1.0, QColor(203, 213, 225, 220));
+        // 3. 顶部操作栏分隔微光细线
+        painter.setPen(QPen(QColor(241, 245, 249, 200), 1));
+        painter.drawLine(18, 46, bubbleWidth - 18, 46);
+
+        // 4. 极细柔和边框
+        QLinearGradient borderGrad(0, 0, 0, bubbleHeight);
+        borderGrad.setColorAt(0.0, QColor(255, 255, 255, 245));
+        borderGrad.setColorAt(0.15, QColor(226, 232, 240, 210));
+        borderGrad.setColorAt(1.0, QColor(203, 213, 225, 180));
         painter.setPen(QPen(borderGrad, 1.2));
         painter.drawPath(path);
     }

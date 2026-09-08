@@ -61,5 +61,28 @@ void SystemObserver::stop() {
 }
 
 QString SystemObserver::currentActiveAppName() const {
-    return "";
+    return m_activeAppName;
 }
+
+QString SystemObserver::currentActiveWindowTitle() const {
+    return m_activeWindowTitle;
+}
+
+QString SystemObserver::currentActiveBundleId() const {
+    return m_activeBundleId;
+}
+
+QJsonObject SystemObserver::currentSemanticActivity() const {
+    return QJsonObject();
+}
+
+int SystemObserver::continuousWorkMinutes() const {
+    return 0;
+}
+
+void SystemObserver::recordAppActivation(const QString &appName, const QString &bundleId, const QString &windowTitle) {
+    m_activeAppName = appName;
+    m_activeBundleId = bundleId;
+    m_activeWindowTitle = windowTitle;
+}
+

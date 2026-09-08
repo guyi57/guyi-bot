@@ -24,6 +24,8 @@
 #include "FileDisposalSequence.hpp"
 #include "UpdateManager.hpp"
 #include "UpdateDialog.hpp"
+#include "AgentService.hpp"
+#include "SettingsDb.hpp"
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -128,9 +130,13 @@ ShijimaContextMenu::ShijimaContextMenu(ShijimaWidget *parent)
     : QMenu("右键菜单", parent)
 {
     QAction *action;
+    QPointer<ShijimaWidget> petPtr = parent;
 
-    // 顶部桌宠状态展示卡片
+    // 1. 行为 (Behaviors menu: 状态卡片、智能交互、动作姿态、同伴互动)
     {
+        auto behaviorsMenu = addMenu("行为");
+
+        // 顶部桌宠状态展示卡片
         const auto &st = BehaviorEngine::instance()->state();
         QString staminaBar = "";
         int filled = std::clamp(st.stamina / 10, 0, 10);
@@ -140,79 +146,45 @@ ShijimaContextMenu::ShijimaContextMenu(ShijimaWidget *parent)
         QString statusText = QString("⚡ 体力: %1% [%2] %3")
             .arg(st.stamina)
             .arg(staminaBar)
-            .arg(st.isRestingInCorner ? "💤 (角落休整)" : "🌟 (元气满满)");
-        action = addAction(statusText);
+            .arg(st.isRestingInCorner ? "💤 (休整中)" : "🌟 (元气满满)");
+        action = behaviorsMenu->addAction(statusText);
         action->setEnabled(false);
 
         QString moodText = QString("😊 心情: %1  |  💕 亲密: %2")
             .arg(st.mood)
             .arg(st.affection);
-        action = addAction(moodText);
+        action = behaviorsMenu->addAction(moodText);
         action->setEnabled(false);
 
-        addSeparator();
-    }
+        behaviorsMenu->addSeparator();
 
-    // Behaviors menu   
-    {
-        std::vector<std::string> behaviors;
-        auto &list = parent->m_mascot->initial_behavior_list();
-        auto flat = list.flatten_unconditional();
-        for (auto &behavior : flat) {
-            if (!behavior->hidden) {
-                behaviors.push_back(behavior->name);
-            }
-        }
-        auto behaviorsMenu = addMenu("行为");
-        for (std::string &behavior : behaviors) {
-            QString displayName = translateBehaviorName(behavior);
-            action = behaviorsMenu->addAction(displayName);
-            connect(action, &QAction::triggered, [this, behavior](){
-                shijimaParent()->m_mascot->next_behavior(behavior);
-            });
-        }
-    }
+        // 智能与趣味互动
+        action = behaviorsMenu->addAction("💬 向 AI 提问");
+        connect(action, &QAction::triggered, [petPtr](){
+            if (petPtr) petPtr->onAskRequested("");
+        });
 
-    // Show manager
-    action = addAction("显示管理器");
-    connect(action, &QAction::triggered, [](){
-        ShijimaManager::defaultManager()->setManagerVisible(true);
-    });
+        action = behaviorsMenu->addAction("📖 桌宠私密日记...");
+        connect(action, &QAction::triggered, [petPtr](){
+            if (petPtr) petPtr->showDiary();
+        });
 
-    // Inspect
-    action = addAction("检查器");
-    connect(action, &QAction::triggered, [this](){
-        shijimaParent()->showInspector();
-    });
+        action = behaviorsMenu->addAction("📜 消息与任务历史");
+        connect(action, &QAction::triggered, [petPtr](){
+            if (petPtr) petPtr->showMessageHistory();
+        });
 
-    // Ask AI Dialog
-    action = addAction("💬 向 AI 提问");
-    connect(action, &QAction::triggered, [this](){
-        shijimaParent()->onAskRequested("");
-    });
+        action = behaviorsMenu->addAction("⏰ 定时任务管理");
+        connect(action, &QAction::triggered, [petPtr](){
+            if (petPtr) petPtr->showTimerManager();
+        });
 
-    // Message History Dialog
-    action = addAction("📜 消息与任务历史");
-    connect(action, &QAction::triggered, [this](){
-        shijimaParent()->showMessageHistory();
-    });
+        action = behaviorsMenu->addAction("🎵 音乐工坊 (⌥M)");
+        connect(action, &QAction::triggered, [](){
+            MusicPlayerDialog::instance()->toggleVisibility();
+        });
 
-    // Scheduled Timer Manager Dialog
-    action = addAction("⏰ 定时任务管理");
-    connect(action, &QAction::triggered, [this](){
-        shijimaParent()->showTimerManager();
-    });
-
-    // Music Player Dialog
-    action = addAction("🎵 音乐工坊 (⌥M)");
-    connect(action, &QAction::triggered, [](){
-        MusicPlayerDialog::instance()->toggleVisibility();
-    });
-
-    // File Disposal by Black Hole
-    {
-        QPointer<ShijimaWidget> petPtr = shijimaParent();
-        action = addAction("🕳️ 黑洞吞噬本地文件...");
+        action = behaviorsMenu->addAction("🕳️ 黑洞吞噬本地文件...");
         connect(action, &QAction::triggered, [petPtr](){
             if (!petPtr) return;
             QPoint mousePos = QCursor::pos();
@@ -227,53 +199,64 @@ ShijimaContextMenu::ShijimaContextMenu(ShijimaWidget *parent)
                 FileDisposalSequence::instance()->start(petPtr.data(), fi.fileName(), filePath, mousePos);
             }
         });
-    }
 
-    // AI Settings Dialog
-    {
-        QPointer<ShijimaWidget> petPtr = shijimaParent();
-        action = addAction("⚙️ AI 模型与记忆配置");
+        action = behaviorsMenu->addAction("🔍 桌宠检查器");
+        connect(action, &QAction::triggered, [petPtr](){
+            if (petPtr) petPtr->showInspector();
+        });
+
+        behaviorsMenu->addSeparator();
+
+        // 🎭 动作姿态子菜单 (包含原有 40+ 种动作动画)
+        auto posesMenu = behaviorsMenu->addMenu("🎭 动作姿态");
+        std::vector<std::string> behaviors;
+        auto &list = parent->m_mascot->initial_behavior_list();
+        auto flat = list.flatten_unconditional();
+        for (auto &behavior : flat) {
+            if (!behavior->hidden) {
+                behaviors.push_back(behavior->name);
+            }
+        }
+        for (std::string &behavior : behaviors) {
+            QString displayName = translateBehaviorName(behavior);
+            action = posesMenu->addAction(displayName);
+            connect(action, &QAction::triggered, [petPtr, behavior](){
+                if (petPtr && petPtr->m_mascot) {
+                    petPtr->m_mascot->next_behavior(behavior);
+                }
+            });
+        }
+
+        behaviorsMenu->addSeparator();
+
+        // 同伴与多桌宠操作
+        action = behaviorsMenu->addAction("➕ 召唤同伴");
         connect(action, &QAction::triggered, [petPtr](){
             if (petPtr) {
-                petPtr->showAgentSettings();
+                ShijimaManager::defaultManager()->spawn(petPtr->mascotName().toStdString());
             }
+        });
+
+        action = behaviorsMenu->addAction("👤 只保留一个");
+        connect(action, &QAction::triggered, [petPtr](){
+            if (petPtr) {
+                ShijimaManager::defaultManager()->killAllButOne(petPtr.data());
+            }
+        });
+
+        action = behaviorsMenu->addAction("❌ 全部关闭");
+        connect(action, &QAction::triggered, [](){
+            ShijimaManager::defaultManager()->killAll();
         });
     }
 
-    // Check for Updates
-    action = addAction("🔄 检查更新...");
-    connect(action, &QAction::triggered, [this](){
-        auto pet = shijimaParent();
-        if (pet) {
-            pet->showMessage("🔍 正在检查 GitHub 最新版本...", 2000);
-        }
-        UpdateManager::instance()->checkForUpdates(false /* not silent */, [pet](const UpdateInfo &info, const QString &err) {
-            if (!err.isEmpty()) {
-                if (pet) {
-                    pet->showMessage("❌ 检查更新失败: " + err, 4000);
-                } else {
-                    QMessageBox::warning(nullptr, "检查更新失败", err);
-                }
-            } else if (info.hasUpdate) {
-                if (pet) {
-                    pet->showMessage(QString("🎉 发现新版本 %1！正在打开更新窗口...").arg(info.remoteVersion), 3000);
-                }
-                auto dialog = new UpdateDialog(info, nullptr);
-                dialog->setAttribute(Qt::WA_DeleteOnClose);
-                dialog->show();
-                dialog->raise();
-                dialog->activateWindow();
-            } else {
-                if (pet) {
-                    pet->showMessage(QString("🎉 当前已是最新版本 (v%1)，无需更新！").arg(info.currentVersion), 4000);
-                } else {
-                    QMessageBox::information(nullptr, "检查更新", QString("🎉 当前已是最新版本 (v%1)！").arg(info.currentVersion));
-                }
-            }
-        });
+    // 2. 显示管理器
+    action = addAction("显示管理器");
+    connect(action, &QAction::triggered, [](){
+        ShijimaManager::defaultManager()->setManagerVisible(true);
     });
 
-    // Pause checkbox
+    // 3. 暂停
     action = addAction("暂停");
     action->setCheckable(true);
     action->setChecked(parent->m_paused);
@@ -281,26 +264,15 @@ ShijimaContextMenu::ShijimaContextMenu(ShijimaWidget *parent)
         shijimaParent()->m_paused = checked;
     });
 
-    // Call another
-    action = addAction("召唤同伴");
+    // 4. 设置
+    action = addAction("设置");
     connect(action, &QAction::triggered, [this](){
-        ShijimaManager::defaultManager()->spawn(this->shijimaParent()->mascotName()
-            .toStdString());
+        shijimaParent()->showAgentSettings();
     });
 
-    // Dismiss all but one
-    action = addAction("只保留一个");
-    connect(action, &QAction::triggered, [this](){
-        ShijimaManager::defaultManager()->killAllButOne(this->shijimaParent());
-    });
+    addSeparator();
 
-    // Dismiss all
-    action = addAction("全部关闭");
-    connect(action, &QAction::triggered, [](){
-        ShijimaManager::defaultManager()->killAll();
-    });
-
-    // Dismiss
+    // 5. 关闭
     action = addAction("关闭");
     connect(action, &QAction::triggered, parent, &ShijimaWidget::closeAction);
 }

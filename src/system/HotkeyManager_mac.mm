@@ -15,6 +15,7 @@
 
 static std::function<void()> s_translateCallback;
 static std::function<void()> s_askCallback;
+static std::function<void()> s_historyCallback;
 static std::function<void()> s_musicToggleCallback;
 static std::function<void()> s_musicPlayPauseCallback;
 static std::function<void()> s_musicNextCallback;
@@ -114,6 +115,14 @@ static OSStatus hotKeyHandler(EventHandlerCallRef, EventRef theEvent, void*) {
         if (s_askCallback) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 s_askCallback();
+            });
+        }
+    } else if (hkId.id == 103) {
+        std::cout << "[全局快捷键] 触发 ⌥+H (历史任务快捷键)" << std::endl;
+        Platform::activateApp();
+        if (s_historyCallback) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                s_historyCallback();
             });
         }
     } else if (hkId.id == 201) {
@@ -217,6 +226,27 @@ void HotkeyManager::registerAskHotkey(QString const& shortcutStr, std::function<
         if (status == noErr) {
             m_askHotKeyRef = (void *)ref;
             std::cout << "[全局快捷键] 成功注册提问快捷键: " << shortcutStr.toStdString() << std::endl;
+        }
+    }
+}
+
+void HotkeyManager::registerHistoryHotkey(QString const& shortcutStr, std::function<void()> callback) {
+    s_historyCallback = callback;
+    if (m_historyHotKeyRef) {
+        UnregisterEventHotKey((EventHotKeyRef)m_historyHotKeyRef);
+        m_historyHotKeyRef = nullptr;
+    }
+
+    UInt32 mods = 0, key = 0;
+    if (parseShortcut(shortcutStr, mods, key)) {
+        EventHotKeyID hkId;
+        hkId.signature = 'SHI3';
+        hkId.id = 103;
+        EventHotKeyRef ref = NULL;
+        OSStatus status = RegisterEventHotKey(key, mods, hkId, GetApplicationEventTarget(), 0, &ref);
+        if (status == noErr) {
+            m_historyHotKeyRef = (void *)ref;
+            std::cout << "[全局快捷键] 成功注册历史任务快捷键: " << shortcutStr.toStdString() << std::endl;
         }
     }
 }
@@ -334,6 +364,10 @@ void HotkeyManager::unregisterAll() {
     if (m_askHotKeyRef) {
         UnregisterEventHotKey((EventHotKeyRef)m_askHotKeyRef);
         m_askHotKeyRef = nullptr;
+    }
+    if (m_historyHotKeyRef) {
+        UnregisterEventHotKey((EventHotKeyRef)m_historyHotKeyRef);
+        m_historyHotKeyRef = nullptr;
     }
     if (m_musicToggleHotKeyRef) {
         UnregisterEventHotKey((EventHotKeyRef)m_musicToggleHotKeyRef);

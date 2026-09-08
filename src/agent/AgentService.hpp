@@ -16,10 +16,13 @@ class QNetworkAccessManager;
 class AipyAdapter;
 
 struct AIBehaviorIntent {
-    QString intent = "chat";     // "chat", "seek_attention", "celebrate", "comfort", "explore", "rest", "play"
-    QString emotion = "happy";   // "happy", "bored", "angry", "sleepy", "curious"
+    QString intent = "chat";     // "chat", "seek_attention", "celebrate", "comfort", "explore", "rest", "play", "care"
+    QString emotion = "happy";   // "happy", "bored", "angry", "sleepy", "curious", "caring", "proud"
     QString target = "cursor";   // "cursor", "window", "screen_edge"
-    QString speech;              // 简练短句（3~15字）
+    QString speech;              // 简练短句（3~20字）
+    QString action;              // e.g. "jump", "bounce", "dangle", "sit", "walk", "sleep"
+    QString emote;               // e.g. "💖", "✨", "💤", "💢", "💫", "💡", "🎵"
+    bool blush = false;          // 是否害羞脸红
     int urgency = 1;             // 1~5
 };
 
@@ -32,32 +35,49 @@ struct AgentStatusEvent {
     qint64 timestamp = 0;
 };
 
+struct ModelProfile {
+    QString id;          // "deepseek", "siliconflow", "qwen", "openai", "zhipu", "moonshot", "ollama", "custom_1" ...
+    QString name;        // "DeepSeek (官方 API)", "硅基流动 (DeepSeek-V3)", "通义千问 (阿里云百炼)", etc.
+    QString apiBase;     // "https://api.deepseek.com/v1", "https://api.siliconflow.cn/v1", etc.
+    QString apiKey;      // Provider API Key
+    QString model;       // "deepseek-chat", "deepseek-ai/DeepSeek-V3", "qwen-plus", "gpt-4o-mini", etc.
+    bool enabled = true; // 是否启用此配置参与自动故障转移/轮询
+};
+
 struct AgentConfig {
-    // 基础直连 LLM 配置
-    QString apiBase = "https://api.openai.com/v1";
-    QString apiKey = "";
-    QString model = "gpt-4o-mini";
-    int maxMemoryTurns = 6;
+    // 多大模型配置池
+    QVector<ModelProfile> modelProfiles;
+    QString activeProfileId;
+    bool enableAutoFailover = true;
+
+    // 当前生效的模型连接参数（用于向下兼容旧字段）
+    QString apiBase = "https://api.deepseek.com/v1";
+    QString apiKey;
+    QString model = "deepseek-chat";
+    int maxMemoryTurns = 10;
     QString hotkeyTranslate = "Option+T";
     QString hotkeyAsk = "Option+Q";
-
-    // 音乐播放器全局快捷键配置
+    QString hotkeyHistory = "Option+H";
     QString hotkeyMusicToggle = "Option+M";
     QString hotkeyMusicPlayPause = "Option+Space";
     QString hotkeyMusicNext = "Option+Right";
     QString hotkeyMusicPrev = "Option+Left";
     QString hotkeyMusicFav = "Option+L";
 
-    // 智能体 Agent 适配器配置
-    QString activeAgentType = "aipy";       // "aipy", "direct_llm", "workbuddy", "codex"
+    // 智能体 Agent 适配器
+    QString activeAgentType = "builtin";
+    QString routingMode = "direct";
     QString aipyBase = "http://127.0.0.1:41970";
-    QString aipyKey = "";
-    QString routingMode = "AUTO";            // "AUTO" (智能分流), "ALWAYS_AGENT", "ALWAYS_LLM"
+    QString aipyKey;
 
-    // 状态感知与 Token 省流保护配置
-    bool enableAgentStateHook = true;       // 是否启用 Coding Agent 状态感知 Webhook
-    bool enableLlmTaskNarration = false;    // 是否启用 AI 口语化任务润色 (开启消耗 Token，关闭则 0 Token 极速本地播报)
-    int stateDebounceSec = 2;               // 状态推送最小防抖间隔 (秒)
+    // 状态感知与 Token 节流控制
+    bool enableAgentStateHook = true;
+    bool enableLlmTaskNarration = true;
+    int stateDebounceSec = 3;
+
+    // 灵动拟人化与自主搭讪控制
+    int banterFrequencyLevel = 2; // 0: 关闭, 1: 偶尔 (30m), 2: 适度 (18m), 3: 活跃 (10m)
+    bool enableContextualCare = true; // 启用前台应用感知与工作健康关怀
 };
 
 class AgentService
@@ -69,6 +89,15 @@ public:
     void saveConfig(QString const& path = "config.json");
     AgentConfig const& config() const { return m_config; }
     void setConfig(AgentConfig const& cfg);
+
+    // 多模型配置池管理
+    QVector<ModelProfile> const& modelProfiles() const { return m_config.modelProfiles; }
+    ModelProfile getActiveProfile() const;
+    void setActiveProfile(const QString &profileId);
+    void addOrUpdateProfile(const ModelProfile &profile);
+    void deleteProfile(const QString &profileId);
+    void setAutoFailover(bool enable);
+    static QVector<ModelProfile> defaultBuiltinProfiles();
 
     // 智能翻译：中文 -> 英文，非中文 -> 中文
     void translate(QString const& text, std::function<void(bool success, QString const& result)> callback);
@@ -94,18 +123,21 @@ public:
     // AI 桌面宠物行为意图生成（人格化思考与主动交互）
     void requestPetIntent(const QJsonObject &contextInfo, std::function<void(bool success, const AIBehaviorIntent &intent)> callback);
 
+    // AI 自主合成针对未知应用的轻量只读探针脚本 (Self-Synthesizing Sensor)
+    void synthesizeAppSensorScript(const QString &appName, const QString &bundleId, const QString &windowTitle, std::function<void(bool success, const QString &scriptCode)> callback);
+
     // 接收外部 Coding Agent 状态感知事件并驱动桌宠互动
     void handleAgentStatus(AgentStatusEvent const& event, std::function<void(bool success, QString const& message)> callback = nullptr);
     AgentStatusEvent lastAgentStatus() const { return m_lastStatus; }
 
     void clearMemory();
     QJsonArray const& memoryHistory() const { return m_history; }
+    void sendChatCompletion(QJsonArray const& messages, std::function<void(bool success, QString const& result)> callback);
 
 private:
     AgentService();
     void initAdapters();
     void syncAdapterConfigs();
-    void sendChatCompletion(QJsonArray const& messages, std::function<void(bool success, QString const& result)> callback);
     bool containsChinese(QString const& text);
     void appendMemory(QString const& role, QString const& content);
     void saveMemoryToFile();

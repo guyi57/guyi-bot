@@ -154,7 +154,7 @@ void MusicPlayerDialog::setupUi()
     topBarLayout->setSpacing(8);
 
     auto titleBadge = new QLabel("🎵 <b>音乐工坊</b> <span style=\"font-size: 11px; font-weight: normal; color: #94a3b8;\">· GD音乐台</span>", mainCard);
-    titleBadge->setStyleSheet("QLabel { font-size: 15px; color: #0f172a; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }");
+    titleBadge->setStyleSheet("QLabel { font-size: 15px; color: #0f172a; }");
 
 
     m_sourceCombo = new QComboBox(mainCard);

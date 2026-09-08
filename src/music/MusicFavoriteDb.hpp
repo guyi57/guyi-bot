@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QDateTime>
+#include <QRecursiveMutex>
 
 struct SongInfo {
     QString id;         // track_id
@@ -98,4 +99,5 @@ private:
 
     void *m_sqliteHandle = nullptr;
     QString m_dbPath;
+    mutable QRecursiveMutex m_mutex;
 };

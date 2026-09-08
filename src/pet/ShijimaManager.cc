@@ -21,6 +21,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <QThread>
 #include <QVariant>
 #include <QVBoxLayout>
 #include <QWidget>
@@ -705,6 +706,17 @@ void ShijimaManager::updateGlobalHotkeys() {
         }
     });
 
+    QString hkHistory = cfg.hotkeyHistory.isEmpty() ? "Option+H" : cfg.hotkeyHistory;
+    HotkeyManager::instance()->registerHistoryHotkey(hkHistory, [this]() {
+        ShijimaWidget *target = BehaviorEngine::instance()->activeWidget();
+        if (target == nullptr) {
+            if (!m_mascots.empty()) target = m_mascots.front();
+        }
+        if (target != nullptr) {
+            target->showMessageHistory();
+        }
+    });
+
     QString hkMusicToggle = cfg.hotkeyMusicToggle.isEmpty() ? "Option+M" : cfg.hotkeyMusicToggle;
     QString hkMusicPlayPause = cfg.hotkeyMusicPlayPause.isEmpty() ? "Option+Space" : cfg.hotkeyMusicPlayPause;
     QString hkMusicNext = cfg.hotkeyMusicNext.isEmpty() ? "Option+Right" : cfg.hotkeyMusicNext;
@@ -750,10 +762,24 @@ ShijimaManager::~ShijimaManager() {
 }
 
 void ShijimaManager::onTickSync(std::function<void(ShijimaManager *)> callback) {
+    if (QThread::currentThread() == this->thread() || (qApp && QThread::currentThread() == qApp->thread())) {
+        callback(this);
+        return;
+    }
     auto lock = acquireLock();
     m_hasTickCallbacks = true;
     m_tickCallbacks.push_back(callback);
     m_tickCallbackCompletion.wait(lock);
+}
+
+void ShijimaManager::onTickAsync(std::function<void(ShijimaManager *)> callback) {
+    if (QThread::currentThread() == this->thread() || (qApp && QThread::currentThread() == qApp->thread())) {
+        callback(this);
+        return;
+    }
+    QMetaObject::invokeMethod(this, [this, callback]() {
+        callback(this);
+    }, Qt::QueuedConnection);
 }
 
 void ShijimaManager::setWindowedMode(bool windowedMode) {
@@ -916,6 +942,14 @@ void ShijimaManager::itemDoubleClicked(QListWidgetItem *qItem) {
     if (!qItem) return;
     QString rawName = qItem->data(Qt::UserRole).toString();
     if (rawName.isEmpty()) rawName = qItem->text();
+    if (rawName.endsWith(" ⭐(默认)")) {
+        rawName = rawName.left(rawName.length() - 8);
+    }
+    rawName = rawName.trimmed();
+    if (!m_loadedMascots.contains(rawName)) {
+        std::cerr << "[ShijimaManager] 未找到指定桌宠: " << rawName.toStdString() << std::endl;
+        return;
+    }
     spawn(rawName.toStdString());
 }
 
@@ -1162,7 +1196,7 @@ void ShijimaManager::tick() {
         ShijimaWidget *shimeji = *iter;
         if (shimeji->isMarkedForDeletion()) {
             int mascotId = shimeji->mascotId();
-            delete shimeji;
+            shimeji->deleteLater();
             auto erasePos = iter;
             ++iter;
             m_mascots.erase(erasePos);
@@ -1246,21 +1280,35 @@ QScreen *ShijimaManager::mascotScreen() {
 }
 
 ShijimaWidget *ShijimaManager::spawn(std::string const& name) {
+    QString qName = QString::fromStdString(name);
+    if (!m_loadedMascots.contains(qName)) {
+        std::cerr << "[ShijimaManager] 无法生成未加载的桌宠: " << name << std::endl;
+        return nullptr;
+    }
     QScreen *screen = mascotScreen();
     updateEnvironment(screen);
     auto &env = m_env[screen];
-    auto product = m_factory.spawn(name, {});
-    product.manager->state->env = env;
-    product.manager->reset_position();
-    ShijimaWidget *shimeji = new ShijimaWidget(
-        m_loadedMascots[QString::fromStdString(name)],
-        std::move(product.manager), m_idCounter++,
-        windowedMode(), mascotParent());
-    shimeji->show();
-    m_mascots.push_back(shimeji);
-    m_mascotsById[shimeji->mascotId()] = shimeji;
-    env->reset_scale();
-    return shimeji;
+    try {
+        auto product = m_factory.spawn(name, {});
+        if (!product.manager || !product.manager->state) {
+            std::cerr << "[ShijimaManager] 生成桌宠管理器失败: " << name << std::endl;
+            return nullptr;
+        }
+        product.manager->state->env = env;
+        product.manager->reset_position();
+        ShijimaWidget *shimeji = new ShijimaWidget(
+            m_loadedMascots[qName],
+            std::move(product.manager), m_idCounter++,
+            windowedMode(), mascotParent());
+        shimeji->show();
+        m_mascots.push_back(shimeji);
+        m_mascotsById[shimeji->mascotId()] = shimeji;
+        env->reset_scale();
+        return shimeji;
+    } catch (const std::exception &e) {
+        std::cerr << "[ShijimaManager] 生成桌宠异常: " << e.what() << std::endl;
+        return nullptr;
+    }
 }
 
 bool ShijimaManager::eventFilter(QObject *obj, QEvent *event) {

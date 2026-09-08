@@ -12,18 +12,25 @@
 #include <QVBoxLayout>
 #include <functional>
 
+class QComboBox;
+
 class AskDialog : public QDialog
 {
 public:
     explicit AskDialog(QWidget *parent = nullptr);
     void promptForContext(QString const& contextText);
+    void refreshModelList();
 
     std::function<void(QString const& context, QString const& question)> onSubmit;
     std::function<void()> onCancel;
 
+protected:
+    void showEvent(QShowEvent *event) override;
+
 private:
     QString m_contextText;
     QLabel *m_titleLabel;
+    QComboBox *m_modelCombo = nullptr;
     QWidget *m_contextWidget = nullptr;
     QLabel *m_previewLabel = nullptr;
     QPushButton *m_clearContextBtn = nullptr;

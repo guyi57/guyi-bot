@@ -31,13 +31,16 @@ SOURCES = src/main.cc \
 	src/core/cli.cc \
 	src/pet/ShijimaManager.cc \
 	src/pet/ShijimaWidget.cc \
+	src/pet/PetMotionController.cc \
 	src/pet/PetEventBus.cc \
 	src/pet/PetMemory.cc \
 	src/pet/BehaviorEngine.cc \
 	src/pet/ReactionEngine.cc \
 	src/pet/InitiativeTrigger.cc \
 	src/pet/FileDisposalSequence.cc \
+	src/pet/PetDiaryManager.cc \
 	src/agent/AgentService.cc \
+	src/agent/LongTermMemoryEngine.cc \
 	src/agent/AipyAdapter.cc \
 	src/agent/PersonaManager.cc \
 	src/agent/SkillManager.cc \
@@ -52,6 +55,7 @@ SOURCES = src/main.cc \
 	src/timer/TimerListDialog.cc \
 	src/system/TrashWatcher.cc \
 	src/system/UpdateManager.cc \
+	src/system/SensorManager.cc \
 	$(PLATFORM_SYSTEM_SOURCES) \
 	src/ui/FloatingFileWidget.cc \
 	src/ui/TrashTargetWidget.cc \
@@ -67,6 +71,7 @@ SOURCES = src/main.cc \
 	src/ui/ShimejiInspectorDialog.cc \
 	src/ui/ShijimaApiDialog.cc \
 	src/ui/ShijimaLicensesDialog.cc \
+	src/ui/PetDiaryDialog.cc \
 	src/ui/ForcedProgressDialog.cc \
 	resources.rc
 

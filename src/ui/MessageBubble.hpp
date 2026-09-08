@@ -29,6 +29,12 @@ public:
     QString const& message() const { return m_text; }
     bool isCompactCuteMode() const { return m_isCompactCuteMode; }
 
+    static QString normalizeMarkdownText(QString const& raw);
+    static QString markdownToRichHtml(QString const& raw);
+    void setTailPosition(int x, bool flippedBelow = false);
+    int tailX() const { return m_tailX; }
+    bool isTailFlipped() const { return m_tailFlipped; }
+
 protected:
     void paintEvent(QPaintEvent *event) override;
     void enterEvent(QEnterEvent *event) override;
@@ -47,6 +53,8 @@ private:
     int m_remainingSeconds = 0;
     bool m_isCountdownPaused = false;
     bool m_isCompactCuteMode = false;
+    int m_tailX = -1;
+    bool m_tailFlipped = false;
 
     QWidget *m_topBarWidget = nullptr;
     QTextBrowser *m_textBrowser = nullptr;

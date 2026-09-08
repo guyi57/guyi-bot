@@ -1,4 +1,5 @@
 #include "InitiativeTrigger.hpp"
+#include "AgentService.hpp"
 #include <QDateTime>
 
 InitiativeTrigger *InitiativeTrigger::instance()
@@ -29,51 +30,108 @@ bool InitiativeTrigger::evaluateInitiative(PetState &state, const QJsonObject &c
         return false;
     }
 
-    // 冷却时间检查（以秒为单位）
-    qint64 timeSinceLastTalkSec = (now - state.lastTalkTime) / 1000;
-    if (timeSinceLastTalkSec < m_cooldownSeconds) {
-        calculatedScore = -100;
+    // 读取设置中的搭讪频率
+    auto cfg = AgentService::instance()->config();
+    if (cfg.banterFrequencyLevel == 0) {
+        calculatedScore = -999;
         return false;
+    }
+
+    int dynamicCooldown = m_cooldownSeconds;
+    if (cfg.banterFrequencyLevel == 1) dynamicCooldown = 480;      // 8 分钟 (低频)
+    else if (cfg.banterFrequencyLevel == 2) dynamicCooldown = 180; // 3 分钟 (适度)
+    else if (cfg.banterFrequencyLevel == 3) dynamicCooldown = 60;  // 1 分钟 (高频灵动)
+
+    // 冷却时间检查（以秒为单位）
+    if (state.lastTalkTime == 0) {
+        // 首次登场：开机 5 秒缓冲后即可触发初次问候与小动作
+        qint64 startupSec = (now - state.lastInteractionTime) / 1000;
+        if (startupSec < 5) {
+            return false;
+        }
+    } else {
+        qint64 timeSinceLastTalkSec = (now - state.lastTalkTime) / 1000;
+        if (timeSinceLastTalkSec < dynamicCooldown) {
+            calculatedScore = -100;
+            return false;
+        }
     }
 
     int score = 0;
     QStringList reasons;
 
-    // 1. 无聊度 / 社交渴望度贡献
-    if (state.boredom > 40) {
+    // 0. 初次登场问候
+    if (state.lastTalkTime == 0) {
+        score += 35;
+        reasons << "startup_greeting";
+    }
+
+    // 1. 连续高强度工作/写代码关怀
+    int workMins = contextInfo["work_minutes"].toInt(0);
+    if (cfg.enableContextualCare) {
+        if (workMins >= 45) {
+            score += 40;
+            reasons << "continuous_work_strain";
+        } else if (workMins >= 20) {
+            score += 20;
+            reasons << "work_focus";
+        }
+    }
+
+    // 2. 摸鱼检测与俏皮抓包
+    QString activeApp = contextInfo["active_app"].toString().toLower();
+    QString windowTitle = contextInfo["window_title"].toString().toLower();
+    if (activeApp.contains("bilibili") || windowTitle.contains("bilibili") ||
+        activeApp.contains("youtube") || windowTitle.contains("youtube") ||
+        activeApp.contains("weibo") || windowTitle.contains("微博") ||
+        activeApp.contains("douyin") || windowTitle.contains("抖音")) {
+        score += 35;
+        reasons << "slacking_catch";
+    }
+
+    // 3. 深夜/特殊时段关怀
+    int hour = nowDate.time().hour();
+    if (hour >= 23 || hour <= 4) {
+        score += 35;
+        reasons << "late_night_sleep";
+    } else if (hour >= 11 && hour <= 13) {
         score += 20;
+        reasons << "lunch_time";
+    } else if (hour >= 17 && hour <= 19) {
+        score += 15;
+        reasons << "dinner_offwork";
+    }
+
+    // 4. 无聊度与陪伴渴望
+    if (state.boredom > 40) {
+        score += 25;
         reasons << "pet_bored";
     }
-    if (state.social > 40) {
-        score += 15;
-        reasons << "pet_lonely";
+
+    // 5. 音乐陪伴 (分值提升至 25，听歌时随时可互动)
+    if (contextInfo["is_music_playing"].toBool(false)) {
+        score += 25;
+        reasons << "music_sharing";
     }
 
-    // 2. 用户空闲/停顿思考时长贡献 (2分钟以上无交互即可有 20 分)
-    int userIdleSeconds = contextInfo["user_idle_seconds"].toInt(0);
-    if (userIdleSeconds > 120) {
-        score += 20;
-        reasons << "user_idle";
+    // 6. 应用探针感知与打断恢复交互 (Context Recovery)
+    QJsonObject semanticCtx = contextInfo["app_semantic_context"].toObject();
+    bool isContextRecovery = contextInfo["is_context_recovery"].toBool(false);
+    if (isContextRecovery) {
+        score += 45;
+        reasons << "context_recovery";
     }
 
-    // 3. 最近有任务完成事件
-    qint64 taskTimeDelta = (now - state.lastTaskCompletedTime) / 1000;
-    if (taskTimeDelta > 0 && taskTimeDelta < 300) { // 5分钟内有任务完成
+    // 7. 调试排错陪伴 (Debugging Follow-up)
+    QString actDetail = semanticCtx["detail"].toString().toLower();
+    QString actSemantic = semanticCtx["semantic_activity"].toString().toLower();
+    if (actDetail.contains("error") || actDetail.contains("crash") || actDetail.contains("bug") ||
+        actSemantic.contains("排查") || actSemantic.contains("调试") || actSemantic.contains("解决")) {
         score += 30;
-        reasons << "task_completed_recently";
+        reasons << "debugging_followup";
     }
 
-    // 4. 深夜/特殊时段关怀
-    int hour = nowDate.time().hour();
-    if (hour >= 22 || hour <= 5) {
-        score += 20;
-        reasons << "late_night_care";
-    } else if (hour == 12 || hour == 18) {
-        score += 15;
-        reasons << "meal_time";
-    }
-
-    // 5. 基础活跃意愿（给予保底分，确保达到冷却后可触发）
+    // 基础活跃分
     score += 15;
 
     calculatedScore = score;

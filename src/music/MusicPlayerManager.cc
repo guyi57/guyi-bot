@@ -3,6 +3,7 @@
 #include "BehaviorEngine.hpp"
 #include "ShijimaWidget.hpp"
 #include "PetEventBus.hpp"
+#include "PetDiaryManager.hpp"
 #include <QUrl>
 #include <QTimer>
 #include <QRegularExpression>
@@ -45,6 +46,7 @@ MusicPlayerManager::MusicPlayerManager(QObject *parent)
             payload["song_name"] = song.name;
             payload["artist"] = song.artist;
             PetEventBus::instance()->emitEvent("music.playing", payload);
+            PetDiaryManager::instance()->recordMusicPlayed();
         }
     });
 
@@ -566,9 +568,20 @@ void MusicPlayerManager::toggleFavoriteCurrent()
     if (m_isCurrentSongFav) {
         MusicFavoriteDb::instance()->removeFavorite(cur.source, cur.id);
         m_isCurrentSongFav = false;
+        ShijimaWidget *target = BehaviorEngine::instance()->activeWidget();
+        if (target) {
+            target->showMessage(QString("已将《%1》从收藏移除 💔").arg(cur.name), 2500);
+        }
     } else {
         MusicFavoriteDb::instance()->addFavorite(cur);
         m_isCurrentSongFav = true;
+        ShijimaWidget *target = BehaviorEngine::instance()->activeWidget();
+        if (target) {
+            target->motionController().spawnHeart(QPointF(0, -20.0f));
+            target->motionController().triggerEmote(PetEmoteType::HappyHeart, 2.8f);
+            target->motionController().triggerStretch(0.92f, 1.15f);
+            target->showMessage(QString("💖 已将《%1》加入私藏歌单！我也超喜欢这首~").arg(cur.name), 3500);
+        }
     }
     if (m_onFavoriteStateChanged) m_onFavoriteStateChanged(m_isCurrentSongFav);
 }

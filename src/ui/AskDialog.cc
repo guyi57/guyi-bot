@@ -1,27 +1,41 @@
-// 
-// Shijima-Qt - Ask / Question Dialog Implementation
-// 
-
 #include "AskDialog.hpp"
+#include "AgentService.hpp"
 #include "Platform/Platform.hpp"
 #include <QHBoxLayout>
 #include <QScreen>
 #include <QGuiApplication>
+#include <QComboBox>
 
 AskDialog::AskDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle("向桌宠 AI 提问");
     setWindowFlags(Qt::Dialog | Qt::WindowStaysOnTopHint | Qt::WindowCloseButtonHint);
-    setMinimumWidth(400);
+    setMinimumWidth(430);
 
     auto mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(16, 16, 16, 16);
     mainLayout->setSpacing(10);
 
+    auto headerLayout = new QHBoxLayout();
     m_titleLabel = new QLabel("💬 向 AI 提问", this);
     m_titleLabel->setStyleSheet("font-weight: bold; font-size: 13px; color: #333;");
-    mainLayout->addWidget(m_titleLabel);
+    headerLayout->addWidget(m_titleLabel, 1);
+
+    m_modelCombo = new QComboBox(this);
+    m_modelCombo->setStyleSheet("padding: 2px 6px; font-size: 11px; border-radius: 4px; border: 1px solid #cbd5e1; background: #f8fafc; color: #475569; font-weight: 500;");
+    m_modelCombo->setToolTip("切换当前提问所使用的基础大模型");
+    headerLayout->addWidget(m_modelCombo, 0);
+
+    connect(m_modelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        if (index < 0) return;
+        QString pId = m_modelCombo->itemData(index).toString();
+        if (!pId.isEmpty()) {
+            AgentService::instance()->setActiveProfile(pId);
+        }
+    });
+
+    mainLayout->addLayout(headerLayout);
 
     // 上下文引用卡片（带 X 清除按钮）
     m_contextWidget = new QWidget(this);
@@ -206,9 +220,34 @@ void AskDialog::promptForContext(QString const& contextText) {
         move(geom.center().x() - width() / 2, geom.center().y() - height() / 2);
     }
 
+    refreshModelList();
+
     show();
     raise();
     activateWindow();
     Platform::activateApp();
     m_inputEdit->setFocus();
 }
+
+void AskDialog::refreshModelList() {
+    if (!m_modelCombo) return;
+    m_modelCombo->blockSignals(true);
+    m_modelCombo->clear();
+
+    const auto &cfg = AgentService::instance()->config();
+    int activeIdx = 0;
+    for (int i = 0; i < cfg.modelProfiles.size(); ++i) {
+        const auto &p = cfg.modelProfiles[i];
+        bool isActive = (p.id == cfg.activeProfileId);
+        if (isActive) activeIdx = i;
+        m_modelCombo->addItem(QString("⚡ %1 (%2)").arg(p.name, p.model), p.id);
+    }
+    m_modelCombo->setCurrentIndex(activeIdx);
+    m_modelCombo->blockSignals(false);
+}
+
+void AskDialog::showEvent(QShowEvent *event) {
+    QDialog::showEvent(event);
+    refreshModelList();
+}
+

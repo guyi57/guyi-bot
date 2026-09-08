@@ -47,7 +47,6 @@ TimerListDialog::TimerListDialog(QWidget *parent)
     setStyleSheet(
         "QDialog {"
         "  background-color: #f8fafc;"
-        "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;"
         "}"
     );
 
@@ -322,7 +321,6 @@ void TimerListDialog::showAddTimerDialog() {
     addDlg.setStyleSheet(
         "QDialog {"
         "  background-color: #ffffff;"
-        "  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;"
         "}"
         "QLineEdit, QComboBox, QSpinBox, QTimeEdit {"
         "  border: 1px solid #cbd5e1;"

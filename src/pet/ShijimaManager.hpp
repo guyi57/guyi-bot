@@ -62,6 +62,7 @@ public:
     std::map<int, ShijimaWidget *> const& mascotsById();
     ShijimaWidget *hitTest(QPoint const& screenPos);
     void onTickSync(std::function<void(ShijimaManager *)> callback);
+    void onTickAsync(std::function<void(ShijimaManager *)> callback);
     void setThrowImpulse(double dx, double dy);
     void updateGlobalHotkeys();
     QString defaultMascotName() const;
