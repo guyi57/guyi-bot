@@ -13,9 +13,11 @@
 		
 		<Behavior Name="SitAndFaceMouse" Frequency="0">
 			<NextBehavior Add="false">
-				<BehaviorReference Name="SitAndFaceMouse" Frequency="100" />
-				<BehaviorReference Name="SitAndSpinHead" Frequency="1" />
-				<BehaviorReference Name="SitWhileDanglingLegs" Frequency="1" />
+				<BehaviorReference Name="WalkAlongWorkAreaFloor" Frequency="80" />
+				<BehaviorReference Name="RunAlongWorkAreaFloor" Frequency="80" />
+				<BehaviorReference Name="SitAndSpinHead" Frequency="20" />
+				<BehaviorReference Name="SitWhileDanglingLegs" Frequency="15" />
+				<BehaviorReference Name="SitAndFaceMouse" Frequency="10" />
 			</NextBehavior>
 		</Behavior>
 		
@@ -40,24 +42,25 @@
 		<!-- On the Floor -->
 		<Condition Condition="#{mascot.environment.floor.isOn(mascot.anchor) || mascot.environment.activeIE.topBorder.isOn(mascot.anchor)}">
 			<Behavior Name="StandUp" Frequency="20" Hidden="true" />
-			<Behavior Name="SitDown" Frequency="60">
+			<Behavior Name="SitDown" Frequency="40">
 				<NextBehavior Add="true">
-					<BehaviorReference Name="SitWhileDanglingLegs" Frequency="80" />
-					<BehaviorReference Name="SitAndFaceMouse" Frequency="60" />
-					<BehaviorReference Name="LieDown" Frequency="40" />
+					<BehaviorReference Name="WalkAlongWorkAreaFloor" Frequency="100" />
+					<BehaviorReference Name="RunAlongWorkAreaFloor" Frequency="100" />
+					<BehaviorReference Name="SitWhileDanglingLegs" Frequency="30" />
+					<BehaviorReference Name="LieDown" Frequency="20" />
 				</NextBehavior>
 			</Behavior>
-			<Behavior Name="SitWhileDanglingLegs" Frequency="50">
+			<Behavior Name="SitWhileDanglingLegs" Frequency="30">
 				<NextBehavior Add="true">
-					<BehaviorReference Name="SitWhileDanglingLegs" Frequency="50" />
-					<BehaviorReference Name="SitAndFaceMouse" Frequency="40" />
-					<BehaviorReference Name="LieDown" Frequency="30" />
+					<BehaviorReference Name="WalkAlongWorkAreaFloor" Frequency="100" />
+					<BehaviorReference Name="RunAlongWorkAreaFloor" Frequency="100" />
+					<BehaviorReference Name="LieDown" Frequency="20" />
 				</NextBehavior>
 			</Behavior>
-			<Behavior Name="LieDown" Frequency="40">
+			<Behavior Name="LieDown" Frequency="30">
 				<NextBehavior Add="false">
-					<BehaviorReference Name="SitWhileDanglingLegs" Frequency="50" />
-					<BehaviorReference Name="SitDown" Frequency="40" />
+					<BehaviorReference Name="WalkAlongWorkAreaFloor" Frequency="100" />
+					<BehaviorReference Name="RunAlongWorkAreaFloor" Frequency="100" />
 					<BehaviorReference Name="CrawlAlongIECeiling" Frequency="120" Condition="${mascot.environment.activeIE.topBorder.isOn(mascot.anchor)}" Hidden="true" />
 					<BehaviorReference Name="CrawlAlongWorkAreaFloor" Frequency="100" Condition="${mascot.environment.floor.isOn(mascot.anchor)}" />
 				</NextBehavior>
@@ -85,23 +88,23 @@
 		
 		<!-- On Work Area Floor -->
 		<Condition Condition="#{mascot.environment.floor.isOn(mascot.anchor)}">
-			<Behavior Name="WalkAlongWorkAreaFloor" Frequency="260" Hidden="true" />
-			<Behavior Name="RunAlongWorkAreaFloor" Frequency="220" Hidden="true" />
-			<Behavior Name="CrawlAlongWorkAreaFloor" Frequency="10">
+			<Behavior Name="WalkAlongWorkAreaFloor" Frequency="300" Hidden="true" />
+			<Behavior Name="RunAlongWorkAreaFloor" Frequency="280" Hidden="true" />
+			<Behavior Name="CrawlAlongWorkAreaFloor" Frequency="20">
 				<NextBehavior Add="false">
 					<!-- Finished Crawling -->
 					<BehaviorReference Name="LieDown" Frequency="1" />
 				</NextBehavior>
 			</Behavior>
-			<Behavior Name="WalkLeftAlongFloorAndSit" Frequency="120" Hidden="true" />
-			<Behavior Name="WalkRightAlongFloorAndSit" Frequency="120" Hidden="true" />
-			<Behavior Name="GrabWorkAreaBottomLeftWall" Frequency="15" Condition="#{mascot.anchor.x - mascot.environment.workArea.left &lt; 200}" Hidden="true" />
-			<Behavior Name="GrabWorkAreaBottomRightWall" Frequency="15" Condition="#{mascot.environment.workArea.right - mascot.anchor.x &lt; 200}" Hidden="true" />
-			<Behavior Name="WalkLeftAndSit" Frequency="100" Hidden="true" />
-			<Behavior Name="WalkRightAndSit" Frequency="100" Hidden="true" />
-			<Behavior Name="WalkAndGrabBottomLeftWall" Frequency="15" Condition="#{mascot.anchor.x - mascot.environment.workArea.left &lt; 200}" />
-			<Behavior Name="WalkAndGrabBottomRightWall" Frequency="15" Condition="#{mascot.environment.workArea.right - mascot.anchor.x &lt; 200}" />
-			<Behavior Name="JumpFromBottomOfIE" Frequency="15" Condition="#{mascot.anchor.x &gt;= mascot.environment.activeIE.left &amp;&amp;
+			<Behavior Name="WalkLeftAlongFloorAndSit" Frequency="80" Hidden="true" />
+			<Behavior Name="WalkRightAlongFloorAndSit" Frequency="80" Hidden="true" />
+			<Behavior Name="GrabWorkAreaBottomLeftWall" Frequency="80" Hidden="true" />
+			<Behavior Name="GrabWorkAreaBottomRightWall" Frequency="80" Hidden="true" />
+			<Behavior Name="WalkLeftAndSit" Frequency="70" Hidden="true" />
+			<Behavior Name="WalkRightAndSit" Frequency="70" Hidden="true" />
+			<Behavior Name="WalkAndGrabBottomLeftWall" Frequency="90" />
+			<Behavior Name="WalkAndGrabBottomRightWall" Frequency="90" />
+			<Behavior Name="JumpFromBottomOfIE" Frequency="80" Condition="#{mascot.anchor.x &gt;= mascot.environment.activeIE.left &amp;&amp;
 				mascot.anchor.x &lt; mascot.environment.activeIE.right}" />
 				
 			<Behavior Name="PullUpShimeji" Frequency="30" Condition="#{mascot.totalCount &lt; 50}" />

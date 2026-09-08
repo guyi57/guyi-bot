@@ -287,7 +287,7 @@ void BehaviorEngine::onTick()
         } else {
             s_idleNudgeTimer++;
             // 原地发呆超过 5 秒 (125 ticks，每次 40ms)，给它一个轻盈随机动机
-            if (s_idleNudgeTimer >= 125) {
+            if (s_idleNudgeTimer >= 75) {
                 s_idleNudgeTimer = 0;
                 auto env = target->env();
                 auto state = target->mascot().state;
@@ -299,28 +299,29 @@ void BehaviorEngine::onTick()
 
                     if (onFloor) {
                         if (nearRightWall) {
-                            // 靠右墙时，强行往左走进入屏幕，绝不继续向右卡死在墙角！
+                            // 靠右墙时，强行往左大步奔跑探索屏幕！
                             target->mascot().state->looking_right = false;
-                            target->mascot().next_behavior("WalkAlongWorkAreaFloor");
+                            target->mascot().next_behavior("RunAlongWorkAreaFloor");
                         } else if (nearLeftWall) {
-                            // 靠左墙时，往右走
+                            // 靠左墙时，往右大步奔跑
                             target->mascot().state->looking_right = true;
-                            target->mascot().next_behavior("WalkAlongWorkAreaFloor");
+                            target->mascot().next_behavior("RunAlongWorkAreaFloor");
                         } else {
                             int r = QRandomGenerator::global()->bounded(100);
-                            if (r < 45) target->mascot().next_behavior("WalkAlongWorkAreaFloor");
-                            else if (r < 75) target->mascot().next_behavior("RunAlongWorkAreaFloor");
-                            else if (r < 90) target->mascot().next_behavior("SitAndFaceMouse");
-                            else target->mascot().next_behavior("SitDown");
+                            if (r < 45) target->mascot().next_behavior("RunAlongWorkAreaFloor");
+                            else if (r < 75) target->mascot().next_behavior("WalkAlongWorkAreaFloor");
+                            else if (r < 88) target->mascot().next_behavior("WalkAndGrabBottomLeftWall");
+                            else target->mascot().next_behavior("WalkAndGrabBottomRightWall");
                         }
                     } else if (onWindowCeiling) {
                         int r = QRandomGenerator::global()->bounded(100);
-                        if (r < 50) target->mascot().next_behavior("WalkAlongIECeiling");
-                        else if (r < 80) target->mascot().next_behavior("RunAlongIECeiling");
-                        else target->mascot().next_behavior("SitWhileDanglingLegs");
+                        if (r < 45) target->mascot().next_behavior("RunAlongIECeiling");
+                        else if (r < 75) target->mascot().next_behavior("WalkAlongIECeiling");
+                        else if (r < 88) target->mascot().next_behavior("JumpFromLeftEdgeOfIE");
+                        else target->mascot().next_behavior("JumpFromRightEdgeOfIE");
                     } else if (nearRightWall || nearLeftWall) {
-                        // 如果停在墙壁上超过 5 秒不动，让它轻盈从墙壁脱离跳下，避免永久卡墙
-                        target->mascot().next_behavior("FallFromWall");
+                        // 如果停在墙壁上超过 3 秒不动，让它脱离跳下或继续向上攀爬
+                        target->mascot().next_behavior("ClimbAlongWall");
                     }
                 }
             }
@@ -459,16 +460,18 @@ void BehaviorEngine::checkInitiativeChat()
                     auto &mascot = m_activeWidget->mascot();
                     auto env = mascot.state ? mascot.state->env : nullptr;
                     if (env && mascot.state->anchor.y >= (env->floor.y - 25.0)) {
-                        if (intent.action == "dangle" || intent.emotion == "happy" || intent.intent == "celebrate") {
-                            mascot.next_behavior("SitWhileDanglingLegs");
+                        if (intent.action == "run" || intent.emotion == "happy" || intent.intent == "celebrate") {
+                            mascot.next_behavior("RunAlongWorkAreaFloor");
                         } else if (intent.action == "sleep" || intent.emotion == "sleepy") {
                             mascot.next_behavior("LieDown");
-                        } else if (intent.emotion == "curious" || intent.intent == "seek_attention") {
-                            mascot.next_behavior("SitAndFaceMouse");
-                        } else if (intent.emotion == "bored") {
-                            mascot.next_behavior("SitAndSpinHead");
-                        } else if (intent.intent == "explore" || intent.action == "walk") {
+                        } else if (intent.action == "jump" || intent.intent == "play") {
+                            mascot.next_behavior("JumpFromBottomOfIE");
+                        } else if (intent.emotion == "curious" || intent.intent == "explore" || intent.action == "walk") {
                             mascot.next_behavior("WalkAlongWorkAreaFloor");
+                        } else if (intent.emotion == "bored") {
+                            mascot.next_behavior("WalkAndGrabBottomRightWall");
+                        } else {
+                            mascot.next_behavior("RunAlongWorkAreaFloor");
                         }
                     }
                 }
