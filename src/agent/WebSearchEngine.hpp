@@ -22,7 +22,8 @@ private:
     WebSearchEngine();
     ~WebSearchEngine();
 
-    void queryBaidu(const QString &query, std::function<void(const QVector<WebSearchResult>& results)> callback);
+    void querySo360(const QString &query, std::function<void(const QVector<WebSearchResult>& results)> callback);
     void queryBing(const QString &query, std::function<void(const QVector<WebSearchResult>& results)> callback);
+    void queryBaidu(const QString &query, std::function<void(const QVector<WebSearchResult>& results)> callback);
     static QString cleanHtml(const QString &rawHtml);
 };
