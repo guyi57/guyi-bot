@@ -103,7 +103,9 @@ static OSStatus hotKeyHandler(EventHandlerCallRef, EventRef theEvent, void*) {
 
     if (hkId.id == 101) {
         std::cout << "[全局快捷键] 触发 ⌥+T (划词翻译快捷键)" << std::endl;
-        Platform::activateApp();
+        // 注意：绝不能在此处调用 Platform::activateApp()！
+        // 否则会立即导致用户当前所在的浏览器/编辑器窗口失焦失去激活状态，
+        // 从而导致 Accessibility 无法探测到目标软件，模拟的 ⌘+C 也会被发给桌宠而非目标窗口！
         if (s_translateCallback) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 s_translateCallback();
@@ -111,7 +113,7 @@ static OSStatus hotKeyHandler(EventHandlerCallRef, EventRef theEvent, void*) {
         }
     } else if (hkId.id == 102) {
         std::cout << "[全局快捷键] 触发 ⌥+Q (划词提问快捷键)" << std::endl;
-        Platform::activateApp();
+        // 同样不能在此处提前激活，需在划词捕获完成后由 onAskRequested 弹出并激活窗口
         if (s_askCallback) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 s_askCallback();
@@ -429,23 +431,48 @@ static QString simulateCmdCAndGetSelectedText() {
     NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
     NSInteger oldChangeCount = [pasteboard changeCount];
 
-    // 构造并发送 ⌘+C 快捷键事件
-    CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStateHIDSystemState);
+    // 1. 使用独立的 Private Event Source，彻底避免继承物理硬件按键状态 (如 Option 物理修饰键)
+    CGEventSourceRef source = CGEventSourceCreate(kCGEventSourceStatePrivate);
+    if (!source) {
+        source = CGEventSourceCreate(kCGEventSourceStateCombinedSessionState);
+    }
+
+    // 2. 主动向系统派发 Option/Alt 键的 keyUp，彻底消除用户按下 ⌥+T 时物理 Option 键未松开导致的 Option+Cmd+C 冲突
+    CGEventRef optUpLeft = CGEventCreateKeyboardEvent(source, (CGKeyCode)0x3A, false);  // Left Option
+    CGEventRef optUpRight = CGEventCreateKeyboardEvent(source, (CGKeyCode)0x3D, false); // Right Option
+    if (optUpLeft) {
+        CGEventSetFlags(optUpLeft, 0);
+        CGEventPost(kCGSessionEventTap, optUpLeft);
+        CFRelease(optUpLeft);
+    }
+    if (optUpRight) {
+        CGEventSetFlags(optUpRight, 0);
+        CGEventPost(kCGSessionEventTap, optUpRight);
+        CFRelease(optUpRight);
+    }
+
+    usleep(15000); // 15ms 让系统窗口服务器消化释放修饰键
+
+    // 3. 构造纯正的 ⌘+C 组合按键
     CGEventRef keyDown = CGEventCreateKeyboardEvent(source, (CGKeyCode)0x08, true); // 0x08 == 'C'
     CGEventRef keyUp = CGEventCreateKeyboardEvent(source, (CGKeyCode)0x08, false);
 
-    CGEventSetFlags(keyDown, kCGEventFlagMaskCommand);
-    CGEventSetFlags(keyUp, kCGEventFlagMaskCommand);
+    CGEventSetFlags(keyDown, (CGEventFlags)kCGEventFlagMaskCommand);
+    CGEventSetFlags(keyUp, 0);
 
+    // 关键：同时投递到 Session Event Tap 和 HID Event Tap
+    // Session Event Tap 直接送达当前最前台聚焦窗口，HID Event Tap 兜底低层级驱动
+    CGEventPost(kCGSessionEventTap, keyDown);
+    CGEventPost(kCGSessionEventTap, keyUp);
     CGEventPost(kCGHIDEventTap, keyDown);
     CGEventPost(kCGHIDEventTap, keyUp);
 
     CFRelease(keyDown);
     CFRelease(keyUp);
-    CFRelease(source);
+    if (source) CFRelease(source);
 
-    // 毫秒级轮询剪贴板变化（最多等待 80ms）
-    for (int i = 0; i < 8; ++i) {
+    // 4. 毫秒级轮询剪贴板变化（最多等待 350ms，捕获到变化立即返回，兼顾快速与 Electron/Web 等较慢应用）
+    for (int i = 0; i < 35; ++i) {
         usleep(10000); // 10ms
         if ([pasteboard changeCount] != oldChangeCount) {
             NSString *newString = [pasteboard stringForType:NSPasteboardTypeString];
@@ -462,26 +489,19 @@ QString HotkeyManager::getActiveSelectedText() {
     // 1. 优先尝试 Accessibility 无感读取（浏览器/原生文本框）
     QString text = getSelectedTextViaAccessibility();
     if (!text.isEmpty()) {
-        std::cout << "[划词引擎] 通过 Accessibility 成功获取选中文本: " << text.toStdString() << std::endl;
+        std::cout << "[划词引擎] 通过 Accessibility 成功获取选中文本 (" << text.length() << " 字符): " << text.toStdString() << std::endl;
         return text;
     }
 
     // 2. 兜底调用极速 ⌘+C 模拟取词（彻底覆盖 VSCode/微信/终端/PDF/Office/Obsidian 等所有第三方软件）
     text = simulateCmdCAndGetSelectedText();
     if (!text.isEmpty()) {
-        std::cout << "[划词引擎] 通过模拟 ⌘+C 成功获取选中文本: " << text.toStdString() << std::endl;
+        std::cout << "[划词引擎] 通过模拟 ⌘+C 成功获取选中文本 (" << text.length() << " 字符): " << text.toStdString() << std::endl;
         return text;
     }
 
-    // 3. 最后检查当前剪贴板内容
-    if (auto clip = QGuiApplication::clipboard()) {
-        QString clipText = clip->text().trimmed();
-        if (!clipText.isEmpty()) {
-            std::cout << "[划词引擎] 读取当前剪贴板文本: " << clipText.toStdString() << std::endl;
-            return clipText;
-        }
-    }
-
-    std::cout << "[划词引擎] 未获取到任何选中文本" << std::endl;
+    // 注意：严禁在未划选到文字时盲目回退并读取历史旧剪贴板！
+    // 否则会导致用户选中文本未更新时，误把很久以前复制的旧内容当成当前划选内容进行翻译。
+    std::cout << "[划词引擎] 未获取到任何选中文本（未划选文字或目标应用无选中文本）" << std::endl;
     return QString();
 }
