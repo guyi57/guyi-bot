@@ -176,6 +176,11 @@ void setupFloatingBubbleWindow(QWidget *widget) {
     showOnAllDesktops(widget);
 }
 
+void setWindowClickThrough(QWidget *widget, bool clickThrough) {
+    if (!widget) return;
+    widget->setAttribute(Qt::WA_TransparentForMouseEvents, clickThrough);
+}
+
 void activateApp() {
 }
 

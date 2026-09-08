@@ -87,6 +87,20 @@ bool openTargetApp(const QString &appTarget) {
     return ((INT_PTR)hInst > 32);
 }
 
+void setWindowClickThrough(QWidget *widget, bool clickThrough) {
+    if (!widget) return;
+    HWND hwnd = (HWND)widget->winId();
+    if (hwnd) {
+        LONG_PTR exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+        if (clickThrough) {
+            SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle | WS_EX_TRANSPARENT | WS_EX_LAYERED);
+        } else {
+            SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle & ~WS_EX_TRANSPARENT);
+        }
+    }
+    widget->setAttribute(Qt::WA_TransparentForMouseEvents, clickThrough);
+}
+
 void activateApp() {
 }
 

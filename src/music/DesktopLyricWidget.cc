@@ -4,6 +4,7 @@
 #include "BehaviorEngine.hpp"
 #include "ShijimaWidget.hpp"
 #include "MusicPlayerDialog.hpp"
+#include "Platform/Platform.hpp"
 #include <QPainter>
 #include <QPainterPath>
 #include <QLinearGradient>
@@ -286,10 +287,15 @@ void DesktopLyricWidget::setLocked(bool locked)
 {
     m_isLocked = locked;
     SettingsDb::instance()->setBool("desktop_lyrics_locked", m_isLocked);
-    m_lockBtn->setText(m_isLocked ? "🔒" : "🔓");
+    if (m_lockBtn) {
+        m_lockBtn->setText(m_isLocked ? "🔒" : "🔓");
+    }
+
+    // 关键：通知底层 macOS / 操作系统完全忽略鼠标事件，实现 100% 原生点击穿透
+    Platform::setWindowClickThrough(this, m_isLocked);
 
     if (m_isLocked) {
-        m_controlBar->hide();
+        if (m_controlBar) m_controlBar->hide();
         setAttribute(Qt::WA_TransparentForMouseEvents, true);
         showBubbleHint("🔒 歌词位置已锁定！鼠标点击可直接穿透。在桌宠右键可解锁。");
     } else {
@@ -297,6 +303,13 @@ void DesktopLyricWidget::setLocked(bool locked)
         showBubbleHint("🔓 歌词已解除锁定，可自由拖拽位置。");
     }
     update();
+}
+
+void DesktopLyricWidget::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
+    Platform::showOnAllDesktops(this);
+    Platform::setWindowClickThrough(this, m_isLocked);
 }
 
 void DesktopLyricWidget::setShowTranslation(bool show)

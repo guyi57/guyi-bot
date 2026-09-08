@@ -29,6 +29,7 @@ namespace Platform {
 void initialize(int argc, char **argv);
 void showOnAllDesktops(QWidget *widget);
 void setupFloatingBubbleWindow(QWidget *widget);
+void setWindowClickThrough(QWidget *widget, bool clickThrough);
 void activateApp();
 bool isAppFrontmost(const QString &appTarget);
 bool openTargetApp(const QString &appTarget);

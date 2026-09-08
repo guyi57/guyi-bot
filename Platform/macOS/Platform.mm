@@ -71,6 +71,19 @@ void setupFloatingBubbleWindow(QWidget *widget) {
     }
 }
 
+void setWindowClickThrough(QWidget *widget, bool clickThrough) {
+    if (!widget) return;
+    @autoreleasepool {
+        NSView *view = (__bridge NSView *)((void *)widget->winId());
+        if (view != nil) {
+            NSWindow *window = [view window];
+            if (window != nil) {
+                [window setIgnoresMouseEvents:clickThrough ? YES : NO];
+            }
+        }
+    }
+}
+
 void activateApp() {
     @autoreleasepool {
         [NSApp activateIgnoringOtherApps:YES];
