@@ -19,6 +19,8 @@
 !/Platform/
 !/Platform/**
 !/find_dlls.sh
+!/scripts/
+!/scripts/**
 !/com.pixelomer.ShijimaQt.png
 !/shijima-qt.ico
 !/com.pixelomer.ShijimaQt.desktop

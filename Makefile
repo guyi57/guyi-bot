@@ -196,9 +196,8 @@ publish/macOS/$(CONFIG)/$(TARGET).app: publish/macOS/$(CONFIG)
 	mkdir -p $@/Contents/MacOS $@/Contents/Frameworks
 	cp $^/$(TARGET) $@/Contents/MacOS/$(TARGET)
 	cp libshimejifinder/build/unarr/libunarr.1.dylib $@/Contents/MacOS/ 2>/dev/null || true
-	cp libshimejifinder/build/unarr/libunarr.1.dylib $@/Contents/Frameworks/ 2>/dev/null || true
 	macdeployqt $@ || true
-	codesign --force --deep --sign - $@ 2>/dev/null || true
+	python3 scripts/fix_bundle_symlinks.py $@
 
 publish/Linux/$(CONFIG)/$(TARGET).AppImage: publish/Linux/$(CONFIG) linuxdeploy.AppImage
 	rm -rf AppDir
