@@ -112,12 +112,16 @@ void WebSearchEngine::querySo360(const QString &query, std::function<void(const 
                     snippet = snippet.left(250) + "...";
                 }
 
-                if (!snippet.isEmpty() && snippet.length() > 15 && !title.contains("短视频大全")) {
+                if (!snippet.isEmpty() && snippet.length() > 15 
+                    && !title.contains("短视频大全") 
+                    && !title.contains("AI正在分析") 
+                    && !snippet.startsWith("AI正在分析")
+                    && !snippet.contains("feedback-tip")) {
                     WebSearchResult item;
                     item.title = title;
                     item.snippet = snippet;
                     item.url = linkUrl;
-                    item.source = "实时热点资讯";
+                    item.source = "实时权威资讯";
                     results.append(item);
                 }
             }
@@ -290,53 +294,85 @@ void WebSearchEngine::search(const QString &query, std::function<void(bool succe
 
     std::cout << "[WebSearchEngine] 正在多源并发实时检索 (360 实时资讯 + Bing 综合): " << trimmedQ.toStdString() << std::endl;
 
-    auto allResults = std::make_shared<QVector<WebSearchResult>>();
+    auto soResults = std::make_shared<QVector<WebSearchResult>>();
+    auto bingResults = std::make_shared<QVector<WebSearchResult>>();
     auto pending = std::make_shared<int>(2);
 
-    auto onEngineDone = [trimmedQ, allResults, pending, callback](const QVector<WebSearchResult>& res) {
-        for (const auto &item : res) {
-            // 简单去重：标题相似或摘要前缀相同则跳过
+    auto onAllDone = [trimmedQ, soResults, bingResults, pending, callback]() {
+        (*pending)--;
+        if (*pending > 0) return;
+
+        // 智能优先级合并：优先采纳 360 的权威百科、时事实体与任命新闻，再以 Bing 作为补充
+        QVector<WebSearchResult> allResults;
+
+        // 1. 优先放入 360 前 4 条精准百科/政务/时事数据
+        for (const auto &item : *soResults) {
+            if (allResults.size() >= 4) break;
+            allResults.append(item);
+        }
+
+        // 2. 补充必应的高权重结果
+        for (const auto &item : *bingResults) {
+            if (allResults.size() >= 6) break;
             bool exists = false;
-            for (const auto &existing : *allResults) {
-                if (existing.title == item.title || (!existing.snippet.isEmpty() && existing.snippet.left(30) == item.snippet.left(30))) {
+            for (const auto &existing : allResults) {
+                if (existing.title == item.title || (!existing.snippet.isEmpty() && existing.snippet.left(25) == item.snippet.left(25))) {
                     exists = true;
                     break;
                 }
             }
             if (!exists) {
-                allResults->append(item);
+                allResults.append(item);
             }
         }
 
-        (*pending)--;
-        if (*pending == 0) {
-            bool success = !allResults->isEmpty();
-            QString markdown;
-
-            if (success) {
-                markdown = QString("🌐 互联网实时搜索结果（关键词：「%1」）:\n\n").arg(trimmedQ);
-                int count = std::min<int>(6, allResults->size());
-                for (int i = 0; i < count; ++i) {
-                    const auto &r = (*allResults)[i];
-                    markdown += QString("%1. 【%2】%3\n   %4\n").arg(
-                        QString::number(i + 1),
-                        r.source,
-                        r.title,
-                        r.snippet
-                    );
+        // 3. 若仍有空位，继续放入 360 其余条目
+        for (const auto &item : *soResults) {
+            if (allResults.size() >= 6) break;
+            bool exists = false;
+            for (const auto &existing : allResults) {
+                if (existing.title == item.title || (!existing.snippet.isEmpty() && existing.snippet.left(25) == item.snippet.left(25))) {
+                    exists = true;
+                    break;
                 }
-                markdown += "\n💡 提示: 请结合上述最新的实时检索事实，准确、客观、条理清晰地回答用户的问题。";
-            } else {
-                markdown = QString("🌐 互联网搜索「%1」未获取到有效的实时结果，请尝试更换关键词。").arg(trimmedQ);
             }
+            if (!exists) {
+                allResults.append(item);
+            }
+        }
 
-            if (callback) {
-                callback(success, *allResults, markdown);
+        bool success = !allResults.isEmpty();
+        QString markdown;
+
+        if (success) {
+            markdown = QString("🌐 互联网实时搜索结果（关键词：「%1」）:\n\n").arg(trimmedQ);
+            int count = std::min<int>(6, allResults.size());
+            for (int i = 0; i < count; ++i) {
+                const auto &r = allResults[i];
+                markdown += QString("%1. 【%2】%3\n   %4\n").arg(
+                    QString::number(i + 1),
+                    r.source,
+                    r.title,
+                    r.snippet
+                );
             }
+            markdown += "\n💡 提示: 请结合上述最新的实时检索事实，准确、客观、条理清晰地回答用户的问题。";
+        } else {
+            markdown = QString("🌐 互联网搜索「%1」未获取到有效的实时结果，请尝试更换关键词。").arg(trimmedQ);
+        }
+
+        if (callback) {
+            callback(success, allResults, markdown);
         }
     };
 
     // 并发启动 360 实时资讯搜索与必应搜索
-    querySo360(trimmedQ, onEngineDone);
-    queryBing(trimmedQ, onEngineDone);
+    querySo360(trimmedQ, [soResults, onAllDone](const QVector<WebSearchResult>& res) {
+        *soResults = res;
+        onAllDone();
+    });
+    queryBing(trimmedQ, [bingResults, onAllDone](const QVector<WebSearchResult>& res) {
+        *bingResults = res;
+        onAllDone();
+    });
 }
