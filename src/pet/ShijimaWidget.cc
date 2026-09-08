@@ -143,9 +143,9 @@ ShijimaWidget::ShijimaWidget(MascotData *mascotData,
                     setWaitingForAgent(false);
                     if (success) {
                         BehaviorEngine::instance()->addAffection(3, 8);
-                        showMessage(QString("⏰ **定时任务交付: %1**\n\n%2").arg(timer.title, result), 35000, appTarget, true);
+                        showMessage(QString("⏰ **定时任务交付: %1**\n\n%2").arg(timer.title, result), 14000, appTarget, true);
                     } else {
-                        showMessage(QString("❌ **定时任务失败: %1**\n\n%2").arg(timer.title, result), 10000, appTarget, true);
+                        showMessage(QString("❌ **定时任务失败: %1**\n\n%2").arg(timer.title, result), 6000, appTarget, true);
                     }
                 }
             );
@@ -155,7 +155,7 @@ ShijimaWidget::ShijimaWidget(MascotData *mascotData,
             QString msg = QString("⏰ **定时提醒到达！**\n\n📌 **%1**\n\n*（时间: %2）*")
                 .arg(timer.title)
                 .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
-            showMessage(msg, 20000, "", true);
+            showMessage(msg, 10000, "", true);
         }
     };
 }
@@ -473,29 +473,32 @@ bool ShijimaWidget::updateOffsets() {
         int bubbleW = m_messageBubble->width();
         int bubbleH = m_messageBubble->height();
 
-        // 1. 获取当前桌宠在全局屏幕上的精确物理锚点 (脚底水平中心) 与实际图片高度
-        int petCenterX = (int)m_mascot->state->anchor.x;
         auto &asset = getActiveAsset();
-        int petHeight = (int)(asset.originalSize().height() / m_drawScale);
-        if (petHeight <= 0) petHeight = 128;
-        int petHeadY = (int)m_mascot->state->anchor.y - petHeight;
+        auto image = asset.image(isMirroredRender());
+        int drawnWidth = (int)(image.width() / m_drawScale);
+        int drawnHeight = (int)(image.height() / m_drawScale);
+
+        // 核心修复：直接使用桌宠当前在屏幕上的物理绘制绝对像素矩形，紧贴桌宠头顶！
+        int petLeftX = this->x() + m_drawOrigin.x();
+        int petTopY = this->y() + m_drawOrigin.y();
+        int petCenterX = petLeftX + (drawnWidth / 2);
+        int petBottomY = petTopY + drawnHeight;
 
         int scrLeft = (int)env->screen.left;
         int scrRight = (int)(env->screen.left + env->screen.width());
         int scrTop = (int)env->screen.top;
         int scrBottom = (int)(env->screen.top + env->screen.height());
 
-        // 2. 水平方向：以桌宠中心对齐气泡，受屏幕边界保护
+        // 1. 水平方向：气泡中心对准桌宠身体中心，受屏幕安全边界保护
         int rawX = petCenterX - (bubbleW / 2);
-        int clampedX = std::clamp(rawX, scrLeft + 12, scrRight - bubbleW - 12);
+        int clampedX = std::clamp(rawX, scrLeft + 8, scrRight - bubbleW - 8);
 
-        // 3. 垂直方向：精准悬浮于头顶上方 6px；若贴近屏幕天花板则置于脚下
-        bool isAtCeiling = (petHeadY - bubbleH - 6 < scrTop + 12);
-        int targetY = isAtCeiling ? ((int)m_mascot->state->anchor.y + 6)
-                                  : (petHeadY - bubbleH - 6);
-        int clampedY = std::clamp(targetY, scrTop + 12, scrBottom - bubbleH - 12);
+        // 2. 垂直方向：无缝紧贴于桌宠头顶上方（间距 2px）；若贴近天花板则紧贴于脚底下方（间距 2px）
+        bool isAtCeiling = (petTopY - bubbleH - 2 < scrTop + 8);
+        int targetY = isAtCeiling ? (petBottomY + 2) : (petTopY - bubbleH - 2);
+        int clampedY = std::clamp(targetY, scrTop + 8, scrBottom - bubbleH - 8);
 
-        // 4. 动态计算尖角横坐标，确保尖角 100% 精准指向桌宠头顶
+        // 3. 动态计算尖角横坐标，确保尖角精准指向桌宠头顶
         int tailRelX = std::clamp(petCenterX - clampedX, 16, bubbleW - 16);
         m_messageBubble->setTailPosition(tailRelX, isAtCeiling);
 
@@ -1306,9 +1309,9 @@ void ShijimaWidget::onTranslateRequested(QString const& text) {
         setWaitingForAgent(false);
         if (success) {
             BehaviorEngine::instance()->addAffection(2, 5);
-            showMessage(result, 25000, "", true);
+            showMessage(result, 12000, "", true);
         } else {
-            showMessage("❌ " + result, 8000, "", true);
+            showMessage("❌ " + result, 5000, "", true);
         }
     });
 }
@@ -1348,9 +1351,9 @@ void ShijimaWidget::onQuestionSubmitted(QString const& context, QString const& q
             setWaitingForAgent(false);
             if (success) {
                 BehaviorEngine::instance()->addAffection(3, 8);
-                showMessage(result, 30000, appTarget, true);
+                showMessage(result, 14000, appTarget, true);
             } else {
-                showMessage("❌ " + result, 8000, appTarget, true);
+                showMessage("❌ " + result, 5000, appTarget, true);
             }
         });
 }

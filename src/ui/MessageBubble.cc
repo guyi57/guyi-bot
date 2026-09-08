@@ -512,25 +512,37 @@ MessageBubble::MessageBubble(QWidget *parent)
 
     m_countdownTimer = new QTimer(this);
     connect(m_countdownTimer, &QTimer::timeout, this, [this]() {
-        // 核心防护：实时检查鼠标指针全局坐标是否位于气泡窗口范围内
         QPoint globalMousePos = QCursor::pos();
         QRect globalRect = QRect(mapToGlobal(QPoint(0, 0)), size());
-        if (globalRect.contains(globalMousePos)) {
-            // 鼠标正悬停在气泡内，绝对不倒计时，绝对不隐藏！
+        bool mouseInside = globalRect.contains(globalMousePos);
+
+        if (mouseInside) {
+            // 鼠标正悬停在气泡内，暂停倒计时，给用户充分的阅读时间
             if (!m_isCountdownPaused) {
                 m_isCountdownPaused = true;
                 updateCountdownDisplay();
             }
             return;
+        } else {
+            // 鼠标已离开气泡区域，坚决恢复倒计时
+            if (m_isCountdownPaused) {
+                m_isCountdownPaused = false;
+                if (m_remainingSeconds <= 0) {
+                    m_remainingSeconds = 2; // 移出后给 2 秒缓冲后自动关闭
+                }
+                updateCountdownDisplay();
+            }
         }
 
-        if (!m_isCountdownPaused && m_remainingSeconds > 0) {
+        if (m_remainingSeconds > 0) {
             m_remainingSeconds--;
             updateCountdownDisplay();
-            if (m_remainingSeconds <= 0) {
-                m_countdownTimer->stop();
-                hideMessage();
-            }
+        }
+
+        // 倒计时归零时，坚决关闭气泡，杜绝残留卡死
+        if (m_remainingSeconds <= 0) {
+            m_countdownTimer->stop();
+            hideMessage();
         }
     });
 
@@ -761,7 +773,7 @@ void MessageBubble::showHistoryDialog()
     if (!m_historyDialog) {
         m_historyDialog = new MessageHistoryDialog(this);
         m_historyDialog->setOnReplayCallback([this](const QString &text, const QString &appTarget) {
-            showMessage(text, 25000, appTarget);
+            showMessage(text, 14000, appTarget);
         });
     }
     m_historyDialog->selectLatest();
@@ -789,8 +801,8 @@ bool MessageBubble::eventFilter(QObject *watched, QEvent *event)
         if (!globalRect.contains(globalMousePos)) {
             if (m_isCountdownPaused) {
                 m_isCountdownPaused = false;
-                if (m_remainingSeconds < 6) {
-                    m_remainingSeconds = 6; // 移出后至少给 6 秒从容阅读时间
+                if (m_remainingSeconds < 3) {
+                    m_remainingSeconds = 3; // 移出后给 3 秒缓冲自动关闭
                 }
                 updateCountdownDisplay();
             }
@@ -814,8 +826,8 @@ void MessageBubble::leaveEvent(QEvent *)
     if (!globalRect.contains(globalMousePos)) {
         if (m_isCountdownPaused) {
             m_isCountdownPaused = false;
-            if (m_remainingSeconds < 6) {
-                m_remainingSeconds = 6;
+            if (m_remainingSeconds < 3) {
+                m_remainingSeconds = 3;
             }
             updateCountdownDisplay();
         }

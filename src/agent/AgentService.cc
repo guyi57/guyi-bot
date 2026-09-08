@@ -1253,7 +1253,7 @@ void AgentService::ask(QString const& contextText,
         "你拥有管理本地系统定时器工具（timer_manage）、音乐播放器工具（music_player_manage）、全网实时搜索工具（web_search）与长期记忆管理工具（memory_manage）。\n\n"
         "【全网实时搜索工具（web_search）使用原则】\n"
         "- 当用户询问任何最新事实、时事新闻、今日天气、地方领导人事（如现任/历任市委书记、市长、官员任免）、百科动态、股市金融、技术发布、热点排行等内容时，【必须第一步调用 web_search(query=...) 联网检索】！\n"
-        "- 【自动承接上下文与地名补全】：如果用户提问简略、使用代词或承接上一轮对话（例如只问「市委书记是谁」、「那市长呢」、「天气怎么样」），必须结合上文对话或记忆上下文（如四川巴中）自动在 query 中补全地名与实体（例如 query='巴中市委书记' 或 '巴中现任市委书记'），严禁用单薄模糊的词语盲目搜索！\n"
+        "- 【自动承接上下文与实体补全】：如果用户提问简略、使用代词或承接上一轮对话（例如只问「市委书记是谁」、「那市长呢」、「天气怎么样」），必须结合上文对话或记忆上下文自动在 query 中补全主体与地名（例如根据前文提及的城市自动拼接为「xx市现任市委书记」），严禁用单薄模糊的词语盲目搜索！\n"
         "- 严禁凭空盲猜或使用可能过时的离线训练记忆回答！先联网搜索获得最新真实证据后，再给出条理分明的回答。\n\n"
         "【长期记忆与画像工具使用指南】\n"
         "- 当用户透露其身份、技术栈、喜好、作息习惯或正在开发的项目时，主动调用 memory_manage 记录重要事实(remember)或更新主人档案(update_profile)；\n"
@@ -1424,12 +1424,12 @@ void AgentService::testConnection(QString const& apiBase, QString const& apiKey,
 static QJsonObject getWebSearchToolDefinition() {
     QJsonObject fn;
     fn["name"] = "web_search";
-    fn["description"] = "全网实时搜索工具。获取互联网最新资讯、官方人事任免、权威百科、地方政务历史事实、天气时事动态等实时事实。当用户询问最新事实、地方政务人事、新闻热点或需要联网验证时必须调用此工具。如果用户问题省略了地名（如'市委书记是谁'），请结合上下文自动补全实体地名（如'巴中市委书记'）再发起精准检索。";
+    fn["description"] = "全网实时搜索工具。获取互联网最新资讯、官方人事任免、权威百科、地方政务历史事实、天气时事动态等实时事实。当用户询问最新事实、地方政务人事、新闻热点或需要联网验证时必须调用此工具。如果用户问题省略了主语或地名（如'市委书记是谁'），请结合上下文自动补全实体地名再发起精准检索。";
 
     QJsonObject props;
     QJsonObject queryProp;
     queryProp["type"] = "string";
-    queryProp["description"] = "搜索关键词，例如'巴中市现任市委书记'、'四川巴中历任市委书记名单'、'今日上海天气'";
+    queryProp["description"] = "搜索关键词，例如'北京市现任市长'、'今日上海天气'、'最新科技要闻'";
     props["query"] = queryProp;
 
     QJsonObject params;
