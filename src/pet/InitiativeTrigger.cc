@@ -38,15 +38,15 @@ bool InitiativeTrigger::evaluateInitiative(PetState &state, const QJsonObject &c
     }
 
     int dynamicCooldown = m_cooldownSeconds;
-    if (cfg.banterFrequencyLevel == 1) dynamicCooldown = 480;      // 8 分钟 (低频)
-    else if (cfg.banterFrequencyLevel == 2) dynamicCooldown = 180; // 3 分钟 (适度)
+    if (cfg.banterFrequencyLevel == 1) dynamicCooldown = 300;      // 5 分钟 (低频)
+    else if (cfg.banterFrequencyLevel == 2) dynamicCooldown = 120; // 2 分钟 (适度贴心)
     else if (cfg.banterFrequencyLevel == 3) dynamicCooldown = 60;  // 1 分钟 (高频灵动)
 
     // 冷却时间检查（以秒为单位）
     if (state.lastTalkTime == 0) {
-        // 首次登场：开机 5 秒缓冲后即可触发初次问候与小动作
+        // 首次登场：开机 3 秒缓冲后即可触发初次问候与小动作
         qint64 startupSec = (now - state.lastInteractionTime) / 1000;
-        if (startupSec < 5) {
+        if (startupSec < 3) {
             return false;
         }
     } else {
@@ -103,7 +103,7 @@ bool InitiativeTrigger::evaluateInitiative(PetState &state, const QJsonObject &c
     }
 
     // 4. 无聊度与陪伴渴望
-    if (state.boredom > 40) {
+    if (state.boredom >= 25) {
         score += 25;
         reasons << "pet_bored";
     }
@@ -129,6 +129,42 @@ bool InitiativeTrigger::evaluateInitiative(PetState &state, const QJsonObject &c
         actSemantic.contains("排查") || actSemantic.contains("调试") || actSemantic.contains("解决")) {
         score += 30;
         reasons << "debugging_followup";
+    }
+
+    // 8. 前台活跃应用感知 (Coding / Web Browsing / Terminal / Office)
+    QString appType = semanticCtx["app_type"].toString().toLower();
+    if (appType.contains("ide") || appType.contains("editor") ||
+        activeApp.contains("code") || activeApp.contains("cursor") ||
+        activeApp.contains("antigravity") || activeApp.contains("xcode") ||
+        activeApp.contains("clion") || activeApp.contains("pycharm") ||
+        activeApp.contains("intellij") || activeApp.contains("webstorm")) {
+        score += 20;
+        reasons << "coding_flow";
+    } else if (appType.contains("browser") || activeApp.contains("chrome") ||
+               activeApp.contains("safari") || activeApp.contains("edge") ||
+               activeApp.contains("firefox") || activeApp.contains("arc")) {
+        score += 15;
+        reasons << "web_exploring";
+    } else if (appType.contains("terminal") || activeApp.contains("terminal") ||
+               activeApp.contains("iterm") || activeApp.contains("warp")) {
+        score += 15;
+        reasons << "terminal_hacking";
+    } else if (!activeApp.isEmpty()) {
+        score += 10;
+        reasons << "app_active";
+    }
+
+    // 9. 近期聊天话题记忆呼应
+    if (!AgentService::instance()->memoryHistory().isEmpty()) {
+        score += 15;
+        reasons << "recent_chat_resonance";
+    }
+
+    // 10. 用户当前实时操作热度 (鼠标/键盘活跃)
+    int userIdleSec = contextInfo["user_idle_seconds"].toInt(0);
+    if (userIdleSec < 30) {
+        score += 10;
+        reasons << "user_active";
     }
 
     // 基础活跃分

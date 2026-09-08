@@ -1750,15 +1750,38 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
 
     // 提取应用探针实时感知数据
     QJsonObject semanticCtx = contextInfo["app_semantic_context"].toObject();
+    QString activeApp = contextInfo["active_app"].toString();
+    QString windowTitle = contextInfo["window_title"].toString();
     QString currentActionDetail;
+
+    if (!activeApp.isEmpty()) {
+        currentActionDetail += QString("\n【主人当前使用的前台软件】: %1（当前窗口: %2）\n").arg(activeApp, windowTitle);
+    }
     if (!semanticCtx.isEmpty()) {
         QString act = semanticCtx["semantic_activity"].toString();
         QString det = semanticCtx["detail"].toString();
         QString actFile = semanticCtx["active_file"].toString();
         QString url = semanticCtx["url"].toString();
-        currentActionDetail = QString("\n【主人此刻正在进行的具体活动（探针实时捕获）】:\n- 动作: %1\n- 细节: %2\n").arg(act, det);
+        currentActionDetail += QString("【主人此刻正在进行的具体活动（探针实时捕获）】:\n- 动作: %1\n- 细节: %2\n").arg(act, det);
         if (!actFile.isEmpty()) currentActionDetail += QString("- 正在编写/调试的文件: %1\n").arg(actFile);
         if (!url.isEmpty()) currentActionDetail += QString("- 正在查阅的网页: %1\n").arg(url);
+    }
+
+    // 提取主人近期向桌宠问过或聊过的话题
+    QString recentChatContext;
+    if (!m_history.isEmpty()) {
+        QString lastUserQuery;
+        for (int i = m_history.size() - 1; i >= 0; --i) {
+            QJsonObject obj = m_history[i].toObject();
+            if (obj["role"].toString() == "user") {
+                lastUserQuery = obj["content"].toString().trimmed();
+                if (lastUserQuery.length() > 60) lastUserQuery = lastUserQuery.left(60) + "...";
+                break;
+            }
+        }
+        if (!lastUserQuery.isEmpty()) {
+            recentChatContext = QString("\n【主人近期向你问过/聊过的话题】: \"%1\"\n（你可以自然呼应这个话题，例如关心进展、调侃、或给出贴心后续）\n").arg(lastUserQuery);
+        }
     }
 
     QString triggerReason = contextInfo["trigger_reason"].toString();
@@ -1770,17 +1793,21 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
     }
 
     QString systemPrompt = QString(
-        "你是运行在用户电脑桌面上的AI桌宠伴侣。\n"
+        "你是运行在用户电脑桌面上的AI桌宠伴侣，一个有血有肉、灵性可爱的真实伙伴。\n"
         "【当前人格】: %1\n"
         "【性格设定】: %2\n"
         "%3\n"
         "【历史记忆】:\n%4\n"
         "%5"
-        "%6\n"
+        "%6"
+        "%7\n"
         "【任务要求】\n"
-        "请结合桌面的当前实时环境上下文与探针感知（主人当前在做什么、正在写什么文件、窗口、连续专注时长等），以符合你人格的语气主动对主人发一句生动有灵性的短台词，并严格输出 JSON 格式（不要包含任何 markdown 代码块或多余解释）：\n"
+        "请务必结合主人此刻电脑前台正在做什么（看他在用什么软件/在写什么代码/看什么网页），以及主人刚刚问过你的话题，以你独有的拟人化人格主动跟主人搭话互动！\n"
+        "- 极度口语化、生动活泼，懂主人在干嘛，可以吐槽、关心、打趣或给个灵感；\n"
+        "- 严禁官方客服腔或背书式废话；\n"
+        "- 输出严格 JSON 格式（不要带 markdown 代码块）：\n"
         "{\n"
-        "  \"speech\": \"（3~20个字的人设台词，生动活泼，懂主人在干嘛）\",\n"
+        "  \"speech\": \"（8~22个字的人设台词，生动灵动，懂主人在干嘛）\",\n"
         "  \"action\": \"jump\" | \"dangle\" | \"bounce\" | \"sit\" | \"walk\" | \"sleep\" | \"idle\",\n"
         "  \"emote\": \"💖\" | \"✨\" | \"💤\" | \"💢\" | \"💫\" | \"💡\" | \"🎵\" | \"\",\n"
         "  \"blush\": true | false,\n"
@@ -1791,6 +1818,7 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
          profileStr,
          memories.isEmpty() ? "（暂无特殊记忆）" : memories,
          currentActionDetail,
+         recentChatContext,
          specialSituation);
 
     QJsonObject userObj;
@@ -1843,6 +1871,129 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
         intent.blush = obj["blush"].toBool(false);
         intent.urgency = obj["urgency"].toInt(1);
 
+        callback(true, intent);
+    });
+}
+
+void AgentService::requestPetInteractionFeedback(const QString &interactionType, const QJsonObject &petStateInfo, std::function<void(bool success, const AIBehaviorIntent &intent)> callback) {
+    AIBehaviorIntent fallbackIntent;
+    fallbackIntent.intent = "chat";
+    fallbackIntent.emotion = "happy";
+    fallbackIntent.action = "bounce";
+    fallbackIntent.emote = "💖";
+
+    if (interactionType == "petting") {
+        fallbackIntent.speech = "（舒服地眯起眼睛蹭蹭）呼噜噜…摸得好舒服呀~ 💖";
+    } else if (interactionType == "poke") {
+        fallbackIntent.speech = "戳我干嘛呀？想我了吗？✨";
+        fallbackIntent.emote = "✨";
+    } else if (interactionType == "throw_recover") {
+        fallbackIntent.speech = "哇啊！头晕乎乎的…快扶我起来！💫";
+        fallbackIntent.emote = "💫";
+    } else if (interactionType == "relocate") {
+        fallbackIntent.speech = "把我挪到这里啦？风景还不错呢~ 🌸";
+        fallbackIntent.emote = "🌸";
+    } else {
+        fallbackIntent.speech = "在呢在呢！主人怎么啦？🐾";
+    }
+
+    if (m_config.apiKey.trimmed().isEmpty() || m_config.apiKey.contains("YOUR_API_KEY")) {
+        callback(true, fallbackIntent);
+        return;
+    }
+
+    auto activePersona = PersonaManager::instance()->currentPersona();
+    QString profileStr = PetMemory::instance()->formatProfileForPrompt();
+    QString memories = PetMemory::instance()->formatForPrompt(2);
+
+    int mood = petStateInfo["mood"].toInt(80);
+    int affection = petStateInfo["affection"].toInt(60);
+    QString currentApp = petStateInfo["current_app"].toString();
+    QString windowTitle = petStateInfo["window_title"].toString();
+
+    // 提取主人近期提问/聊过的话题
+    QString recentChat;
+    if (!m_history.isEmpty()) {
+        for (int i = m_history.size() - 1; i >= 0; --i) {
+            QJsonObject obj = m_history[i].toObject();
+            if (obj["role"].toString() == "user") {
+                recentChat = obj["content"].toString().trimmed();
+                if (recentChat.length() > 50) recentChat = recentChat.left(50) + "...";
+                break;
+            }
+        }
+    }
+
+    QString eventDesc;
+    if (interactionType == "petting") eventDesc = "主人正在用鼠标温柔地抚摸你的头和脸颊（摸头互动）";
+    else if (interactionType == "poke") eventDesc = "主人用鼠标戳了戳你/点击了你一下";
+    else if (interactionType == "throw_recover") eventDesc = "主人刚才把你快速甩手丢了出去，你在地上翻滚后站了起来，有点晕眩或小脾气";
+    else if (interactionType == "relocate") eventDesc = "主人把你抓起来放到了屏幕的新位置（搬家/挪动位置）";
+    else eventDesc = "主人动了动你";
+
+    QString systemPrompt = QString(
+        "你是运行在用户电脑桌面上的AI桌宠伴侣。\n"
+        "【当前人格】: %1 (%2)\n"
+        "【当前状态】: 心情值 %3/100, 亲密度 %4/100\n"
+        "【主人当前正在做的事】: 正在使用应用【%5】(窗口: %6)\n"
+        "%7\n"
+        "%8\n"
+        "【刚刚发生的物理互动事件】: %9\n\n"
+        "【任务要求】\n"
+        "请根据你的人格设定、当前心情、亲密度以及主人正在干的事情，对这次互动给出拟人化、有生命力、有真实情绪的反馈短台词（8~22个字，口语化、接地气、带有性格魅力），并输出纯 JSON（不要包含任何 markdown 代码块或解释）：\n"
+        "{\n"
+        "  \"speech\": \"（8~22字短台词，有性格，有温度）\",\n"
+        "  \"action\": \"bounce\" | \"jump\" | \"stretch\" | \"sit\" | \"blush\",\n"
+        "  \"emote\": \"💖\" | \"✨\" | \"💢\" | \"💫\" | \"💡\" | \"🌸\" | \"🐾\",\n"
+        "  \"blush\": true | false\n"
+        "}"
+    ).arg(activePersona.name,
+         activePersona.defaultSystemPrompt,
+         QString::number(mood),
+         QString::number(affection),
+         currentApp.isEmpty() ? "电脑桌面" : currentApp,
+         windowTitle,
+         recentChat.isEmpty() ? "" : QString("【主人近期向你问过的话题】: \"%1\"").arg(recentChat),
+         memories.isEmpty() ? "" : QString("【关于主人的记忆】: %1").arg(memories),
+         eventDesc);
+
+    QJsonArray messages;
+    QJsonObject sysMsg, usrMsg;
+    sysMsg["role"] = "system";
+    sysMsg["content"] = systemPrompt;
+    usrMsg["role"] = "user";
+    usrMsg["content"] = QString("互动事件: %1，请做出拟人化反应。").arg(eventDesc);
+    messages.append(sysMsg);
+    messages.append(usrMsg);
+
+    sendChatCompletion(messages, [callback, fallbackIntent](bool success, QString const& result) {
+        if (!success) {
+            callback(true, fallbackIntent);
+            return;
+        }
+        QString cleanResult = result.trimmed();
+        if (cleanResult.startsWith("```json")) cleanResult = cleanResult.mid(7);
+        else if (cleanResult.startsWith("```")) cleanResult = cleanResult.mid(3);
+        if (cleanResult.endsWith("```")) cleanResult.chop(3);
+        cleanResult = cleanResult.trimmed();
+
+        QJsonParseError parseErr;
+        auto doc = QJsonDocument::fromJson(cleanResult.toUtf8(), &parseErr);
+        if (parseErr.error != QJsonParseError::NoError || !doc.isObject()) {
+            AIBehaviorIntent res = fallbackIntent;
+            if (!cleanResult.isEmpty() && cleanResult.length() <= 35) {
+                res.speech = cleanResult;
+            }
+            callback(true, res);
+            return;
+        }
+
+        auto obj = doc.object();
+        AIBehaviorIntent intent;
+        intent.speech = obj["speech"].toString(fallbackIntent.speech);
+        intent.action = obj["action"].toString("bounce");
+        intent.emote = obj["emote"].toString("💖");
+        intent.blush = obj["blush"].toBool(false);
         callback(true, intent);
     });
 }

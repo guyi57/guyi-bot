@@ -30,6 +30,13 @@ public:
     void testConnection(std::function<void(bool success, QString const& message)> callback) override;
     void openTask(QString const& taskId) override;
 
+    // 任务会话上下文延续管理
+    QString lastTaskId() const { return m_lastTaskId; }
+    QString lastTaskTitle() const { return m_lastTaskTitle; }
+    bool hasActiveSession() const;
+    void resetSession();
+    void setForceNewTask(bool force) { m_forceNewTask = force; }
+
     // 自动从本地 aipy-pro SQLite 数据库读取 API 密钥
     static QString autoDetectLocalApiKey();
 
@@ -47,4 +54,10 @@ private:
     QString m_baseUrl;
     QString m_apiKey;
     QNetworkAccessManager *m_netMgr;
+
+    // 最近执行的任务上下文（用于连续多轮跟进）
+    QString m_lastTaskId;
+    QString m_lastTaskTitle;
+    qint64 m_lastTaskTime = 0;
+    bool m_forceNewTask = false;
 };

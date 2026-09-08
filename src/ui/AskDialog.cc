@@ -1,5 +1,6 @@
 #include "AskDialog.hpp"
 #include "AgentService.hpp"
+#include "AipyAdapter.hpp"
 #include "Platform/Platform.hpp"
 #include <QHBoxLayout>
 #include <QScreen>
@@ -36,6 +37,32 @@ AskDialog::AskDialog(QWidget *parent)
     });
 
     mainLayout->addLayout(headerLayout);
+
+    // 任务会话延续提示与新建任务按钮
+    m_sessionBanner = new QWidget(this);
+    m_sessionBanner->setStyleSheet("background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 6px;");
+    auto sessionLayout = new QHBoxLayout(m_sessionBanner);
+    sessionLayout->setContentsMargins(8, 4, 8, 4);
+    sessionLayout->setSpacing(6);
+
+    m_sessionLabel = new QLabel("🔄 续接上个任务会话（上下文与生成物自动连贯继承）", m_sessionBanner);
+    m_sessionLabel->setStyleSheet("color: #166534; font-size: 11px; font-weight: 500; border: none; background: transparent;");
+    sessionLayout->addWidget(m_sessionLabel, 1);
+
+    m_resetSessionBtn = new QPushButton("开启新任务", m_sessionBanner);
+    m_resetSessionBtn->setStyleSheet("QPushButton { border: 1px solid #86efac; border-radius: 4px; padding: 2px 8px; font-size: 10.5px; background: #dcfce7; color: #15803d; } QPushButton:hover { background: #bbf7d0; }");
+    m_resetSessionBtn->setCursor(Qt::PointingHandCursor);
+    sessionLayout->addWidget(m_resetSessionBtn, 0);
+
+    connect(m_resetSessionBtn, &QPushButton::clicked, this, [this]() {
+        auto *aipy = AgentService::instance()->aipyAdapter();
+        if (aipy) aipy->resetSession();
+        m_sessionBanner->hide();
+        adjustSize();
+    });
+
+    m_sessionBanner->hide();
+    mainLayout->addWidget(m_sessionBanner);
 
     // 上下文引用卡片（带 X 清除按钮）
     m_contextWidget = new QWidget(this);
@@ -249,5 +276,12 @@ void AskDialog::refreshModelList() {
 void AskDialog::showEvent(QShowEvent *event) {
     QDialog::showEvent(event);
     refreshModelList();
+
+    auto *aipy = AgentService::instance()->aipyAdapter();
+    if (aipy && aipy->hasActiveSession()) {
+        m_sessionBanner->show();
+    } else {
+        m_sessionBanner->hide();
+    }
 }
 

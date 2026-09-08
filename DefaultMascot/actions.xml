@@ -369,19 +369,19 @@
 		</Action>
 
 		<Action Name="WalkAlongWorkAreaFloor" Type="Sequence" Loop="false">
-			<ActionReference Name="Walk" TargetX="${mascot.environment.workArea.left+64+Math.random()*(mascot.environment.workArea.width-128)}" />
+			<ActionReference Name="Walk" TargetX="${Math.max(mascot.environment.workArea.left+64, Math.min(mascot.environment.workArea.right-64, mascot.anchor.x + (Math.random() > 0.5 ? 1 : -1) * (40 + Math.random()*100)))}" />
 		</Action>
 
 		<Action Name="RunAlongWorkAreaFloor" Type="Sequence" Loop="false">
-			<ActionReference Name="Run" TargetX="${mascot.environment.workArea.left+64+Math.random()*(mascot.environment.workArea.width-128)}" />
+			<ActionReference Name="Run" TargetX="${Math.max(mascot.environment.workArea.left+64, Math.min(mascot.environment.workArea.right-64, mascot.anchor.x + (Math.random() > 0.5 ? 1 : -1) * (50 + Math.random()*120)))}" />
 		</Action>
 
 		<Action Name="CrawlAlongWorkAreaFloor" Type="Sequence" Loop="false">
-			<ActionReference Name="Creep" TargetX="${mascot.environment.workArea.left+64+Math.random()*(mascot.environment.workArea.width-128)}" />
+			<ActionReference Name="Creep" TargetX="${Math.max(mascot.environment.workArea.left+64, Math.min(mascot.environment.workArea.right-64, mascot.anchor.x + (Math.random() > 0.5 ? 1 : -1) * (30 + Math.random()*70)))}" />
 		</Action>
 
 		<Action Name="WalkLeftAlongFloorAndSit" Type="Sequence" Loop="false">
-			<ActionReference Name="Walk" TargetX="${mascot.environment.workArea.left+100+Math.random()*300}" />
+			<ActionReference Name="Walk" TargetX="${Math.max(mascot.environment.workArea.left+64, mascot.anchor.x - (50 + Math.random()*90))}" />
 			<ActionReference Name="Stand" Duration="${20+Math.random()*20}" />
 			<ActionReference Name="Look" LookRight="true" />
 			<ActionReference Name="Stand" Duration="${20+Math.random()*20}" />
@@ -389,7 +389,7 @@
 		</Action>
 
 		<Action Name="WalkRightAlongFloorAndSit" Type="Sequence" Loop="false">
-			<ActionReference Name="Walk" TargetX="${mascot.environment.workArea.right-100-Math.random()*300}" />
+			<ActionReference Name="Walk" TargetX="${Math.min(mascot.environment.workArea.right-64, mascot.anchor.x + (50 + Math.random()*90))}" />
 			<ActionReference Name="Stand" Duration="${20+Math.random()*20}" />
 			<ActionReference Name="Look" LookRight="false" />
 			<ActionReference Name="Stand" Duration="${20+Math.random()*20}" />
@@ -407,7 +407,7 @@
 		</Action>
 
 		<Action Name="WalkLeftAndSit" Type="Sequence" Loop="false">
-			<ActionReference Name="Run" TargetX="${mascot.environment.workArea.left+100+Math.random()*300}" />
+			<ActionReference Name="Run" TargetX="${Math.max(mascot.environment.workArea.left+64, mascot.anchor.x - (60 + Math.random()*100))}" />
 			<ActionReference Name="Stand" Duration="${20+Math.random()*20}" />
 			<ActionReference Name="Look" LookRight="true" />
 			<ActionReference Name="Stand" Duration="${20+Math.random()*20}" />
@@ -415,7 +415,7 @@
 		</Action>
 
 		<Action Name="WalkRightAndSit" Type="Sequence" Loop="false">
-			<ActionReference Name="Run" TargetX="${mascot.environment.workArea.right-100-Math.random()*300}" />
+			<ActionReference Name="Run" TargetX="${Math.min(mascot.environment.workArea.right-64, mascot.anchor.x + (60 + Math.random()*100))}" />
 			<ActionReference Name="Stand" Duration="${20+Math.random()*20}" />
 			<ActionReference Name="Look" LookRight="false" />
 			<ActionReference Name="Stand" Duration="${20+Math.random()*20}" />

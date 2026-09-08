@@ -199,6 +199,9 @@ void BehaviorEngine::updateFallRecoverySequence(qint64 now)
         case FallRecoveryPhase::SittingResting:
             if ((now - m_fallPhaseStartTime) >= 1200) { // 休整结束，恢复自由行动
                 m_fallRecoveryPhase = FallRecoveryPhase::None;
+                if (m_activeWidget != nullptr) {
+                    m_activeWidget->triggerInteractionAI("throw_recover");
+                }
             }
             break;
         default:

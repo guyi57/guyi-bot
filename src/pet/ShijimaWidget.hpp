@@ -102,6 +102,7 @@ public:
 
     PetMotionController &motionController() { return m_motion; }
     void triggerEmote(PetEmoteType type, float durationSec = 2.5f) { m_motion.triggerEmote(type, durationSec); }
+    void triggerInteractionAI(const QString &interactionType);
 
     ~ShijimaWidget();
 protected:
@@ -160,7 +161,9 @@ private:
     // 拖拽瞬时速度物理采样与抛物线动力学控制器
     void applyThrowPhysics(double vx, double vy);
     QPoint m_lastMousePos;
+    QPoint m_dragStartGlobalPos;
     qint64 m_lastMouseMoveTime = 0;
+    qint64 m_lastInteractionAITime = 0;
     double m_dragVelocityX = 0.0;
     double m_dragVelocityY = 0.0;
     QTimer *m_throwPhysicsTimer = nullptr;

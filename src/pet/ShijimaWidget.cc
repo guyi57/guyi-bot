@@ -57,6 +57,7 @@
 #include "MusicPlayerManager.hpp"
 #include "SettingsDb.hpp"
 #include "PetDiaryDialog.hpp"
+#include "SystemObserver.hpp"
 #include <shimejifinder/utils.hpp>
 #include <cmath>
 #include <algorithm>
@@ -763,6 +764,7 @@ void ShijimaWidget::mousePressEvent(QMouseEvent *event) {
         m_dragTarget->m_motion.triggerStretch(0.92f, 1.10f);
         m_dragTarget->m_mascot->state->dragging = true;
         m_dragTarget->m_lastMousePos = event->globalPosition().toPoint();
+        m_dragTarget->m_dragStartGlobalPos = event->globalPosition().toPoint();
         m_dragTarget->m_lastMouseMoveTime = QDateTime::currentMSecsSinceEpoch();
         m_dragTarget->m_dragVelocityX = 0.0;
         m_dragTarget->m_dragVelocityY = 0.0;
@@ -887,7 +889,21 @@ void ShijimaWidget::mouseReleaseEvent(QMouseEvent *event) {
             QJsonObject payload;
             payload["mascot_id"] = m_dragTarget->mascotId();
             PetEventBus::instance()->emitEvent("user.click_pet", payload);
+
+            // 区分挪动搬家与轻戳点击
+            int dragDist = (event->globalPosition().toPoint() - m_dragTarget->m_dragStartGlobalPos).manhattanLength();
+            if (dragDist > 60) {
+                m_dragTarget->triggerInteractionAI("relocate");
+            } else if (!m_dragTarget->m_motion.isPetting()) {
+                m_dragTarget->triggerInteractionAI("poke");
+            }
         }
+
+        // 如果刚刚经历了摸头互动，触发 AI 摸头治愈台词
+        if (m_dragTarget->m_motion.isPetting()) {
+            m_dragTarget->triggerInteractionAI("petting");
+        }
+
         setDragTarget(nullptr);
     }
 }
@@ -1571,4 +1587,43 @@ void ShijimaWidget::checkWindowVanished() {
         m_wasOnWindow = currentlyOnWindow;
     }
 }
+
+void ShijimaWidget::triggerInteractionAI(const QString &interactionType) {
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (now - m_lastInteractionAITime < 7000) {
+        return; // 7 秒限频防抖，避免重复向大模型发请求
+    }
+    m_lastInteractionAITime = now;
+
+    QJsonObject stateInfo;
+    auto state = BehaviorEngine::instance()->state();
+    stateInfo["mood"] = state.mood;
+    stateInfo["affection"] = state.affection;
+    stateInfo["boredom"] = state.boredom;
+    stateInfo["current_app"] = SystemObserver::instance()->currentActiveAppName();
+    stateInfo["window_title"] = SystemObserver::instance()->currentActiveWindowTitle();
+
+    AgentService::instance()->requestPetInteractionFeedback(interactionType, stateInfo, [this](bool success, const AIBehaviorIntent &intent) {
+        if (!success || intent.speech.trimmed().isEmpty()) return;
+
+        QMetaObject::invokeMethod(this, [this, intent]() {
+            showMessage(intent.speech, 4500, "", false);
+            if (intent.emote == "💖") m_motion.triggerEmote(PetEmoteType::HappyHeart, 2.5f);
+            else if (intent.emote == "✨") m_motion.triggerEmote(PetEmoteType::Sparkle, 2.5f);
+            else if (intent.emote == "💢") m_motion.triggerEmote(PetEmoteType::AngryVein, 2.5f);
+            else if (intent.emote == "💫") m_motion.triggerEmote(PetEmoteType::DizzySwirl, 2.5f);
+            else if (intent.emote == "💡") m_motion.triggerEmote(PetEmoteType::ThinkingBulb, 2.5f);
+
+            if (intent.action == "bounce" || intent.action == "jump") {
+                m_motion.triggerStretch(0.92f, 1.15f);
+            } else if (intent.action == "stretch") {
+                m_motion.triggerStretch(0.90f, 1.20f);
+            }
+            if (intent.blush) {
+                m_motion.spawnHeart(QPointF(0, -25.0f));
+            }
+        });
+    });
+}
+
 

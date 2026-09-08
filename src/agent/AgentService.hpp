@@ -123,6 +123,9 @@ public:
     // AI 桌面宠物行为意图生成（人格化思考与主动交互）
     void requestPetIntent(const QJsonObject &contextInfo, std::function<void(bool success, const AIBehaviorIntent &intent)> callback);
 
+    // 针对用户触摸、移动、摸头等物理交互的 AI 模型情感与台词反馈
+    void requestPetInteractionFeedback(const QString &interactionType, const QJsonObject &petStateInfo, std::function<void(bool success, const AIBehaviorIntent &intent)> callback);
+
     // AI 自主合成针对未知应用的轻量只读探针脚本 (Self-Synthesizing Sensor)
     void synthesizeAppSensorScript(const QString &appName, const QString &bundleId, const QString &windowTitle, std::function<void(bool success, const QString &scriptCode)> callback);
 

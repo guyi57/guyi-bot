@@ -57,6 +57,19 @@ QString AipyAdapter::effectiveApiKey() const {
     return autoDetectLocalApiKey();
 }
 
+bool AipyAdapter::hasActiveSession() const {
+    if (m_lastTaskId.isEmpty()) return false;
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    return (now - m_lastTaskTime) < (20 * 60 * 1000); // 20分钟内有效
+}
+
+void AipyAdapter::resetSession() {
+    m_lastTaskId.clear();
+    m_lastTaskTitle.clear();
+    m_lastTaskTime = 0;
+    m_forceNewTask = false;
+}
+
 void AipyAdapter::executeTask(QString const& instruction,
                              QString const& contextText,
                              std::function<void(QString const& progressMsg)> progressCallback,
@@ -70,14 +83,6 @@ void AipyAdapter::executeTask(QString const& instruction,
         finishCallback(res);
         return;
     }
-
-    QString endpoint = m_baseUrl;
-    while (endpoint.endsWith('/')) endpoint.chop(1);
-    endpoint += "/api/aipy/create-task";
-
-    QNetworkRequest request{QUrl(endpoint)};
-    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    request.setRawHeader("Authorization", QString("Bearer %1").arg(key).toUtf8());
 
     // 组合任务 instruction，明确要求采用美观结构化的 Markdown 输出（带段落、小标题与列表）
     QString formattingNotice = 
@@ -93,63 +98,174 @@ void AipyAdapter::executeTask(QString const& instruction,
         fullInstruction = instruction + formattingNotice;
     }
 
-    QJsonObject taskParam;
-    taskParam["title"] = instruction.left(40).trimmed();
-    taskParam["instruction"] = fullInstruction;
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    bool shouldContinueSession = false;
 
-    // Body 必须是 JSON 数组（按位置传参）
-    QJsonArray rootArray;
-    rootArray.append(taskParam);
-
-    QByteArray postData = QJsonDocument(rootArray).toJson(QJsonDocument::Compact);
-    QNetworkReply *reply = m_netMgr->post(request, postData);
-
-    if (progressCallback) {
-        progressCallback("🚀 正在向 aipy-pro 提交智能体任务...");
+    // 智能检测：若最近 20 分钟内执行过任务，且用户未显式要求“新建任务/重新开始”，优先继承延续上一个任务会话
+    if (!m_forceNewTask && !m_lastTaskId.isEmpty() && (now - m_lastTaskTime) < (20 * 60 * 1000)) {
+        QString insLower = instruction.trimmed().toLower();
+        if (!insLower.startsWith("新建任务") && !insLower.startsWith("重新开始") &&
+            !insLower.startsWith("重开任务") && !insLower.startsWith("new task") &&
+            !insLower.startsWith("reset task")) {
+            shouldContinueSession = true;
+        }
     }
+    m_forceNewTask = false;
 
-    QObject::connect(reply, &QNetworkReply::finished, [this, reply, progressCallback, finishCallback]() {
-        reply->deleteLater();
-        if (reply->error() != QNetworkReply::NoError) {
-            AgentTaskResult res;
-            res.success = false;
-            res.error = QString("aipy-pro 创建任务失败: %1 (请确认本地 aipy-pro 是否已启动)").arg(reply->errorString());
-            finishCallback(res);
-            return;
-        }
+    auto createNewTask = [this, instruction, fullInstruction, key, progressCallback, finishCallback]() {
+        QString endpoint = m_baseUrl;
+        while (endpoint.endsWith('/')) endpoint.chop(1);
+        endpoint += "/api/aipy/create-task";
 
-        QByteArray data = reply->readAll();
-        auto doc = QJsonDocument::fromJson(data);
-        if (!doc.isObject()) {
-            AgentTaskResult res;
-            res.success = false;
-            res.error = "aipy-pro 响应数据非合法 JSON 格式";
-            finishCallback(res);
-            return;
-        }
+        QNetworkRequest request{QUrl(endpoint)};
+        request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+        request.setRawHeader("Authorization", QString("Bearer %1").arg(key).toUtf8());
 
-        auto rootObj = doc.object();
-        QString taskId;
-        if (rootObj.contains("data") && rootObj["data"].isString()) {
-            taskId = rootObj["data"].toString();
-        } else if (rootObj.contains("data") && rootObj["data"].isObject()) {
-            taskId = rootObj["data"].toObject()["taskId"].toString();
-        }
+        QJsonObject taskParam;
+        taskParam["title"] = instruction.left(40).trimmed();
+        taskParam["instruction"] = fullInstruction;
 
-        if (taskId.isEmpty()) {
-            AgentTaskResult res;
-            res.success = false;
-            res.error = "未从 aipy-pro 获取到有效的 TaskId";
-            finishCallback(res);
-            return;
-        }
+        QJsonArray rootArray;
+        rootArray.append(taskParam);
+
+        QByteArray postData = QJsonDocument(rootArray).toJson(QJsonDocument::Compact);
+        QNetworkReply *reply = m_netMgr->post(request, postData);
 
         if (progressCallback) {
-            progressCallback(QString("🤖 aipy-pro 已接管任务 [%1]，正在自主规划执行...").arg(taskId.left(8)));
+            progressCallback("🚀 正在向 aipy-pro 创建新智能体任务...");
         }
 
-        // 开始非阻塞轮询状态
-        pollTask(taskId, 1, progressCallback, finishCallback);
+        QObject::connect(reply, &QNetworkReply::finished, [this, reply, instruction, progressCallback, finishCallback]() {
+            reply->deleteLater();
+            if (reply->error() != QNetworkReply::NoError) {
+                AgentTaskResult res;
+                res.success = false;
+                res.error = QString("aipy-pro 创建任务失败: %1 (请确认本地 aipy-pro 是否已启动)").arg(reply->errorString());
+                finishCallback(res);
+                return;
+            }
+
+            QByteArray data = reply->readAll();
+            auto doc = QJsonDocument::fromJson(data);
+            if (!doc.isObject()) {
+                AgentTaskResult res;
+                res.success = false;
+                res.error = "aipy-pro 响应数据非合法 JSON 格式";
+                finishCallback(res);
+                return;
+            }
+
+            auto rootObj = doc.object();
+            QString taskId;
+            if (rootObj.contains("data") && rootObj["data"].isString()) {
+                taskId = rootObj["data"].toString();
+            } else if (rootObj.contains("data") && rootObj["data"].isObject()) {
+                taskId = rootObj["data"].toObject()["taskId"].toString();
+            }
+
+            if (taskId.isEmpty()) {
+                AgentTaskResult res;
+                res.success = false;
+                res.error = "未从 aipy-pro 获取到有效的 TaskId";
+                finishCallback(res);
+                return;
+            }
+
+            m_lastTaskId = taskId;
+            m_lastTaskTitle = instruction.left(40).trimmed();
+            m_lastTaskTime = QDateTime::currentMSecsSinceEpoch();
+
+            if (progressCallback) {
+                progressCallback(QString("🤖 aipy-pro 已接管新任务 [%1]，正在自主规划执行...").arg(taskId.left(8)));
+            }
+
+            // 开始非阻塞轮询状态
+            pollTask(taskId, 1, progressCallback, finishCallback);
+        });
+    };
+
+    if (!shouldContinueSession) {
+        createNewTask();
+        return;
+    }
+
+    // 智能延续当前已有任务上下文：先查询当前任务状态
+    QString endpoint = m_baseUrl;
+    while (endpoint.endsWith('/')) endpoint.chop(1);
+    QString checkEndpoint = endpoint + "/api/aipy/task-by-id";
+
+    QNetworkRequest checkReq{QUrl(checkEndpoint)};
+    checkReq.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    checkReq.setRawHeader("Authorization", QString("Bearer %1").arg(key).toUtf8());
+
+    QJsonArray checkArray;
+    checkArray.append(m_lastTaskId);
+
+    if (progressCallback) {
+        progressCallback(QString("🔄 正在承接上一个任务 [%1] 的会话上下文...").arg(m_lastTaskId.left(8)));
+    }
+
+    QNetworkReply *checkReply = m_netMgr->post(checkReq, QJsonDocument(checkArray).toJson(QJsonDocument::Compact));
+    QObject::connect(checkReply, &QNetworkReply::finished, [this, checkReply, key, endpoint, fullInstruction, createNewTask, progressCallback, finishCallback]() {
+        checkReply->deleteLater();
+        QString existingTaskId = m_lastTaskId;
+        QString state;
+
+        if (checkReply->error() == QNetworkReply::NoError) {
+            auto doc = QJsonDocument::fromJson(checkReply->readAll());
+            if (doc.isObject() && doc.object().contains("data") && doc.object()["data"].isObject()) {
+                state = doc.object()["data"].toObject()["state"].toString().toUpper();
+            }
+        }
+
+        // 如果旧任务在 aipy-pro 中已不存在，平滑降级创建新任务
+        if (state.isEmpty()) {
+            createNewTask();
+            return;
+        }
+
+        // 根据已有任务状态决定使用 resume-task 还是 input
+        QString sendEndpoint;
+        QJsonArray sendArray;
+        sendArray.append(existingTaskId);
+
+        if (state == "EXIT" || state == "IDLE") {
+            sendEndpoint = endpoint + "/api/aipy/resume-task";
+            QJsonObject resumeOpt;
+            resumeOpt["instruction"] = fullInstruction;
+            resumeOpt["source"] = "api";
+            sendArray.append(resumeOpt);
+        } else {
+            sendEndpoint = endpoint + "/api/aipy/input";
+            sendArray.append(fullInstruction);
+            sendArray.append("api");
+        }
+
+        QNetworkRequest sendReq{QUrl(sendEndpoint)};
+        sendReq.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+        sendReq.setRawHeader("Authorization", QString("Bearer %1").arg(key).toUtf8());
+
+        if (progressCallback) {
+            progressCallback(QString("⚡ 正在沿用任务 [%1] 追加跟进指令...").arg(existingTaskId.left(8)));
+        }
+
+        QNetworkReply *sendReply = m_netMgr->post(sendReq, QJsonDocument(sendArray).toJson(QJsonDocument::Compact));
+        QObject::connect(sendReply, &QNetworkReply::finished, [this, sendReply, existingTaskId, createNewTask, progressCallback, finishCallback]() {
+            sendReply->deleteLater();
+            if (sendReply->error() != QNetworkReply::NoError) {
+                // 若续跑失败，自动无感退回到创建新任务
+                createNewTask();
+                return;
+            }
+
+            m_lastTaskTime = QDateTime::currentMSecsSinceEpoch();
+            if (progressCallback) {
+                progressCallback(QString("🤖 已在任务 [%1] 中继续执行跟进指令...").arg(existingTaskId.left(8)));
+            }
+
+            // 继续轮询当前已有任务
+            pollTask(existingTaskId, 1, progressCallback, finishCallback);
+        });
     });
 }
 

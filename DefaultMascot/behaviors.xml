@@ -95,12 +95,12 @@
 			</Behavior>
 			<Behavior Name="WalkLeftAlongFloorAndSit" Frequency="120" Hidden="true" />
 			<Behavior Name="WalkRightAlongFloorAndSit" Frequency="120" Hidden="true" />
-			<Behavior Name="GrabWorkAreaBottomLeftWall" Frequency="30" Hidden="true" />
-			<Behavior Name="GrabWorkAreaBottomRightWall" Frequency="30" Hidden="true" />
+			<Behavior Name="GrabWorkAreaBottomLeftWall" Frequency="15" Condition="#{mascot.anchor.x - mascot.environment.workArea.left &lt; 200}" Hidden="true" />
+			<Behavior Name="GrabWorkAreaBottomRightWall" Frequency="15" Condition="#{mascot.environment.workArea.right - mascot.anchor.x &lt; 200}" Hidden="true" />
 			<Behavior Name="WalkLeftAndSit" Frequency="100" Hidden="true" />
 			<Behavior Name="WalkRightAndSit" Frequency="100" Hidden="true" />
-			<Behavior Name="WalkAndGrabBottomLeftWall" Frequency="35" />
-			<Behavior Name="WalkAndGrabBottomRightWall" Frequency="35" />
+			<Behavior Name="WalkAndGrabBottomLeftWall" Frequency="15" Condition="#{mascot.anchor.x - mascot.environment.workArea.left &lt; 200}" />
+			<Behavior Name="WalkAndGrabBottomRightWall" Frequency="15" Condition="#{mascot.environment.workArea.right - mascot.anchor.x &lt; 200}" />
 			<Behavior Name="JumpFromBottomOfIE" Frequency="15" Condition="#{mascot.anchor.x &gt;= mascot.environment.activeIE.left &amp;&amp;
 				mascot.anchor.x &lt; mascot.environment.activeIE.right}" />
 				
