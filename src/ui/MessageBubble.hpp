@@ -26,8 +26,13 @@ public:
     void hideMessage();
     void showHistoryDialog();
     bool hasMessage() const { return !m_text.isEmpty(); }
+    bool isDisplaying() const { return isVisible() && !m_text.isEmpty(); }
+    bool isCountdownRunning() const { return m_countdownTimer && m_countdownTimer->isActive() && m_remainingSeconds > 0; }
+    int remainingSeconds() const { return m_remainingSeconds; }
     QString const& message() const { return m_text; }
     bool isCompactCuteMode() const { return m_isCompactCuteMode; }
+
+    std::function<void()> onClosed = nullptr;
 
     static QString normalizeMarkdownText(QString const& raw);
     static QString markdownToRichHtml(QString const& raw);

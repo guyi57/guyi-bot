@@ -102,6 +102,9 @@ ShijimaWidget::ShijimaWidget(MascotData *mascotData,
     setAcceptDrops(true);
     setFixedSize(m_windowWidth, m_windowHeight);
     m_messageBubble = new MessageBubble(m_windowedMode ? parent : nullptr);
+    m_messageBubble->onClosed = [this]() {
+        processNextQueuedMessage();
+    };
     m_selectionToolbar = new SelectionToolbar(m_windowedMode ? parent : nullptr);
     m_askDialog = new AskDialog(m_windowedMode ? parent : nullptr);
     m_settingsDialog = new AgentSettingsDialog(m_windowedMode ? parent : nullptr);
@@ -865,7 +868,6 @@ void ShijimaWidget::mouseReleaseEvent(QMouseEvent *event) {
                       << m_dragTarget->m_dragVelocityX << ", " << m_dragTarget->m_dragVelocityY 
                       << "), 标量速度: " << throwSpeed << std::endl;
             m_dragTarget->applyThrowPhysics(m_dragTarget->m_dragVelocityX, m_dragTarget->m_dragVelocityY);
-            m_dragTarget->m_interruptedGoal = PetInterruptedGoal::None;
         } else {
             // 平稳放下：完全清空投掷物理速度，避免产生意外位移冲量
             m_dragTarget->m_isThrowFlying = false;
@@ -878,30 +880,20 @@ void ShijimaWidget::mouseReleaseEvent(QMouseEvent *event) {
             // 平稳着陆吸附或原地笔直下落，绝不横向乱跳
             m_dragTarget->snapToNearestBorderOrWindow();
 
-            // 如果刚才有目标被硬生生打断，放下来后发个可爱小脾气！
-            if (m_dragTarget->m_interruptedGoal != PetInterruptedGoal::None) {
-                m_dragTarget->triggerTantrum(m_dragTarget->m_interruptedGoal);
-                m_dragTarget->m_interruptedGoal = PetInterruptedGoal::None;
-            }
-        }
-
-        if (throwSpeed < 6.0) {
             QJsonObject payload;
             payload["mascot_id"] = m_dragTarget->mascotId();
             PetEventBus::instance()->emitEvent("user.click_pet", payload);
 
-            // 区分挪动搬家与轻戳点击
+            // 区分摸头、挪动搬家与轻戳点击，交由大模型结合当前心情与可用动作进行决策
             int dragDist = (event->globalPosition().toPoint() - m_dragTarget->m_dragStartGlobalPos).manhattanLength();
-            if (dragDist > 60) {
-                m_dragTarget->triggerInteractionAI("relocate");
-            } else if (!m_dragTarget->m_motion.isPetting()) {
-                m_dragTarget->triggerInteractionAI("poke");
+            if (m_dragTarget->m_motion.isPetting()) {
+                m_dragTarget->handlePatrolInterruption("petting");
+            } else if (dragDist > 60) {
+                m_dragTarget->handlePatrolInterruption("relocate");
+            } else {
+                m_dragTarget->handlePatrolInterruption("poke");
             }
-        }
-
-        // 如果刚刚经历了摸头互动，触发 AI 摸头治愈台词
-        if (m_dragTarget->m_motion.isPetting()) {
-            m_dragTarget->triggerInteractionAI("petting");
+            m_dragTarget->m_interruptedGoal = PetInterruptedGoal::None;
         }
 
         setDragTarget(nullptr);
@@ -1054,6 +1046,7 @@ void ShijimaWidget::applyThrowPhysics(double vx, double vy) {
             if (landingBehavior == "LieDown") {
                 BehaviorEngine::instance()->startFallRecovery(this);
             }
+            handlePatrolInterruption("throw");
         }
     });
 
@@ -1198,10 +1191,25 @@ bool ShijimaWidget::checkAndJumpToActiveIE() {
     return false;
 }
 
-void ShijimaWidget::showMessage(QString const& text, int duration, QString const& appTarget, bool moveToCenter) {
+void ShijimaWidget::queueOrShowMessage(const QString &text, int duration, const QString &appTarget, bool moveToCenter, std::function<void()> onStart) {
     (void)moveToCenter;
     if (m_messageBubble == nullptr || !m_mascot || !m_mascot->state || !m_mascot->state->env) {
         return;
+    }
+
+    // 关键防冲突队列保护机制：
+    // 若当前气泡正在展示且倒计时仍在运行（用户正在阅读任务结果/交付/重要提醒），严禁粗暴打断！
+    // 放入待播报队列排队，等待当前气泡自然阅读倒计时归零关闭后，优雅留白 2.2 秒再弹出。
+    if (m_messageBubble->isDisplaying() && m_messageBubble->isCountdownRunning()) {
+        std::cout << "[气泡防冲突队列] 检测到当前有正在阅读的弹窗 (剩余倒计时 " << m_messageBubble->remainingSeconds()
+                  << "s)，新动作与消息已加入队列排队等待: " << text.left(25).toStdString() << std::endl;
+        m_bubbleQueue.enqueue({text, duration, appTarget, moveToCenter, onStart});
+        return;
+    }
+
+    // 当前无弹窗或仅为无倒计时的进度提示，立即执行伴随动作与气泡展示
+    if (onStart) {
+        onStart();
     }
 
     m_isRunningToCenter = false;
@@ -1217,6 +1225,33 @@ void ShijimaWidget::showMessage(QString const& text, int duration, QString const
     // 立即在当前桌宠头顶弹出气泡并计算贴合位置
     m_messageBubble->showMessage(text, duration, appTarget);
     updateOffsets();
+}
+
+void ShijimaWidget::processNextQueuedMessage() {
+    if (m_bubbleQueue.isEmpty()) return;
+
+    // 前一个弹窗关闭后，静默留白 2200 毫秒（2.2秒），不抢视觉，给用户留出自然的呼吸与空歇期
+    QTimer::singleShot(2200, this, [this]() {
+        if (m_bubbleQueue.isEmpty()) return;
+        auto item = m_bubbleQueue.dequeue();
+        std::cout << "[气泡防冲突队列] 优雅留白结束，弹出下一个队列动作与气泡: " << item.text.left(25).toStdString() << std::endl;
+        if (item.onStart) {
+            item.onStart();
+        }
+        m_isRunningToCenter = false;
+        if (m_moveAnimation != nullptr) {
+            m_moveAnimation->stop();
+            delete m_moveAnimation;
+            m_moveAnimation = nullptr;
+        }
+        BehaviorEngine::instance()->setActiveWidget(this);
+        m_messageBubble->showMessage(item.text, item.duration, item.appTarget);
+        updateOffsets();
+    });
+}
+
+void ShijimaWidget::showMessage(QString const& text, int duration, QString const& appTarget, bool moveToCenter) {
+    queueOrShowMessage(text, duration, appTarget, moveToCenter, nullptr);
 }
 
 void ShijimaWidget::hideMessage() {
@@ -1504,72 +1539,132 @@ ShijimaWidget::PetInterruptedGoal ShijimaWidget::detectCurrentGoal() {
     return PetInterruptedGoal::None;
 }
 
-void ShijimaWidget::triggerTantrum(PetInterruptedGoal goal) {
-    if (goal == PetInterruptedGoal::None) return;
+void ShijimaWidget::handlePatrolInterruption(const QString &interruptType, const QString &customDetail) {
     qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (now - m_lastTantrumTime < 4000) return; // 4秒防刷屏
-    m_lastTantrumTime = now;
+    if (now - m_lastInteractionAITime < 3500) {
+        return; // 3.5 秒防抖防刷屏
+    }
+    m_lastInteractionAITime = now;
 
-    // 心情微降，进入傲娇受挫状态
-    BehaviorEngine::instance()->addAffection(0, -4);
+    QString goalDesc;
+    switch (m_interruptedGoal) {
+    case PetInterruptedGoal::ClimbingCeiling:
+        goalDesc = "原本正奋力爬墙登顶天花板看风景";
+        break;
+    case PetInterruptedGoal::JumpingWindow:
+        goalDesc = "原本正找准角度准备大显身手跳上活动窗口";
+        break;
+    case PetInterruptedGoal::StandingOnWindow:
+        goalDesc = "原本站在活动窗口边缘威风凛凛地巡视巡逻";
+        break;
+    case PetInterruptedGoal::Breeding:
+        goalDesc = "原本正蹲在地上使劲要把地里的小伙伴拔出来";
+        break;
+    case PetInterruptedGoal::RunningFast:
+        goalDesc = "原本正在屏幕地面全速冲刺狂奔巡逻";
+        break;
+    default:
+        goalDesc = "原本正在屏幕地面悠闲漫步漫游巡逻";
+        break;
+    }
 
-    // 原地转头/坐下
-    if (m_mascot) {
-        auto spin = m_mascot->initial_behavior_list().find("SitAndSpinHead", false);
-        if (spin != nullptr) {
-            m_mascot->next_behavior("SitAndSpinHead");
+    QString detail = customDetail;
+    if (detail.isEmpty()) {
+        if (interruptType == "throw" || interruptType == "throw_flick") {
+            detail = QString("桌宠%1，突然被主人一把抓住并快速甩手丢飞了出去，在地上翻滚摔倒！").arg(goalDesc);
+        } else if (interruptType == "relocate") {
+            detail = QString("桌宠%1，被主人一把抓起拎到半空中打断，搬到了屏幕新位置放下。").arg(goalDesc);
+        } else if (interruptType == "poke") {
+            detail = QString("桌宠%1，被主人用鼠标戳了戳打断。").arg(goalDesc);
+        } else if (interruptType == "petting") {
+            detail = QString("主人正在用鼠标温柔抚摸桌宠的头和脸颊（摸头抚慰互动）。");
+        } else if (interruptType == "window_vanished") {
+            detail = QString("桌宠原本站在活动窗口边缘巡逻，主人突然关掉了该窗口，导致脚下一空直接摔落到了地面。");
         } else {
-            auto sit = m_mascot->initial_behavior_list().find("SitDown", false);
-            if (sit != nullptr) m_mascot->next_behavior("SitDown");
+            detail = QString("桌宠%1，突然被打断了巡逻。").arg(goalDesc);
         }
     }
 
-    QStringList quotes;
-    switch (goal) {
-    case PetInterruptedGoal::ClimbingCeiling:
-        quotes = {
-            "💢 呜哇！我明明快要爬到天花板上看风景了，你怎么抓我呀！(>д<)",
-            "😤 坏蛋主人！差一点点就登顶了，全被你破坏啦！",
-            "🥺 人家辛辛苦苦爬那么高，一秒钟回到解放前...哼！",
-            "😤 讨厌！天花板上的风景我都还没看清呢！"
-        };
-        break;
-    case PetInterruptedGoal::JumpingWindow:
-        quotes = {
-            "💢 呀！我刚看准角度准备跳上窗口的，手滑被你拎起来了！",
-            "😤 抓我干嘛呀！我正准备大显身手跳上窗口呢！",
-            "🥺 差一点点就跳上去啦！主人讨厌鬼～",
-            "😠 呜...我的窗口起跳连招全被打乱啦！"
-        };
-        break;
-    case PetInterruptedGoal::StandingOnWindow:
-        quotes = {
-            "💫 诶？！刚才那么大一个窗口去哪了？！是谁把它关掉的呀！",
-            "😵 哎哟喂！立足点突然没了...屁股摔得好痛痛！(╥﹏╥)",
-            "😤 哼！窗口怎么说没就没，害我直接掉下来啦！",
-            "🥺 怎么脚下一空就摔地上了...呜呜呜..."
-        };
-        break;
-    case PetInterruptedGoal::Breeding:
-        quotes = {
-            "💢 哎呀！我刚要把小伙伴从地里拔出来呢，被打断啦！",
-            "😤 哼！把我的小伙伴还给我！"
-        };
-        break;
-    case PetInterruptedGoal::RunningFast:
-        quotes = {
-            "💢 呼哧呼哧...我刚跑得正起劲呢！急刹车差点摔倒！😤",
-            "😤 别挡道别挡道！我正赶着巡逻呢！"
-        };
-        break;
-    default:
-        break;
-    }
+    QJsonObject petStateInfo;
+    auto state = BehaviorEngine::instance()->state();
+    petStateInfo["mood"] = state.mood;
+    petStateInfo["affection"] = state.affection;
+    petStateInfo["boredom"] = state.boredom;
+    petStateInfo["energy"] = state.energy;
+    petStateInfo["current_app"] = SystemObserver::instance()->currentActiveAppName();
+    petStateInfo["window_title"] = SystemObserver::instance()->currentActiveWindowTitle();
 
-    if (!quotes.isEmpty()) {
-        QString speech = quotes[rand() % quotes.size()];
-        showMessage(speech, 3500);
-    }
+    QStringList allowedBehaviors = {
+        "RunAlongWorkAreaFloor (在地面全速狂奔巡逻，充满活力或急躁赶路)",
+        "WalkAlongWorkAreaFloor (在地面悠闲漫步巡逻，心情平静温和)",
+        "SitDown (原地乖巧坐下，适合休息或听话)",
+        "LieDown (趴在地上摆烂/打滚，适合受挫、撒娇、疲劳或被扔出去摔倒)",
+        "SitWhileDanglingLegs (坐在边缘晃悠小短腿，适合好奇看戏或悠闲休息)",
+        "SitAndSpinHead (原地傲娇转头，适合生气、傲娇小脾气)",
+        "SplitIntoTwo (分身出一个小伙伴，适合极度开心或想要帮手)",
+        "PullUpShimeji (从地里拔出一个同伴，适合玩耍互动)",
+        "JumpFromBottomOfIE (从地面向上方活动窗口奋力起跳，适合兴奋或向主人报告)",
+        "ClimbAlongWall (沿墙壁向上攀爬，适合探险或想要登高)"
+    };
+
+    AgentService::instance()->requestPetInterruptionDecision(
+        interruptType,
+        detail,
+        petStateInfo,
+        allowedBehaviors,
+        [this](bool success, const AIBehaviorIntent &intent) {
+            if (!success || intent.speech.trimmed().isEmpty()) return;
+
+            QMetaObject::invokeMethod(this, [this, intent]() {
+                queueOrShowMessage(
+                    intent.speech,
+                    4000,
+                    "",
+                    false,
+                    [this, intent]() {
+                        // 1. 切换动作行为
+                        if (!intent.behavior.isEmpty()) {
+                            trySetBehavior(intent.behavior.toStdString());
+                        }
+
+                        // 2. 表情贴纸
+                        if (intent.emote == "💖" || intent.emote == "🌸") {
+                            m_motion.triggerEmote(PetEmoteType::HappyHeart, 2.5f);
+                        } else if (intent.emote == "✨" || intent.emote == "🐾") {
+                            m_motion.triggerEmote(PetEmoteType::Sparkle, 2.5f);
+                        } else if (intent.emote == "💢") {
+                            m_motion.triggerEmote(PetEmoteType::AngryVein, 2.5f);
+                        } else if (intent.emote == "💫") {
+                            m_motion.triggerEmote(PetEmoteType::DizzySwirl, 2.5f);
+                        } else if (intent.emote == "💡") {
+                            m_motion.triggerEmote(PetEmoteType::ThinkingBulb, 2.5f);
+                        } else if (intent.emote == "💤") {
+                            m_motion.triggerEmote(PetEmoteType::SleepZzz, 2.5f);
+                        }
+
+                        // 3. 微物理形变
+                        if (intent.action == "bounce" || intent.action == "jump") {
+                            m_motion.triggerStretch(0.92f, 1.15f);
+                        } else if (intent.action == "stretch") {
+                            m_motion.triggerStretch(0.88f, 1.22f);
+                        } else if (intent.action == "squash") {
+                            m_motion.triggerSquash(1.18f, 0.82f);
+                        }
+
+                        if (intent.blush) {
+                            m_motion.spawnHeart(QPointF(0, -25.0f));
+                        }
+                    }
+                );
+            });
+        }
+    );
+}
+
+void ShijimaWidget::triggerTantrum(PetInterruptedGoal goal) {
+    if (goal == PetInterruptedGoal::None) return;
+    m_interruptedGoal = goal;
+    handlePatrolInterruption(goal == PetInterruptedGoal::StandingOnWindow ? "window_vanished" : "tantrum");
 }
 
 void ShijimaWidget::checkWindowVanished() {
@@ -1582,48 +1677,15 @@ void ShijimaWidget::checkWindowVanished() {
     // 如果之前在窗口上，现在突然由于窗口被关闭/移走而进入下落状态
     if (m_wasOnWindow && !currentlyOnWindow && beh.contains("Fall", Qt::CaseInsensitive)) {
         m_wasOnWindow = false;
-        triggerTantrum(PetInterruptedGoal::StandingOnWindow);
+        m_interruptedGoal = PetInterruptedGoal::StandingOnWindow;
+        handlePatrolInterruption("window_vanished");
     } else {
         m_wasOnWindow = currentlyOnWindow;
     }
 }
 
 void ShijimaWidget::triggerInteractionAI(const QString &interactionType) {
-    qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (now - m_lastInteractionAITime < 7000) {
-        return; // 7 秒限频防抖，避免重复向大模型发请求
-    }
-    m_lastInteractionAITime = now;
-
-    QJsonObject stateInfo;
-    auto state = BehaviorEngine::instance()->state();
-    stateInfo["mood"] = state.mood;
-    stateInfo["affection"] = state.affection;
-    stateInfo["boredom"] = state.boredom;
-    stateInfo["current_app"] = SystemObserver::instance()->currentActiveAppName();
-    stateInfo["window_title"] = SystemObserver::instance()->currentActiveWindowTitle();
-
-    AgentService::instance()->requestPetInteractionFeedback(interactionType, stateInfo, [this](bool success, const AIBehaviorIntent &intent) {
-        if (!success || intent.speech.trimmed().isEmpty()) return;
-
-        QMetaObject::invokeMethod(this, [this, intent]() {
-            showMessage(intent.speech, 4500, "", false);
-            if (intent.emote == "💖") m_motion.triggerEmote(PetEmoteType::HappyHeart, 2.5f);
-            else if (intent.emote == "✨") m_motion.triggerEmote(PetEmoteType::Sparkle, 2.5f);
-            else if (intent.emote == "💢") m_motion.triggerEmote(PetEmoteType::AngryVein, 2.5f);
-            else if (intent.emote == "💫") m_motion.triggerEmote(PetEmoteType::DizzySwirl, 2.5f);
-            else if (intent.emote == "💡") m_motion.triggerEmote(PetEmoteType::ThinkingBulb, 2.5f);
-
-            if (intent.action == "bounce" || intent.action == "jump") {
-                m_motion.triggerStretch(0.92f, 1.15f);
-            } else if (intent.action == "stretch") {
-                m_motion.triggerStretch(0.90f, 1.20f);
-            }
-            if (intent.blush) {
-                m_motion.spawnHeart(QPointF(0, -25.0f));
-            }
-        });
-    });
+    handlePatrolInterruption(interactionType);
 }
 
 

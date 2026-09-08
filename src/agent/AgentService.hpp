@@ -20,7 +20,8 @@ struct AIBehaviorIntent {
     QString emotion = "happy";   // "happy", "bored", "angry", "sleepy", "curious", "caring", "proud"
     QString target = "cursor";   // "cursor", "window", "screen_edge"
     QString speech;              // 简练短句（3~20字）
-    QString action;              // e.g. "jump", "bounce", "dangle", "sit", "walk", "sleep"
+    QString action;              // e.g. "jump", "bounce", "dangle", "sit", "walk", "sleep", "stretch", "squash"
+    QString behavior;            // 具体 Shimeji 行为名称，如 "RunAlongWorkAreaFloor", "ClimbAlongWall", "SitDown", "LieDown" 等
     QString emote;               // e.g. "💖", "✨", "💤", "💢", "💫", "💡", "🎵"
     bool blush = false;          // 是否害羞脸红
     int urgency = 1;             // 1~5
@@ -125,6 +126,15 @@ public:
 
     // 针对用户触摸、移动、摸头等物理交互的 AI 模型情感与台词反馈
     void requestPetInteractionFeedback(const QString &interactionType, const QJsonObject &petStateInfo, std::function<void(bool success, const AIBehaviorIntent &intent)> callback);
+
+    // 巡逻打断感知与大模型决策（结合心情、打断事件、可用行为与性格）
+    void requestPetInterruptionDecision(
+        const QString &interruptType,
+        const QString &interruptDetail,
+        const QJsonObject &petStateInfo,
+        const QStringList &allowedBehaviors,
+        std::function<void(bool success, const AIBehaviorIntent &intent)> callback
+    );
 
     // AI 自主合成针对未知应用的轻量只读探针脚本 (Self-Synthesizing Sensor)
     void synthesizeAppSensorScript(const QString &appName, const QString &bundleId, const QString &windowTitle, std::function<void(bool success, const QString &scriptCode)> callback);

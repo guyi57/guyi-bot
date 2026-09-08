@@ -1998,6 +1998,182 @@ void AgentService::requestPetInteractionFeedback(const QString &interactionType,
     });
 }
 
+void AgentService::requestPetInterruptionDecision(
+    const QString &interruptType,
+    const QString &interruptDetail,
+    const QJsonObject &petStateInfo,
+    const QStringList &allowedBehaviors,
+    std::function<void(bool success, const AIBehaviorIntent &intent)> callback)
+{
+    // 构造高度匹配场景的离线保底意图
+    AIBehaviorIntent fallbackIntent;
+    fallbackIntent.intent = "interruption_react";
+    fallbackIntent.action = "bounce";
+    fallbackIntent.emote = "✨";
+    fallbackIntent.blush = false;
+
+    if (interruptType == "throw" || interruptType == "throw_flick") {
+        fallbackIntent.speech = "哎哟喂！摔了个大跟头…屁股痛痛！💫";
+        fallbackIntent.behavior = "LieDown";
+        fallbackIntent.emote = "💫";
+        fallbackIntent.action = "squash";
+    } else if (interruptType == "window_vanished") {
+        fallbackIntent.speech = "咦？！踩着的窗口怎么突然消失了！好险！💢";
+        fallbackIntent.behavior = "SitAndSpinHead";
+        fallbackIntent.emote = "💢";
+        fallbackIntent.action = "squash";
+    } else if (interruptType == "relocate") {
+        fallbackIntent.speech = "把你桌宠搬到新家啦？那我就在这边巡逻咯~ ✨";
+        fallbackIntent.behavior = "WalkAlongWorkAreaFloor";
+        fallbackIntent.emote = "✨";
+        fallbackIntent.action = "stretch";
+    } else if (interruptType == "poke") {
+        fallbackIntent.speech = "戳我干嘛呀？想跟我玩了吗？💖";
+        fallbackIntent.behavior = "SitWhileDanglingLegs";
+        fallbackIntent.emote = "💖";
+        fallbackIntent.action = "bounce";
+    } else if (interruptType == "petting") {
+        fallbackIntent.speech = "（舒服地眯起眼睛）呼噜噜…摸得好舒服呀~ 💖";
+        fallbackIntent.behavior = "SitDown";
+        fallbackIntent.emote = "💖";
+        fallbackIntent.action = "bounce";
+        fallbackIntent.blush = true;
+    } else if (interruptType == "agent_message") {
+        fallbackIntent.speech = "报告主人！收到任务状态通知啦，快来看看！💡";
+        fallbackIntent.behavior = "RunAlongWorkAreaFloor";
+        fallbackIntent.emote = "💡";
+        fallbackIntent.action = "bounce";
+    } else if (interruptType == "timer_alert") {
+        fallbackIntent.speech = "主人！定时提醒时间到啦，别忘记哦~ ⏰";
+        fallbackIntent.behavior = "JumpFromBottomOfIE";
+        fallbackIntent.emote = "✨";
+        fallbackIntent.action = "bounce";
+    } else {
+        fallbackIntent.speech = "巡逻被打断啦！主人有什么吩咐嘛？🐾";
+        fallbackIntent.behavior = "WalkAlongWorkAreaFloor";
+        fallbackIntent.emote = "🐾";
+        fallbackIntent.action = "bounce";
+    }
+
+    if (m_config.apiKey.trimmed().isEmpty() || m_config.apiKey.contains("YOUR_API_KEY")) {
+        callback(true, fallbackIntent);
+        return;
+    }
+
+    auto activePersona = PersonaManager::instance()->currentPersona();
+    QString memories = PetMemory::instance()->formatForPrompt(2);
+
+    int mood = petStateInfo["mood"].toInt(80);
+    int affection = petStateInfo["affection"].toInt(60);
+    int boredom = petStateInfo["boredom"].toInt(20);
+    QString currentApp = petStateInfo["current_app"].toString();
+    QString windowTitle = petStateInfo["window_title"].toString();
+
+    // 提取主人近期提问/聊过的话题
+    QString recentChat;
+    if (!m_history.isEmpty()) {
+        for (int i = m_history.size() - 1; i >= 0; --i) {
+            QJsonObject obj = m_history[i].toObject();
+            if (obj["role"].toString() == "user") {
+                recentChat = obj["content"].toString().trimmed();
+                if (recentChat.length() > 50) recentChat = recentChat.left(50) + "...";
+                break;
+            }
+        }
+    }
+
+    QString behaviorsPrompt;
+    for (const auto &b : allowedBehaviors) {
+        behaviorsPrompt += QString("- %1\n").arg(b);
+    }
+
+    QString systemPrompt = QString(
+        "你是运行在用户电脑桌面上的AI拟人化桌宠伴侣，拥有鲜明的性格和真实情绪。\n"
+        "【当前性格设定】: %1 (%2)\n"
+        "【性格特征】: %3\n"
+        "【当前状态】: 心情值 %4/100, 亲密度 %5/100, 无聊度 %6/100\n"
+        "【主人正在使用的应用】: %7 (窗口: %8)\n"
+        "%9\n"
+        "%10\n\n"
+        "【打断事件】: %11\n\n"
+        "【当前你可选择执行的合法行为列表 (behavior)】:\n"
+        "%12\n\n"
+        "【任务要求】\n"
+        "你的巡逻逻辑或当前状态刚刚被上述事件打断了！请以你的性格设定和当前心情，做出真实拟人化反应：\n"
+        "1. 说一句 8~25 字的鲜活短台词（speech），口语化、接地气、带有性格魅力与当前心情起伏（如傲娇、撒娇、兴奋、受挫摔疼等），切忌机械汇报。\n"
+        "2. 从上面的【合法行为列表】中严格挑选一个英文行为标识作为 behavior（如 RunAlongWorkAreaFloor, WalkAlongWorkAreaFloor, SitDown, LieDown, SitWhileDanglingLegs, SitAndSpinHead, SplitIntoTwo, PullUpShimeji, ClimbAlongWall 等）。\n"
+        "3. 选择最符合情境的表情贴纸 (emote: 💖, ✨, 💢, 💫, 💡, 🌸, 🐾, 💤) 与微动作 (action: bounce, stretch, squash, blush)。\n\n"
+        "请严格只输出纯 JSON（绝对不要包含任何 markdown 代码块或额外文字）：\n"
+        "{\n"
+        "  \"speech\": \"（8~25字短台词，富有情绪与性格）\",\n"
+        "  \"behavior\": \"行为英文标识\",\n"
+        "  \"action\": \"bounce\" | \"stretch\" | \"squash\" | \"blush\",\n"
+        "  \"emote\": \"💖\" | \"✨\" | \"💢\" | \"💫\" | \"💡\" | \"🌸\" | \"🐾\" | \"💤\",\n"
+        "  \"blush\": true | false\n"
+        "}"
+    ).arg(activePersona.name,
+         activePersona.description,
+         activePersona.defaultSystemPrompt,
+         QString::number(mood),
+         QString::number(affection),
+         QString::number(boredom),
+         currentApp.isEmpty() ? "桌面" : currentApp,
+         windowTitle,
+         recentChat.isEmpty() ? "" : QString("【主人近期向你问过的话题】: \"%1\"").arg(recentChat),
+         memories.isEmpty() ? "" : QString("【关于主人的记忆】: %1").arg(memories),
+         interruptDetail,
+         behaviorsPrompt);
+
+    QJsonArray messages;
+    QJsonObject sysMsg, usrMsg;
+    sysMsg["role"] = "system";
+    sysMsg["content"] = systemPrompt;
+    usrMsg["role"] = "user";
+    usrMsg["content"] = QString("打断事件: %1。请判断接下来要做什么动作并做出回应。").arg(interruptDetail);
+    messages.append(sysMsg);
+    messages.append(usrMsg);
+
+    sendChatCompletion(messages, [callback, fallbackIntent](bool success, QString const& result) {
+        if (!success) {
+            callback(true, fallbackIntent);
+            return;
+        }
+
+        QString cleanResult = result.trimmed();
+        if (cleanResult.startsWith("```json")) cleanResult = cleanResult.mid(7);
+        else if (cleanResult.startsWith("```")) cleanResult = cleanResult.mid(3);
+        if (cleanResult.endsWith("```")) cleanResult.chop(3);
+        cleanResult = cleanResult.trimmed();
+
+        QJsonParseError parseErr;
+        auto doc = QJsonDocument::fromJson(cleanResult.toUtf8(), &parseErr);
+        if (parseErr.error != QJsonParseError::NoError || !doc.isObject()) {
+            AIBehaviorIntent res = fallbackIntent;
+            if (!cleanResult.isEmpty() && cleanResult.length() <= 40) {
+                res.speech = cleanResult;
+            }
+            callback(true, res);
+            return;
+        }
+
+        auto obj = doc.object();
+        AIBehaviorIntent intent;
+        intent.speech = obj["speech"].toString(fallbackIntent.speech);
+        QString rawBehavior = obj["behavior"].toString(fallbackIntent.behavior).trimmed();
+        // 过滤提取纯行为英文字符串（防止带了中文或符号）
+        if (rawBehavior.contains(' ')) rawBehavior = rawBehavior.split(' ').first();
+        if (rawBehavior.contains(':')) rawBehavior = rawBehavior.split(':').first();
+        if (rawBehavior.contains('(')) rawBehavior = rawBehavior.split('(').first();
+        intent.behavior = rawBehavior.trimmed();
+        if (intent.behavior.isEmpty()) intent.behavior = fallbackIntent.behavior;
+
+        intent.action = obj["action"].toString(fallbackIntent.action);
+        intent.emote = obj["emote"].toString(fallbackIntent.emote);
+        intent.blush = obj["blush"].toBool(fallbackIntent.blush);
+        callback(true, intent);
+    });
+}
+
 void AgentService::handleAgentStatus(AgentStatusEvent const& event, std::function<void(bool success, QString const& message)> callback) {
     if (QThread::currentThread() != QCoreApplication::instance()->thread()) {
         QMetaObject::invokeMethod(QCoreApplication::instance(), [this, event, callback]() {

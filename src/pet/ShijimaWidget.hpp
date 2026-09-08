@@ -24,6 +24,7 @@
 #include <QTimer>
 #include <QVariantAnimation>
 #include <QEasingCurve>
+#include <QQueue>
 #include "Asset.hpp"
 #include "SoundEffectManager.hpp"
 #include <shijima/mascot/manager.hpp>
@@ -104,6 +105,18 @@ public:
     void triggerEmote(PetEmoteType type, float durationSec = 2.5f) { m_motion.triggerEmote(type, durationSec); }
     void triggerInteractionAI(const QString &interactionType);
 
+    struct QueuedBubbleMessage {
+        QString text;
+        int duration = 0;
+        QString appTarget;
+        bool moveToCenter = false;
+        std::function<void()> onStart;
+    };
+
+    void queueOrShowMessage(const QString &text, int duration = 0, const QString &appTarget = "", bool moveToCenter = false, std::function<void()> onStart = nullptr);
+    void processNextQueuedMessage();
+    void handlePatrolInterruption(const QString &interruptType, const QString &customDetail = "");
+
     ~ShijimaWidget();
 protected:
     void paintEvent(QPaintEvent *) override;
@@ -148,6 +161,7 @@ private:
     QString m_pendingMessageText;
     int m_pendingMessageDuration = 0;
     QString m_pendingAppTarget;
+    QQueue<QueuedBubbleMessage> m_bubbleQueue;
     bool m_isRunningToCenter = false;
     bool m_isWaitingForAgent = false;
 

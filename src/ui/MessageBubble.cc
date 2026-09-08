@@ -759,6 +759,7 @@ void MessageBubble::updateCountdownDisplay()
 
 void MessageBubble::hideMessage()
 {
+    bool wasDisplaying = isDisplaying();
     m_text.clear();
     m_appTarget.clear();
     if (m_openAppBtn) m_openAppBtn->hide();
@@ -766,6 +767,9 @@ void MessageBubble::hideMessage()
     if (m_hideTimer) m_hideTimer->stop();
     if (m_countdownTimer) m_countdownTimer->stop();
     hide();
+    if (wasDisplaying && onClosed) {
+        onClosed();
+    }
 }
 
 void MessageBubble::showHistoryDialog()
