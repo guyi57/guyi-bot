@@ -7,7 +7,7 @@
 #include <QNetworkReply>
 #include <functional>
 
-#define GUYI_BOT_VERSION "1.2.2"
+#define GUYI_BOT_VERSION "1.3.0"
 #define GUYI_BOT_REPO "guyi57/guyi-bot"
 
 struct UpdateInfo {
