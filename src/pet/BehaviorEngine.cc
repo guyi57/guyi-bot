@@ -157,6 +157,19 @@ bool BehaviorEngine::handlePetClickedInPoutMode(ShijimaWidget *)
     return false;
 }
 
+void BehaviorEngine::startFallRecovery(ShijimaWidget *widget)
+{
+    m_activeWidget = widget;
+    m_fallRecoveryPhase = FallRecoveryPhase::LieDownBreathing;
+    m_fallPhaseStartTime = QDateTime::currentMSecsSinceEpoch();
+    if (widget && widget->mascot().state) {
+        auto lie = widget->mascot().initial_behavior_list().find("LieDown", false);
+        if (lie != nullptr) {
+            widget->mascot().next_behavior("LieDown");
+        }
+    }
+}
+
 void BehaviorEngine::updateFallRecoverySequence(qint64 now)
 {
     if (m_fallRecoveryPhase == FallRecoveryPhase::None || m_activeWidget == nullptr) return;
@@ -164,20 +177,11 @@ void BehaviorEngine::updateFallRecoverySequence(qint64 now)
     auto env = m_activeWidget->mascot().state ? m_activeWidget->mascot().state->env : nullptr;
     if (!env) return;
 
-    const auto &anchor = m_activeWidget->mascot().state->anchor;
-    bool isOnFloor = (anchor.y >= (env->floor.y - 25.0));
-
     switch (m_fallRecoveryPhase) {
         case FallRecoveryPhase::Falling:
-            if (isOnFloor) {
-                m_fallRecoveryPhase = FallRecoveryPhase::LieDownBreathing;
-                m_fallPhaseStartTime = now;
-                auto lie = m_activeWidget->mascot().initial_behavior_list().find("LieDown", false);
-                if (lie != nullptr) m_activeWidget->mascot().next_behavior("LieDown");
-            }
             break;
         case FallRecoveryPhase::LieDownBreathing:
-            if ((now - m_fallPhaseStartTime) >= 2200) { // 趴在地上喘气 2.2 秒
+            if ((now - m_fallPhaseStartTime) >= 1500) { // 趴在地上喘气 1.5 秒后拍拍灰站起来
                 m_fallRecoveryPhase = FallRecoveryPhase::StandingUp;
                 m_fallPhaseStartTime = now;
                 auto stand = m_activeWidget->mascot().initial_behavior_list().find("StandUp", false);
@@ -185,7 +189,7 @@ void BehaviorEngine::updateFallRecoverySequence(qint64 now)
             }
             break;
         case FallRecoveryPhase::StandingUp:
-            if ((now - m_fallPhaseStartTime) >= 1200) { // 爬起来拍拍灰 1.2 秒
+            if ((now - m_fallPhaseStartTime) >= 1000) { // 站立完成后坐下休整
                 m_fallRecoveryPhase = FallRecoveryPhase::SittingResting;
                 m_fallPhaseStartTime = now;
                 auto sit = m_activeWidget->mascot().initial_behavior_list().find("SitDown", false);
@@ -193,7 +197,9 @@ void BehaviorEngine::updateFallRecoverySequence(qint64 now)
             }
             break;
         case FallRecoveryPhase::SittingResting:
-            // 平稳进入休整
+            if ((now - m_fallPhaseStartTime) >= 1200) { // 休整结束，恢复自由行动
+                m_fallRecoveryPhase = FallRecoveryPhase::None;
+            }
             break;
         default:
             break;
@@ -259,8 +265,8 @@ void BehaviorEngine::onTick()
     // 5. 灵动桌面感知与自然巡逻 (不强制干涉 Shimeji 原生探索动作)
     // =========================================================================
     // 允许 Shimeji 原生状态机自由探索 (爬墙、天花板爬行、掉落、奔跑、散步)
-    // 仅当桌宠长时间静止 (超过 8 秒)，轻微唤醒它继续巡逻探索
-    if (target != nullptr) {
+    // 仅当桌宠长时间静止 (超过 5 秒)，轻微唤醒它继续巡逻探索
+    if (target != nullptr && target->mascot().state != nullptr) {
         static int s_idleNudgeTimer = 0;
         QString curBehavior = target->currentBehaviorName();
         bool isMoving = (
@@ -277,25 +283,41 @@ void BehaviorEngine::onTick()
             s_idleNudgeTimer = 0;
         } else {
             s_idleNudgeTimer++;
-            // 原地发呆超过 8 秒 (200 ticks，每次 40ms)，给它一个轻盈随机动机
-            if (s_idleNudgeTimer >= 200) {
+            // 原地发呆超过 5 秒 (125 ticks，每次 40ms)，给它一个轻盈随机动机
+            if (s_idleNudgeTimer >= 125) {
                 s_idleNudgeTimer = 0;
                 auto env = target->env();
                 auto state = target->mascot().state;
                 if (env && state) {
-                    bool onFloor = (state->anchor.y >= (env->floor.y - 25.0));
-                    bool onWindowCeiling = (env->active_ie.visible() && std::abs(state->anchor.y - env->active_ie.top) <= 20.0);
+                    bool onFloor = (state->anchor.y >= (env->floor.y - 30.0));
+                    bool onWindowCeiling = (env->active_ie.visible() && std::abs(state->anchor.y - env->active_ie.top) <= 25.0);
+                    bool nearRightWall = (state->anchor.x >= (env->work_area.right - 80.0));
+                    bool nearLeftWall = (state->anchor.x <= (env->work_area.left + 80.0));
+
                     if (onFloor) {
-                        int r = QRandomGenerator::global()->bounded(100);
-                        if (r < 35) target->mascot().next_behavior("WalkAlongWorkAreaFloor");
-                        else if (r < 65) target->mascot().next_behavior("RunAlongWorkAreaFloor");
-                        else if (r < 85) target->mascot().next_behavior("WalkAndGrabBottomLeftWall");
-                        else target->mascot().next_behavior("WalkAndGrabBottomRightWall");
+                        if (nearRightWall) {
+                            // 靠右墙时，强行往左走进入屏幕，绝不继续向右卡死在墙角！
+                            target->mascot().state->looking_right = false;
+                            target->mascot().next_behavior("WalkAlongWorkAreaFloor");
+                        } else if (nearLeftWall) {
+                            // 靠左墙时，往右走
+                            target->mascot().state->looking_right = true;
+                            target->mascot().next_behavior("WalkAlongWorkAreaFloor");
+                        } else {
+                            int r = QRandomGenerator::global()->bounded(100);
+                            if (r < 45) target->mascot().next_behavior("WalkAlongWorkAreaFloor");
+                            else if (r < 75) target->mascot().next_behavior("RunAlongWorkAreaFloor");
+                            else if (r < 90) target->mascot().next_behavior("SitAndFaceMouse");
+                            else target->mascot().next_behavior("SitDown");
+                        }
                     } else if (onWindowCeiling) {
                         int r = QRandomGenerator::global()->bounded(100);
                         if (r < 50) target->mascot().next_behavior("WalkAlongIECeiling");
                         else if (r < 80) target->mascot().next_behavior("RunAlongIECeiling");
                         else target->mascot().next_behavior("SitWhileDanglingLegs");
+                    } else if (nearRightWall || nearLeftWall) {
+                        // 如果停在墙壁上超过 5 秒不动，让它轻盈从墙壁脱离跳下，避免永久卡墙
+                        target->mascot().next_behavior("FallFromWall");
                     }
                 }
             }

@@ -351,7 +351,7 @@
 		</Action>
 
 		<Action Name="HoldOntoWall" Type="Sequence" Loop="false">
-			<ActionReference Name="GrabWall" Duration="${500+Math.random()*1000}" />
+			<ActionReference Name="GrabWall" Duration="${60+Math.random()*80}" />
 		</Action>
 
 		<Action Name="FallFromWall" Type="Sequence" Loop="false">

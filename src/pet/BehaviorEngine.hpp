@@ -49,6 +49,9 @@ public:
     bool handlePetClickedWhileResting(ShijimaWidget *target);
     bool handlePetClickedInPoutMode(ShijimaWidget *target);
 
+    // 跌倒/抛掷落地恢复序列
+    void startFallRecovery(ShijimaWidget *widget);
+
     void onTick();
     void handleEvent(const PetEvent &event);
 

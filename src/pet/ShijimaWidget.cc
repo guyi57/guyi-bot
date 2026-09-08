@@ -800,18 +800,18 @@ void ShijimaWidget::mouseMoveEvent(QMouseEvent *event) {
 
     QPoint curPos = event->globalPosition().toPoint();
     qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (m_lastMouseMoveTime > 0) {
-        qint64 dt = now - m_lastMouseMoveTime;
-        if (dt > 0 && dt < 200) {
-            double vx = (curPos.x() - m_lastMousePos.x()) / (double)dt * 20.0;
-            double vy = (curPos.y() - m_lastMousePos.y()) / (double)dt * 20.0;
-            // 指数滑动平均滤波 (EMA)
-            m_dragVelocityX = m_dragVelocityX * 0.3 + vx * 0.7;
-            m_dragVelocityY = m_dragVelocityY * 0.3 + vy * 0.7;
+    if (m_dragTarget->m_lastMouseMoveTime > 0) {
+        qint64 dt = now - m_dragTarget->m_lastMouseMoveTime;
+        if (dt > 0 && dt < 120) {
+            double vx = (curPos.x() - m_dragTarget->m_lastMousePos.x()) / (double)dt * 20.0;
+            double vy = (curPos.y() - m_dragTarget->m_lastMousePos.y()) / (double)dt * 20.0;
+            // 指数滑动平均滤波 (EMA) 准确记录在被拖拽的目标对象上
+            m_dragTarget->m_dragVelocityX = m_dragTarget->m_dragVelocityX * 0.4 + vx * 0.6;
+            m_dragTarget->m_dragVelocityY = m_dragTarget->m_dragVelocityY * 0.4 + vy * 0.6;
         }
     }
-    m_lastMousePos = curPos;
-    m_lastMouseMoveTime = now;
+    m_dragTarget->m_lastMousePos = curPos;
+    m_dragTarget->m_lastMouseMoveTime = now;
 }
 
 void ShijimaWidget::closeAction() {
@@ -849,21 +849,31 @@ void ShijimaWidget::mouseReleaseEvent(QMouseEvent *event) {
         // 记录用户互动时间（重置心情衰减）
         BehaviorEngine::instance()->recordUserInteraction();
 
-        // 计算鼠标瞬时甩动力度 (Velocity)
-        double throwSpeed = std::hypot(m_dragTarget->m_dragVelocityX, m_dragTarget->m_dragVelocityY);
+        // 判定用户是否在快速甩动手势中松手 (必须在最近 90ms 内有连续位移，且速度标量 >= 6.0)
+        qint64 now = QDateTime::currentMSecsSinceEpoch();
+        bool hasRecentFlick = (m_dragTarget->m_lastMouseMoveTime > 0 && (now - m_dragTarget->m_lastMouseMoveTime) < 90);
+        double throwSpeed = hasRecentFlick ? std::hypot(m_dragTarget->m_dragVelocityX, m_dragTarget->m_dragVelocityY) : 0.0;
 
         // 平稳放下或快速甩出均增加互动亲密度
         BehaviorEngine::instance()->addAffection(2, 5);
 
-        // 如果用户快速甩手丢出 (throwSpeed >= 1.5)，启动 60FPS 运动学方程推动抛物线飞行
-        if (throwSpeed >= 1.5) {
+        // 仅当用户明确快速甩手丢出 (throwSpeed >= 6.0) 时启动抛物线飞行
+        if (throwSpeed >= 6.0) {
             std::cout << "[物理投掷] 成功捕获快速甩手! 速度向量: (" 
                       << m_dragTarget->m_dragVelocityX << ", " << m_dragTarget->m_dragVelocityY 
                       << "), 标量速度: " << throwSpeed << std::endl;
             m_dragTarget->applyThrowPhysics(m_dragTarget->m_dragVelocityX, m_dragTarget->m_dragVelocityY);
             m_dragTarget->m_interruptedGoal = PetInterruptedGoal::None;
         } else {
-            // 平稳放下时智能磁吸
+            // 平稳放下：完全清空投掷物理速度，避免产生意外位移冲量
+            m_dragTarget->m_isThrowFlying = false;
+            m_dragTarget->m_throwVx = 0.0;
+            m_dragTarget->m_throwVy = 0.0;
+            if (m_dragTarget->m_throwPhysicsTimer) {
+                m_dragTarget->m_throwPhysicsTimer->stop();
+            }
+
+            // 平稳着陆吸附或原地笔直下落，绝不横向乱跳
             m_dragTarget->snapToNearestBorderOrWindow();
 
             // 如果刚才有目标被硬生生打断，放下来后发个可爱小脾气！
@@ -873,7 +883,7 @@ void ShijimaWidget::mouseReleaseEvent(QMouseEvent *event) {
             }
         }
 
-        if (throwSpeed < 1.5) {
+        if (throwSpeed < 6.0) {
             QJsonObject payload;
             payload["mascot_id"] = m_dragTarget->mascotId();
             PetEventBus::instance()->emitEvent("user.click_pet", payload);
@@ -918,9 +928,9 @@ void ShijimaWidget::applyThrowPhysics(double vx, double vy) {
     // 独占接管物理坐标，避免主循环 tick 并发冲突
     m_isThrowFlying = true;
 
-    // 适度放大初速度
-    m_throwVx = std::clamp(vx * 1.6, -50.0, 50.0);
-    m_throwVy = std::clamp(vy * 1.6, -50.0, 50.0);
+    // 适度放大初速度并进行平滑钳制
+    m_throwVx = std::clamp(vx * 1.3, -40.0, 40.0);
+    m_throwVy = std::clamp(vy * 1.3, -40.0, 40.0);
 
     m_motion.triggerStretch(0.88f, 1.18f);
     m_mascot->next_behavior("Thrown");
@@ -945,6 +955,7 @@ void ShijimaWidget::applyThrowPhysics(double vx, double vy) {
         anchor.y += m_throwVy;
 
         bool landed = false;
+        QString landingBehavior = "LieDown";
 
         // 1. 活跃窗口碰撞判定
         if (env->active_ie.visible()) {
@@ -954,7 +965,7 @@ void ShijimaWidget::applyThrowPhysics(double vx, double vy) {
                 anchor.y >= (ie.top - 15.0) && anchor.y <= (ie.top + 25.0) && m_throwVy > 0) {
                 anchor.y = ie.top;
                 landed = true;
-                m_mascot->next_behavior("WalkAlongIECeiling");
+                landingBehavior = "WalkAlongIECeiling";
             }
             // 撞到窗口左边壁
             else if (std::abs(anchor.x - ie.left) <= 18.0 &&
@@ -962,7 +973,7 @@ void ShijimaWidget::applyThrowPhysics(double vx, double vy) {
                 anchor.x = ie.left;
                 m_mascot->state->looking_right = false;
                 landed = true;
-                m_mascot->next_behavior("ClimbAlongWall");
+                landingBehavior = "ClimbAlongWall";
             }
             // 撞到窗口右边壁
             else if (std::abs(anchor.x - ie.right) <= 18.0 &&
@@ -970,19 +981,19 @@ void ShijimaWidget::applyThrowPhysics(double vx, double vy) {
                 anchor.x = ie.right;
                 m_mascot->state->looking_right = true;
                 landed = true;
-                m_mascot->next_behavior("ClimbAlongWall");
+                landingBehavior = "ClimbAlongWall";
             }
         }
 
         // 2. 地面碰撞判定
         if (!landed && anchor.y >= env->floor.y) {
             anchor.y = env->floor.y;
-            if (std::abs(m_throwVy) > 6.0) {
+            if (std::abs(m_throwVy) > 7.0) {
                 m_throwVy = -m_throwVy * 0.35; // 触地弹跳
                 m_throwVx *= 0.6;
             } else {
                 landed = true;
-                m_mascot->next_behavior("Stand");
+                landingBehavior = "LieDown";
             }
         }
 
@@ -998,12 +1009,12 @@ void ShijimaWidget::applyThrowPhysics(double vx, double vy) {
                 anchor.x = env->work_area.left;
                 m_mascot->state->looking_right = false;
                 landed = true;
-                m_mascot->next_behavior("ClimbAlongWall");
+                landingBehavior = "ClimbAlongWall";
             } else if (anchor.x >= env->work_area.right) {
                 anchor.x = env->work_area.right;
                 m_mascot->state->looking_right = true;
                 landed = true;
-                m_mascot->next_behavior("ClimbAlongWall");
+                landingBehavior = "ClimbAlongWall";
             }
         }
 
@@ -1012,12 +1023,20 @@ void ShijimaWidget::applyThrowPhysics(double vx, double vy) {
 
         if (landed) {
             m_isThrowFlying = false;
-            m_motion.triggerSquash(1.18f, 0.82f);
-            if (std::hypot(m_throwVx, m_throwVy) > 12.0) {
-                m_motion.triggerEmote(PetEmoteType::DizzySwirl, 2.5f);
-            }
+            m_throwVx = 0.0;
+            m_throwVy = 0.0;
             if (m_throwPhysicsTimer) {
                 m_throwPhysicsTimer->stop();
+            }
+            m_motion.triggerSquash(1.22f, 0.78f);
+            if (std::hypot(m_throwVx, m_throwVy) > 10.0) {
+                m_motion.triggerEmote(PetEmoteType::DizzySwirl, 2.5f);
+            }
+
+            // 落地切换到合法的行为，绝不使用不存在的 "Stand"（避免触发 libshimeji 的天花板重置闪现）
+            m_mascot->next_behavior(landingBehavior.toStdString());
+            if (landingBehavior == "LieDown") {
+                BehaviorEngine::instance()->startFallRecovery(this);
             }
         }
     });
@@ -1030,54 +1049,52 @@ void ShijimaWidget::snapToNearestBorderOrWindow() {
 
     auto env = m_mascot->state->env;
     auto &anchor = m_mascot->state->anchor;
-    const double snapThreshold = 45.0; // 提升吸附容差
 
-    // 1. 活跃窗口吸附（Active IE）
+    // 1. 如果放置在地面附近 (距离地面 <= 35px) -> 稳稳立在当前释放点的地面上坐下
+    if (anchor.y >= (env->floor.y - 35.0)) {
+        anchor.y = env->floor.y;
+        m_mascot->next_behavior("SitDown");
+        updateOffsets();
+        repaint();
+        return;
+    }
+
+    // 2. 如果放置在活跃窗口顶梁附近 (距离 top <= 35px，且在窗口横向宽度内) -> 稳稳立在窗口顶沿
     if (env->active_ie.visible()) {
         auto &ie = env->active_ie;
-
-        // A. 靠近窗口顶部 (Top of IE) 或 释放在窗口上半部分 -> 稳稳立在窗口顶沿行走/坐下
-        bool nearTop = (anchor.y >= (ie.top - 60.0) && anchor.y <= (ie.top + 75.0));
-        bool insideUpperHalf = (anchor.y >= ie.top && anchor.y <= (ie.top + (ie.bottom - ie.top) * 0.45));
-        bool withinXRange = (anchor.x >= (ie.left - 30.0) && anchor.x <= (ie.right + 30.0));
-
-        if ((nearTop || insideUpperHalf) && withinXRange) {
+        bool nearTop = std::abs(anchor.y - ie.top) <= 35.0;
+        bool withinXRange = (anchor.x >= (ie.left - 15.0) && anchor.x <= (ie.right + 15.0));
+        if (nearTop && withinXRange) {
             anchor.y = ie.top;
             anchor.x = std::clamp(anchor.x, ie.left + 15.0, ie.right - 15.0);
             m_mascot->next_behavior("WalkAlongIECeiling");
             updateOffsets();
             repaint();
-            std::cout << "[智能吸附] 成功将桌宠稳稳放置在活跃窗口顶部!" << std::endl;
             return;
         }
 
-        // B. 靠近窗口左边缘 (Left Border of IE) -> 抓墙往上爬
-        if (std::abs(anchor.x - ie.left) <= 45.0 &&
-            anchor.y >= (ie.top - 30.0) && anchor.y <= (ie.bottom + 30.0)) {
+        // 靠近窗口左边缘 (15px 极近贴近) -> 抓壁
+        if (std::abs(anchor.x - ie.left) <= 15.0 && anchor.y >= ie.top && anchor.y <= ie.bottom) {
             anchor.x = ie.left;
-            m_mascot->state->looking_right = false; // 朝向窗口
+            m_mascot->state->looking_right = false;
             m_mascot->next_behavior("ClimbAlongWall");
             updateOffsets();
             repaint();
-            std::cout << "[智能吸附] 成功吸附到活跃窗口左边缘!" << std::endl;
             return;
         }
-
-        // C. 靠近窗口右边缘 (Right Border of IE) -> 抓墙往上爬
-        if (std::abs(anchor.x - ie.right) <= 45.0 &&
-            anchor.y >= (ie.top - 30.0) && anchor.y <= (ie.bottom + 30.0)) {
+        // 靠近窗口右边缘 (15px 极近贴近) -> 抓壁
+        if (std::abs(anchor.x - ie.right) <= 15.0 && anchor.y >= ie.top && anchor.y <= ie.bottom) {
             anchor.x = ie.right;
-            m_mascot->state->looking_right = true; // 朝向窗口
+            m_mascot->state->looking_right = true;
             m_mascot->next_behavior("ClimbAlongWall");
             updateOffsets();
             repaint();
-            std::cout << "[智能吸附] 成功吸附到活跃窗口右边缘!" << std::endl;
             return;
         }
     }
 
-    // 2. 屏幕天花板吸附 (Ceiling) -> 倒挂攀爬
-    if (std::abs(anchor.y - env->ceiling.y) <= snapThreshold) {
+    // 3. 靠近屏幕天花板 (20px 极近贴近)
+    if (std::abs(anchor.y - env->ceiling.y) <= 20.0) {
         anchor.y = env->ceiling.y;
         m_mascot->next_behavior("ClimbAlongCeiling");
         updateOffsets();
@@ -1085,8 +1102,8 @@ void ShijimaWidget::snapToNearestBorderOrWindow() {
         return;
     }
 
-    // 3. 屏幕左/右侧边缘主墙壁吸附 (Work Area Walls) -> 沿主屏幕墙壁爬行
-    if (std::abs(anchor.x - env->work_area.left) <= snapThreshold) {
+    // 4. 靠近屏幕最左侧/最右侧边缘 (20px 极近贴近)
+    if (std::abs(anchor.x - env->work_area.left) <= 20.0) {
         anchor.x = env->work_area.left;
         m_mascot->state->looking_right = false;
         m_mascot->next_behavior("ClimbAlongWall");
@@ -1094,7 +1111,7 @@ void ShijimaWidget::snapToNearestBorderOrWindow() {
         repaint();
         return;
     }
-    if (std::abs(anchor.x - env->work_area.right) <= snapThreshold) {
+    if (std::abs(anchor.x - env->work_area.right) <= 20.0) {
         anchor.x = env->work_area.right;
         m_mascot->state->looking_right = true;
         m_mascot->next_behavior("ClimbAlongWall");
@@ -1102,6 +1119,11 @@ void ShijimaWidget::snapToNearestBorderOrWindow() {
         repaint();
         return;
     }
+
+    // 5. 其他任何空中位置：原地笔直自然掉落，绝不横向吸附或跳跃！
+    m_mascot->next_behavior("Fall");
+    updateOffsets();
+    repaint();
 }
 
 bool ShijimaWidget::checkAndJumpToActiveIE() {
