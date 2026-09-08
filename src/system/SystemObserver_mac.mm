@@ -61,6 +61,17 @@
                 CFRelease(windowList);
             }
 
+            // macOS 隐私权限保护兜底：若 CGWindowList 受限未能获取第三方窗口标题，通过 AppleScript 零权限补全
+            if (windowTitle.isEmpty() && !bundleId.isEmpty()) {
+                NSAppleScript *as = [[NSAppleScript alloc] initWithSource:
+                    [NSString stringWithFormat:@"tell application \"System Events\" to get name of front window of (first application process whose bundle identifier is \"%@\")", bundleId.toNSString()]];
+                NSDictionary *err = nil;
+                NSAppleEventDescriptor *desc = [as executeAndReturnError:&err];
+                if (desc && [desc stringValue]) {
+                    windowTitle = QString::fromNSString([desc stringValue]);
+                }
+            }
+
             std::cout << "[SystemObserver] 捕获到应用切换: " << appName.toStdString() 
                       << " (" << bundleId.toStdString() << ")"
                       << (windowTitle.isEmpty() ? "" : (" | 标题: " + windowTitle.toStdString()))

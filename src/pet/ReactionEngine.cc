@@ -1,4 +1,5 @@
 #include "ReactionEngine.hpp"
+#include "../system/SensorManager.hpp"
 #include <QRandomGenerator>
 #include <QDateTime>
 #include <iostream>
@@ -276,7 +277,16 @@ bool ReactionEngine::handleAppActivated(const PetEvent &event, PetActionCommand 
         if (hasGit && hasCode && (now - m_lastDevChainTime) >= 300000) { // 5分钟冷却
             m_lastDevChainTime = now;
             outCommand.type = PetActionType::Happy;
-            outCommand.speechText = "准备提交代码了嘛？记得检查有没有写 console.log~ 🚀";
+            auto prevWork = SensorManager::instance()->previousWorkContext();
+            QString activeFile = prevWork["active_file"].toString();
+            QString ws = prevWork["workspace"].toString();
+            if (!activeFile.isEmpty()) {
+                outCommand.speechText = QString("改完 %1、提交 Git、终端部署一条龙，效率爆棚！🚀").arg(activeFile);
+            } else if (!ws.isEmpty()) {
+                outCommand.speechText = QString("%1 项目：代码、Git、终端一条龙，今天效率爆棚！🚀").arg(ws);
+            } else {
+                outCommand.speechText = "准备提交代码了嘛？记得检查有没有写 console.log~ 🚀";
+            }
             moodDelta = +5;
             affectionDelta = +2;
             boredomDelta = -20;
@@ -313,7 +323,20 @@ bool ReactionEngine::handleAppActivated(const PetEvent &event, PetActionCommand 
         if (toggleCount >= 3 && (now - m_lastChatSpamTime) >= 180000) { // 3分钟冷却
             m_lastChatSpamTime = now;
             outCommand.type = PetActionType::Angry;
-            outCommand.speechText = "打工人好忙，一会儿改代码一会儿回消息 😵💫";
+            auto curCtx = SensorManager::instance()->currentContext();
+            auto prevWork = SensorManager::instance()->previousWorkContext();
+            QString activeFile = curCtx["active_file"].toString();
+            if (activeFile.isEmpty()) activeFile = prevWork["active_file"].toString();
+            QString workspace = curCtx["workspace"].toString();
+            if (workspace.isEmpty()) workspace = prevWork["workspace"].toString();
+
+            if (!activeFile.isEmpty()) {
+                outCommand.speechText = QString("一会儿改 %1 一会儿回消息，注意别把配置发错窗口啦 🤫").arg(activeFile);
+            } else if (!workspace.isEmpty()) {
+                outCommand.speechText = QString("在 %1 工程和聊天群反复横跳，打工人太忙啦 😵💫").arg(workspace);
+            } else {
+                outCommand.speechText = "打工人好忙，一会儿改代码一会儿回消息 😵💫";
+            }
             moodDelta = -2;
             boredomDelta = -15;
             std::cout << "[情境感知] 命中频繁切屏高频横跳" << std::endl;
@@ -328,7 +351,15 @@ bool ReactionEngine::handleAppActivated(const PetEvent &event, PetActionCommand 
         if ((now - m_lastSourcetreeEggTime) >= 300000) { // 5分钟冷却
             m_lastSourcetreeEggTime = now;
             outCommand.type = PetActionType::LookAtCursor;
-            outCommand.speechText = "又要解决冲突了吗… 🧗";
+            auto curCtx = SensorManager::instance()->currentContext();
+            QString repo = curCtx["workspace"].toString();
+            if (repo.isEmpty()) repo = curCtx["detail"].toString();
+            if (repo.startsWith("仓库: ")) repo = repo.mid(4);
+            if (!repo.isEmpty()) {
+                outCommand.speechText = QString("在看 %1 仓库的 Git 提交与分支吗？仔细检查冲突哦~ 🌿").arg(repo);
+            } else {
+                outCommand.speechText = "又要解决冲突了吗… 仔细核对下变更哦 🧗";
+            }
             moodDelta = -1;
             std::cout << "[情境感知] 触发 Git 工具专属彩蛋" << std::endl;
             return true;
@@ -337,7 +368,16 @@ bool ReactionEngine::handleAppActivated(const PetEvent &event, PetActionCommand 
         if ((now - m_lastTerminalEggTime) >= 300000) { // 5分钟冷却
             m_lastTerminalEggTime = now;
             outCommand.type = PetActionType::Sit;
-            outCommand.speechText = "不要手滑输 rm -rf 呀！⚠️";
+            auto prevWork = SensorManager::instance()->previousWorkContext();
+            QString prevFile = prevWork["active_file"].toString();
+            QString prevWs = prevWork["workspace"].toString();
+            if (!prevFile.isEmpty()) {
+                outCommand.speechText = QString("刚编辑完 %1，要在终端里编译测试吗？慢慢敲别手滑~ 💻").arg(prevFile);
+            } else if (!prevWs.isEmpty()) {
+                outCommand.speechText = QString("在终端里跑 %1 相关的命令吗？不要手滑输 rm -rf 呀！⚠️").arg(prevWs);
+            } else {
+                outCommand.speechText = "不要手滑输 rm -rf 呀！⚠️";
+            }
             std::cout << "[情境感知] 触发 Terminal 工具专属彩蛋" << std::endl;
             return true;
         }
@@ -356,7 +396,16 @@ bool ReactionEngine::checkContinuousDwell(PetActionCommand &outCommand, int &moo
         if ((now - m_currentAppStartTime) >= 900000 && (now - m_lastBrowserEggTime) >= 1800000) { // 30分钟冷却
             m_lastBrowserEggTime = now;
             outCommand.type = PetActionType::LookAtCursor;
-            outCommand.speechText = "是在查文档还是在摸鱼看视频呢？🍵";
+            auto curCtx = SensorManager::instance()->currentContext();
+            QString url = curCtx["url"].toString();
+            QString title = curCtx["detail"].toString();
+            if (url.contains("gitlab") || url.contains("github")) {
+                outCommand.speechText = "在看代码仓库和 PR 呢，仔细 review 辛苦啦 ☕";
+            } else if (!title.isEmpty() && title.length() < 25) {
+                outCommand.speechText = QString("在看「%1」吗？别忘了喝口水揉揉眼睛哦 🍵").arg(title);
+            } else {
+                outCommand.speechText = "是在查文档还是在摸鱼看视频呢？🍵";
+            }
             outCommand.durationMs = 4500;
             outCommand.moveToCenter = false;
             std::cout << "[情境感知] 触发浏览器长时间驻留彩蛋" << std::endl;

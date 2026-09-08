@@ -201,10 +201,19 @@ print(json.dumps(data, ensure_ascii=False))
 " "$activity" "$url" "$title" 2>/dev/null || echo '{"semantic_activity": "浏览网页", "url": "'"$url"'", "detail": "'"$title"'"}'
 )";
 
-    // 3. Cursor / VSCode 探针 (深度解析工作区与文件)
-    QString ideScript = R"(#!/bin/bash
+    // 3. Cursor / VSCode / IDE 探针 (深度解析工作区与文件)
+    QString ideScript = R"SENSOR(#!/bin/bash
 appName="$1"
 title="$2"
+bundleId="$3"
+
+if [ -z "$title" ]; then
+    if [ -n "$bundleId" ]; then
+        title=$(osascript -e "tell application \"System Events\" to get name of front window of (first application process whose bundle identifier is \"$bundleId\")" 2>/dev/null)
+    elif [ -n "$appName" ]; then
+        title=$(osascript -e "tell application \"System Events\" to get name of front window of (first application process whose name is \"$appName\")" 2>/dev/null)
+    fi
+fi
 
 # 提取窗口标题中的文件名与工作区 (通常形如 "MessageBubble.cc — xuanfu" 或 "xuanfu — MessageBubble.cc")
 activeFile=""
@@ -252,12 +261,19 @@ data = {
 }
 print(json.dumps(data, ensure_ascii=False))
 " "$activity" "$detail" "$activeFile" "$workspace" 2>/dev/null || echo "{\"semantic_activity\": \"$activity\", \"active_file\": \"$activeFile\", \"workspace\": \"$workspace\", \"focus_level\": \"high\"}"
-)";
+)SENSOR";
 
     // 4. Terminal / iTerm2 探针
-    QString termScript = R"(#!/bin/bash
+    QString termScript = R"SENSOR(#!/bin/bash
 appName="$1"
 title="$2"
+bundleId="$3"
+
+if [ -z "$title" ]; then
+    if [ -n "$bundleId" ]; then
+        title=$(osascript -e "tell application \"System Events\" to get name of front window of (first application process whose bundle identifier is \"$bundleId\")" 2>/dev/null)
+    fi
+fi
 
 activity="在终端执行开发与系统命令"
 detail="$title"
@@ -271,7 +287,65 @@ data = {
 }
 print(json.dumps(data, ensure_ascii=False))
 " "$activity" "$detail" 2>/dev/null || echo "{\"semantic_activity\": \"$activity\", \"detail\": \"$detail\", \"focus_level\": \"high\"}"
-)";
+)SENSOR";
+
+    // 5. Git / Sourcetree 探针
+    QString gitScript = R"SENSOR(#!/bin/bash
+appName="$1"
+title="$2"
+bundleId="$3"
+
+if [ -z "$title" ]; then
+    if [ -n "$bundleId" ]; then
+        title=$(osascript -e "tell application \"System Events\" to get name of front window of (first application process whose bundle identifier is \"$bundleId\")" 2>/dev/null)
+    fi
+fi
+
+repo="$title"
+if [[ "$repo" == *" (Git)"* ]]; then
+    repo="${repo%% (Git)*}"
+fi
+
+activity="在 $appName 中查看 Git 仓库"
+detail="仓库: $repo"
+
+python3 -c "
+import json, sys
+data = {
+    'semantic_activity': sys.argv[1],
+    'detail': sys.argv[2],
+    'workspace': sys.argv[3],
+    'focus_level': 'normal'
+}
+print(json.dumps(data, ensure_ascii=False))
+" "$activity" "$detail" "$repo" 2>/dev/null || echo "{\"semantic_activity\": \"$activity\", \"detail\": \"$detail\", \"workspace\": \"$repo\", \"focus_level\": \"normal\"}"
+)SENSOR";
+
+    // 6. ChatGPT / AI 对话探针
+    QString chatgptScript = R"SENSOR(#!/bin/bash
+appName="$1"
+title="$2"
+bundleId="$3"
+
+if [ -z "$title" ]; then
+    if [ -n "$bundleId" ]; then
+        title=$(osascript -e "tell application \"System Events\" to get name of front window of (first application process whose bundle identifier is \"$bundleId\")" 2>/dev/null)
+    fi
+fi
+
+activity="使用 ChatGPT 交流"
+detail="会话: $title"
+
+python3 -c "
+import json, sys
+data = {
+    'semantic_activity': sys.argv[1],
+    'detail': sys.argv[2],
+    'focus_level': 'normal'
+}
+print(json.dumps(data, ensure_ascii=False))
+" "$activity" "$detail" 2>/dev/null || echo "{\"semantic_activity\": \"$activity\", \"detail\": \"$detail\", \"focus_level\": \"normal\"}"
+)SENSOR";
 
     saveSensor("com.google.Chrome.sh", chromeScript);
     saveSensor("chrome.sh", chromeScript);
@@ -281,9 +355,15 @@ print(json.dumps(data, ensure_ascii=False))
     saveSensor("cursor.sh", ideScript);
     saveSensor("com.microsoft.VSCode.sh", ideScript);
     saveSensor("vscode.sh", ideScript);
+    saveSensor("com.google.antigravity-ide.sh", ideScript);
+    saveSensor("antigravity.sh", ideScript);
     saveSensor("terminal.sh", termScript);
     saveSensor("com.apple.Terminal.sh", termScript);
     saveSensor("com.googlecode.iterm2.sh", termScript);
+    saveSensor("com.torusknot.SourceTreeNotMAS.sh", gitScript);
+    saveSensor("sourcetree.sh", gitScript);
+    saveSensor("com.openai.codex.sh", chatgptScript);
+    saveSensor("chatgpt.sh", chatgptScript);
 }
 
 QJsonObject SensorManager::runSensor(const QString &scriptPath, const QString &appName, const QString &bundleId, const QString &windowTitle)
@@ -348,22 +428,38 @@ void SensorManager::onAppActivated(const QString &appName, const QString &bundle
 
     // 后台并发执行探针，完全零阻塞主线程
     QThreadPool::globalInstance()->start([this, appName, bundleId, windowTitle, now]() {
+        QString actualTitle = windowTitle;
+#ifdef __APPLE__
+        if (actualTitle.isEmpty()) {
+            QProcess p;
+            if (!bundleId.isEmpty()) {
+                p.start("osascript", {"-e", QString("tell application \"System Events\" to get name of front window of (first application process whose bundle identifier is \"%1\")").arg(bundleId)});
+            } else if (!appName.isEmpty()) {
+                p.start("osascript", {"-e", QString("tell application \"System Events\" to get name of front window of (first application process whose name is \"%1\")").arg(appName)});
+            }
+            if (p.waitForFinished(600)) {
+                QString out = QString::fromUtf8(p.readAllStandardOutput()).trimmed();
+                if (!out.isEmpty()) actualTitle = out;
+            }
+        }
+#endif
+
         QString sensorPath = getSensorPath(bundleId, appName);
         QJsonObject result;
 
         if (!sensorPath.isEmpty()) {
-            result = runSensor(sensorPath, appName, bundleId, windowTitle);
+            result = runSensor(sensorPath, appName, bundleId, actualTitle);
         }
 
         if (result.isEmpty()) {
             // 探针未命中或返回空，触发自主合成逻辑（若无探针）
             if (sensorPath.isEmpty()) {
-                requestSensorSynthesis(appName, bundleId, windowTitle);
+                requestSensorSynthesis(appName, bundleId, actualTitle);
             }
 
             // 构造默认语义回退
             result["semantic_activity"] = QString("正在使用 %1").arg(appName);
-            result["detail"] = windowTitle;
+            result["detail"] = actualTitle;
             result["focus_level"] = "normal";
         }
 
@@ -371,7 +467,7 @@ void SensorManager::onAppActivated(const QString &appName, const QString &bundle
         AppSemanticContext newContext;
         newContext.bundleId = bundleId;
         newContext.appName = appName;
-        newContext.windowTitle = windowTitle;
+        newContext.windowTitle = actualTitle;
         newContext.semanticActivity = result["semantic_activity"].toString();
         newContext.detail = result["detail"].toString();
         newContext.activeFile = result["active_file"].toString();
