@@ -52,6 +52,7 @@ SOURCES = src/main.cc \
 	src/music/MusicApiService.cc \
 	src/music/MusicPlayerManager.cc \
 	src/music/MusicPlayerDialog.cc \
+	src/music/DesktopLyricWidget.cc \
 	src/timer/TimerManager.cc \
 	src/timer/TimerListDialog.cc \
 	src/system/TrashWatcher.cc \

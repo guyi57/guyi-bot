@@ -78,8 +78,11 @@ private:
     QPushButton *m_playBtn = nullptr;
     QPushButton *m_nextBtn = nullptr;
     QPushButton *m_favBtn = nullptr;
+    QPushButton *m_desktopLyricBtn = nullptr;
     QSlider *m_volumeSlider = nullptr;
     QLabel *m_volumeIcon = nullptr;
+
+    void updateDesktopLyricBtnState();
 
     // 推荐模式与说明
     QComboBox *m_recommendModeCombo = nullptr;

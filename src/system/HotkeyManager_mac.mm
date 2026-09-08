@@ -21,6 +21,7 @@ static std::function<void()> s_musicPlayPauseCallback;
 static std::function<void()> s_musicNextCallback;
 static std::function<void()> s_musicPrevCallback;
 static std::function<void()> s_musicFavCallback;
+static std::function<void()> s_lyricToggleCallback;
 
 static UInt32 parseKeyCode(QString const& keyName) {
     QString k = keyName.trimmed().toUpper();
@@ -161,6 +162,13 @@ static OSStatus hotKeyHandler(EventHandlerCallRef, EventRef theEvent, void*) {
         if (s_musicFavCallback) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 s_musicFavCallback();
+            });
+        }
+    } else if (hkId.id == 206) {
+        std::cout << "[全局快捷键] 触发 桌面歌词显示/隐藏 (⌥L)" << std::endl;
+        if (s_lyricToggleCallback) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                s_lyricToggleCallback();
             });
         }
     }
@@ -358,6 +366,27 @@ void HotkeyManager::registerMusicFavHotkey(QString const& shortcutStr, std::func
     }
 }
 
+void HotkeyManager::registerLyricToggleHotkey(QString const& shortcutStr, std::function<void()> callback) {
+    s_lyricToggleCallback = callback;
+    if (m_lyricToggleHotKeyRef) {
+        UnregisterEventHotKey((EventHotKeyRef)m_lyricToggleHotKeyRef);
+        m_lyricToggleHotKeyRef = nullptr;
+    }
+
+    UInt32 mods = 0, key = 0;
+    if (parseShortcut(shortcutStr, mods, key)) {
+        EventHotKeyID hkId;
+        hkId.signature = 'MS06';
+        hkId.id = 206;
+        EventHotKeyRef ref = NULL;
+        OSStatus status = RegisterEventHotKey(key, mods, hkId, GetApplicationEventTarget(), 0, &ref);
+        if (status == noErr) {
+            m_lyricToggleHotKeyRef = (void *)ref;
+            std::cout << "[全局快捷键] 成功注册桌面歌词快捷键: " << shortcutStr.toStdString() << std::endl;
+        }
+    }
+}
+
 void HotkeyManager::unregisterAll() {
     if (m_translateHotKeyRef) {
         UnregisterEventHotKey((EventHotKeyRef)m_translateHotKeyRef);
@@ -390,6 +419,10 @@ void HotkeyManager::unregisterAll() {
     if (m_musicFavHotKeyRef) {
         UnregisterEventHotKey((EventHotKeyRef)m_musicFavHotKeyRef);
         m_musicFavHotKeyRef = nullptr;
+    }
+    if (m_lyricToggleHotKeyRef) {
+        UnregisterEventHotKey((EventHotKeyRef)m_lyricToggleHotKeyRef);
+        m_lyricToggleHotKeyRef = nullptr;
     }
 }
 

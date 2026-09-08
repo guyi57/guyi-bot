@@ -1,4 +1,5 @@
 #include "MusicPlayerDialog.hpp"
+#include "DesktopLyricWidget.hpp"
 #include "Platform/Platform.hpp"
 #include <QPainter>
 #include <QPainterPath>
@@ -75,6 +76,7 @@ void MusicPlayerDialog::showEvent(QShowEvent *event)
     refreshPlaylist();
     refreshRecommendModeUI();
     updateFavoriteState(MusicPlayerManager::instance()->isCurrentSongFavorite());
+    updateDesktopLyricBtnState();
 }
 
 void MusicPlayerDialog::closeEvent(QCloseEvent *event)
@@ -668,7 +670,13 @@ void MusicPlayerDialog::setupUi()
         "QSlider::handle:horizontal { width: 8px; height: 8px; margin: -2px 0; background: #059669; border-radius: 4px; }"
     );
 
+    m_desktopLyricBtn = new QPushButton("💬 桌面歌词", bottomBar);
+    m_desktopLyricBtn->setFixedSize(94, 30);
+    m_desktopLyricBtn->setCursor(Qt::PointingHandCursor);
+    m_desktopLyricBtn->setToolTip("开启/关闭桌面透明悬浮歌词 (⌥L)");
+
     controlsLayout->addWidget(m_modeBtn);
+    controlsLayout->addWidget(m_desktopLyricBtn);
     controlsLayout->addStretch();
     controlsLayout->addWidget(m_prevBtn);
     controlsLayout->addWidget(m_playBtn);
@@ -737,6 +745,12 @@ void MusicPlayerDialog::setupConnections()
     connect(m_favBtn, &QPushButton::clicked, this, [this]() {
         MusicPlayerManager::instance()->toggleFavoriteCurrent();
         refreshFavoritesList();
+    });
+
+    // 桌面歌词开关
+    connect(m_desktopLyricBtn, &QPushButton::clicked, this, [this]() {
+        DesktopLyricWidget::instance()->toggleVisibility();
+        updateDesktopLyricBtnState();
     });
 
     // 播放模式切换
@@ -1148,4 +1162,39 @@ void MusicPlayerDialog::showRecommendHelpDialog()
 
     helpDlg->exec();
     helpDlg->deleteLater();
+}
+
+void MusicPlayerDialog::updateDesktopLyricBtnState()
+{
+    if (!m_desktopLyricBtn) return;
+    bool isVis = DesktopLyricWidget::instance()->isLyricVisible();
+    if (isVis) {
+        m_desktopLyricBtn->setText("💬 歌词 · 开");
+        m_desktopLyricBtn->setStyleSheet(
+            "QPushButton {"
+            "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #6366f1, stop:1 #4f46e5);"
+            "  color: #ffffff;"
+            "  font-weight: 600;"
+            "  font-size: 11.5px;"
+            "  border: none;"
+            "  border-radius: 6px;"
+            "  padding: 4px 8px;"
+            "}"
+            "QPushButton:hover { background-color: #4338ca; }"
+        );
+    } else {
+        m_desktopLyricBtn->setText("💬 歌词 · 关");
+        m_desktopLyricBtn->setStyleSheet(
+            "QPushButton {"
+            "  background: #f1f5f9;"
+            "  color: #64748b;"
+            "  font-weight: 600;"
+            "  font-size: 11.5px;"
+            "  border: 1px solid #cbd5e1;"
+            "  border-radius: 6px;"
+            "  padding: 4px 8px;"
+            "}"
+            "QPushButton:hover { background-color: #e2e8f0; color: #334155; }"
+        );
+    }
 }

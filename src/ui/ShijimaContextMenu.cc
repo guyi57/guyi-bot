@@ -21,6 +21,7 @@
 #include "ShijimaManager.hpp"
 #include "BehaviorEngine.hpp"
 #include "MusicPlayerDialog.hpp"
+#include "DesktopLyricWidget.hpp"
 #include "FileDisposalSequence.hpp"
 #include "UpdateManager.hpp"
 #include "UpdateDialog.hpp"
@@ -183,6 +184,21 @@ ShijimaContextMenu::ShijimaContextMenu(ShijimaWidget *parent)
         connect(action, &QAction::triggered, [](){
             MusicPlayerDialog::instance()->toggleVisibility();
         });
+
+        bool lyricVisible = DesktopLyricWidget::instance()->isLyricVisible();
+        action = behaviorsMenu->addAction(lyricVisible ? "💬 桌面悬浮歌词 [已开启] (⌥L)" : "💬 桌面悬浮歌词 [已关闭] (⌥L)");
+        action->setCheckable(true);
+        action->setChecked(lyricVisible);
+        connect(action, &QAction::triggered, [](){
+            DesktopLyricWidget::instance()->toggleVisibility();
+        });
+
+        if (DesktopLyricWidget::instance()->isLocked()) {
+            action = behaviorsMenu->addAction("🔓 解除桌面歌词位置锁定");
+            connect(action, &QAction::triggered, [](){
+                DesktopLyricWidget::instance()->setLocked(false);
+            });
+        }
 
         action = behaviorsMenu->addAction("🕳️ 黑洞吞噬本地文件...");
         connect(action, &QAction::triggered, [petPtr](){

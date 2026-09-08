@@ -65,15 +65,23 @@ public:
     const QVector<LyricLine>& lyrics() const { return m_parsedLyrics; }
     int currentLyricIndex() const { return m_currentLyricIndex; }
 
-    // 回调注册接口
+    // 回调注册接口 (支持多监听者广播)
     void addSongChangedListener(std::function<void(const SongInfo&)> cb) { m_songChangedListeners.append(cb); }
+    void addPlayStateListener(std::function<void(bool)> cb) { m_playStateListeners.append(cb); }
+    void addPositionListener(std::function<void(qint64, qint64)> cb) { m_positionListeners.append(cb); }
+    void addLyricLineListener(std::function<void(int, const QString&, const QString&)> cb) { m_lyricLineListeners.append(cb); }
+    void addPlaylistUpdatedListener(std::function<void()> cb) { m_playlistUpdatedListeners.append(cb); }
+    void addFavoriteStateListener(std::function<void(bool)> cb) { m_favoriteStateListeners.append(cb); }
+    void addErrorOccurredListener(std::function<void(const QString&)> cb) { m_errorOccurredListeners.append(cb); }
+
+    // 兼容原有单接口绑定
     void setOnSongChanged(std::function<void(const SongInfo&)> cb) { addSongChangedListener(cb); }
-    void setOnPlayStateChanged(std::function<void(bool)> cb) { m_onPlayStateChanged = cb; }
-    void setOnPositionChanged(std::function<void(qint64, qint64)> cb) { m_onPositionChanged = cb; }
-    void setOnLyricLineChanged(std::function<void(int, const QString&, const QString&)> cb) { m_onLyricLineChanged = cb; }
-    void setOnPlaylistUpdated(std::function<void()> cb) { m_onPlaylistUpdated = cb; }
-    void setOnFavoriteStateChanged(std::function<void(bool)> cb) { m_onFavoriteStateChanged = cb; }
-    void setOnErrorOccurred(std::function<void(const QString&)> cb) { m_onErrorOccurred = cb; }
+    void setOnPlayStateChanged(std::function<void(bool)> cb) { addPlayStateListener(cb); }
+    void setOnPositionChanged(std::function<void(qint64, qint64)> cb) { addPositionListener(cb); }
+    void setOnLyricLineChanged(std::function<void(int, const QString&, const QString&)> cb) { addLyricLineListener(cb); }
+    void setOnPlaylistUpdated(std::function<void()> cb) { addPlaylistUpdatedListener(cb); }
+    void setOnFavoriteStateChanged(std::function<void(bool)> cb) { addFavoriteStateListener(cb); }
+    void setOnErrorOccurred(std::function<void(const QString&)> cb) { addErrorOccurredListener(cb); }
 
 private:
     explicit MusicPlayerManager(QObject *parent = nullptr);
@@ -86,6 +94,13 @@ private:
 
     void parseLrc(const QString &lrc, const QString &tlyric);
     void updateLyricLine(qint64 positionMs);
+
+    void notifyPlaylistUpdated();
+    void notifyFavoriteStateChanged(bool isFav);
+    void notifyPositionChanged(qint64 pos, qint64 dur);
+    void notifyPlayStateChanged(bool isPlaying);
+    void notifyLyricLineChanged(int idx, const QString &text, const QString &trans);
+    void notifyErrorOccurred(const QString &err);
 
     QMediaPlayer *m_player = nullptr;
     QAudioOutput *m_audioOutput = nullptr;
@@ -101,14 +116,12 @@ private:
     bool m_isRefilling = false;
     int m_consecutiveErrors = 0;
 
-    // 观察者回调
-
-
+    // 观察者多监听者回调列表
     QVector<std::function<void(const SongInfo&)>> m_songChangedListeners;
-    std::function<void(bool)> m_onPlayStateChanged;
-    std::function<void(qint64, qint64)> m_onPositionChanged;
-    std::function<void(int, const QString&, const QString&)> m_onLyricLineChanged;
-    std::function<void()> m_onPlaylistUpdated;
-    std::function<void(bool)> m_onFavoriteStateChanged;
-    std::function<void(const QString&)> m_onErrorOccurred;
+    QVector<std::function<void(bool)>> m_playStateListeners;
+    QVector<std::function<void(qint64, qint64)>> m_positionListeners;
+    QVector<std::function<void(int, const QString&, const QString&)>> m_lyricLineListeners;
+    QVector<std::function<void()>> m_playlistUpdatedListeners;
+    QVector<std::function<void(bool)>> m_favoriteStateListeners;
+    QVector<std::function<void(const QString&)>> m_errorOccurredListeners;
 };

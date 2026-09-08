@@ -63,6 +63,36 @@ MusicPlayerManager::~MusicPlayerManager()
 {
 }
 
+void MusicPlayerManager::notifyPlaylistUpdated()
+{
+    for (auto &cb : m_playlistUpdatedListeners) if (cb) cb();
+}
+
+void MusicPlayerManager::notifyFavoriteStateChanged(bool isFav)
+{
+    for (auto &cb : m_favoriteStateListeners) if (cb) cb(isFav);
+}
+
+void MusicPlayerManager::notifyPositionChanged(qint64 pos, qint64 dur)
+{
+    for (auto &cb : m_positionListeners) if (cb) cb(pos, dur);
+}
+
+void MusicPlayerManager::notifyPlayStateChanged(bool isPlaying)
+{
+    for (auto &cb : m_playStateListeners) if (cb) cb(isPlaying);
+}
+
+void MusicPlayerManager::notifyLyricLineChanged(int idx, const QString &text, const QString &trans)
+{
+    for (auto &cb : m_lyricLineListeners) if (cb) cb(idx, text, trans);
+}
+
+void MusicPlayerManager::notifyErrorOccurred(const QString &err)
+{
+    for (auto &cb : m_errorOccurredListeners) if (cb) cb(err);
+}
+
 SongInfo MusicPlayerManager::currentSong() const
 {
     if (m_currentIndex >= 0 && m_currentIndex < m_playlist.size()) {
@@ -117,14 +147,14 @@ void MusicPlayerManager::playSong(const SongInfo &song)
     } else {
         m_playlist.append(song);
         m_currentIndex = m_playlist.size() - 1;
-        if (m_onPlaylistUpdated) m_onPlaylistUpdated();
+        notifyPlaylistUpdated();
     }
 
     MusicFavoriteDb::instance()->savePlaylist(m_playlist, m_currentIndex);
 
     SongInfo current = m_playlist[m_currentIndex];
     m_isCurrentSongFav = MusicFavoriteDb::instance()->isFavorite(current.source, current.id);
-    if (m_onFavoriteStateChanged) m_onFavoriteStateChanged(m_isCurrentSongFav);
+    notifyFavoriteStateChanged(m_isCurrentSongFav);
 
     std::cout << "[MusicPlayer] 开始准备播放: " << current.name.toStdString() << " - " << current.artist.toStdString() << std::endl;
 
@@ -136,7 +166,7 @@ void MusicPlayerManager::playSong(const SongInfo &song)
             if (m_consecutiveErrors >= 3) {
                 m_consecutiveErrors = 0;
                 m_player->stop();
-                if (m_onErrorOccurred) m_onErrorOccurred("连续多首歌曲暂无可用音频源，已暂停播放");
+                notifyErrorOccurred("连续多首歌曲暂无可用音频源，已暂停播放");
                 ShijimaWidget *target = BehaviorEngine::instance()->activeWidget();
                 if (target != nullptr) {
                     target->showMessage("🎵 暂无可用播放源，已为你暂停播放~", 3500);
@@ -144,7 +174,7 @@ void MusicPlayerManager::playSong(const SongInfo &song)
                 return;
             }
 
-            if (m_onErrorOccurred) m_onErrorOccurred(QString("《%1》暂无可用播放源，正在切换下一首...").arg(resolvedSong.name));
+            notifyErrorOccurred(QString("《%1》暂无可用播放源，正在切换下一首...").arg(resolvedSong.name));
             QTimer::singleShot(800, this, [this]() {
                 playNext();
             });
@@ -174,7 +204,7 @@ void MusicPlayerManager::playPlaylist(const QVector<SongInfo> &list, int startIn
 {
     if (list.isEmpty()) return;
     m_playlist = list;
-    if (m_onPlaylistUpdated) m_onPlaylistUpdated();
+    notifyPlaylistUpdated();
     if (startIndex >= 0 && startIndex < m_playlist.size()) {
         m_currentIndex = startIndex;
         MusicFavoriteDb::instance()->savePlaylist(m_playlist, m_currentIndex);
@@ -191,7 +221,7 @@ void MusicPlayerManager::addToPlaylist(const SongInfo &song)
     }
     m_playlist.append(song);
     MusicFavoriteDb::instance()->savePlaylist(m_playlist, m_currentIndex);
-    if (m_onPlaylistUpdated) m_onPlaylistUpdated();
+    notifyPlaylistUpdated();
 }
 
 int MusicPlayerManager::addBatchToPlaylist(const QVector<SongInfo> &songs)
@@ -212,7 +242,7 @@ int MusicPlayerManager::addBatchToPlaylist(const QVector<SongInfo> &songs)
     }
     if (addedCount > 0) {
         MusicFavoriteDb::instance()->savePlaylist(m_playlist, m_currentIndex);
-        if (m_onPlaylistUpdated) m_onPlaylistUpdated();
+        notifyPlaylistUpdated();
     }
     return addedCount;
 }
@@ -234,14 +264,14 @@ void MusicPlayerManager::removeFromPlaylist(int index)
             m_currentIndex = 0;
         }
         MusicFavoriteDb::instance()->savePlaylist(m_playlist, m_currentIndex);
-        if (m_onPlaylistUpdated) m_onPlaylistUpdated();
+        notifyPlaylistUpdated();
         playSong(m_playlist[m_currentIndex]);
     } else {
         if (index < m_currentIndex) {
             m_currentIndex--;
         }
         MusicFavoriteDb::instance()->savePlaylist(m_playlist, m_currentIndex);
-        if (m_onPlaylistUpdated) m_onPlaylistUpdated();
+        notifyPlaylistUpdated();
     }
 
     // 少于 3 首提前无缝续接
@@ -258,7 +288,7 @@ void MusicPlayerManager::clearPlaylist()
     m_parsedLyrics.clear();
     m_currentLyricIndex = -1;
     MusicFavoriteDb::instance()->savePlaylist(m_playlist, -1);
-    if (m_onPlaylistUpdated) m_onPlaylistUpdated();
+    notifyPlaylistUpdated();
     for (auto &cb : m_songChangedListeners) {
         if (cb) cb(SongInfo());
     }
@@ -476,7 +506,7 @@ void MusicPlayerManager::autoRefillRecommendationsIfNeeded(bool autoPlay)
         }
 
         MusicFavoriteDb::instance()->savePlaylist(m_playlist, m_currentIndex);
-        if (m_onPlaylistUpdated) m_onPlaylistUpdated();
+        notifyPlaylistUpdated();
 
         // 提示桌宠气泡
         ShijimaWidget *target = BehaviorEngine::instance()->activeWidget();
@@ -583,7 +613,7 @@ void MusicPlayerManager::toggleFavoriteCurrent()
             target->showMessage(QString("💖 已将《%1》加入私藏歌单！我也超喜欢这首~").arg(cur.name), 3500);
         }
     }
-    if (m_onFavoriteStateChanged) m_onFavoriteStateChanged(m_isCurrentSongFav);
+    notifyFavoriteStateChanged(m_isCurrentSongFav);
 }
 
 bool MusicPlayerManager::isCurrentSongFavorite() const
@@ -594,12 +624,12 @@ bool MusicPlayerManager::isCurrentSongFavorite() const
 void MusicPlayerManager::onPlayerPositionChanged(qint64 position)
 {
     updateLyricLine(position);
-    if (m_onPositionChanged) m_onPositionChanged(position, m_player->duration());
+    notifyPositionChanged(position, m_player->duration());
 }
 
 void MusicPlayerManager::onPlayerDurationChanged(qint64 duration)
 {
-    if (m_onPositionChanged) m_onPositionChanged(m_player->position(), duration);
+    notifyPositionChanged(m_player->position(), duration);
 }
 
 void MusicPlayerManager::onPlayerPlaybackStateChanged(QMediaPlayer::PlaybackState state)
@@ -607,7 +637,7 @@ void MusicPlayerManager::onPlayerPlaybackStateChanged(QMediaPlayer::PlaybackStat
     if (state == QMediaPlayer::PlayingState) {
         m_consecutiveErrors = 0;
     }
-    if (m_onPlayStateChanged) m_onPlayStateChanged(state == QMediaPlayer::PlayingState);
+    notifyPlayStateChanged(state == QMediaPlayer::PlayingState);
 }
 
 
@@ -629,7 +659,7 @@ void MusicPlayerManager::onMediaStatusChanged(QMediaPlayer::MediaStatus status)
                     m_currentIndex = 0;
                 }
                 MusicFavoriteDb::instance()->savePlaylist(m_playlist, m_currentIndex);
-                if (m_onPlaylistUpdated) m_onPlaylistUpdated();
+                notifyPlaylistUpdated();
                 playSong(m_playlist[m_currentIndex]);
 
                 // 若剩余待播曲目少于 3 首，提前触发推荐补充，实现无缝续接！
@@ -717,8 +747,6 @@ void MusicPlayerManager::updateLyricLine(qint64 positionMs)
 
     if (activeIdx != m_currentLyricIndex && activeIdx >= 0 && activeIdx < m_parsedLyrics.size()) {
         m_currentLyricIndex = activeIdx;
-        if (m_onLyricLineChanged) {
-            m_onLyricLineChanged(activeIdx, m_parsedLyrics[activeIdx].text, m_parsedLyrics[activeIdx].translation);
-        }
+        notifyLyricLineChanged(activeIdx, m_parsedLyrics[activeIdx].text, m_parsedLyrics[activeIdx].translation);
     }
 }

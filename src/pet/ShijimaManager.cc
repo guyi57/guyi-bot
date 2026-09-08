@@ -46,6 +46,7 @@
 #include "BehaviorEngine.hpp"
 #include "MusicPlayerDialog.hpp"
 #include "MusicPlayerManager.hpp"
+#include "DesktopLyricWidget.hpp"
 #include <QDirIterator>
 #include <QDesktopServices>
 #include <shijima/mascot/factory.hpp>
@@ -721,9 +722,10 @@ void ShijimaManager::updateGlobalHotkeys() {
     QString hkMusicPlayPause = cfg.hotkeyMusicPlayPause.isEmpty() ? "Option+Space" : cfg.hotkeyMusicPlayPause;
     QString hkMusicNext = cfg.hotkeyMusicNext.isEmpty() ? "Option+Right" : cfg.hotkeyMusicNext;
     QString hkMusicPrev = cfg.hotkeyMusicPrev.isEmpty() ? "Option+Left" : cfg.hotkeyMusicPrev;
-    QString hkMusicFav = cfg.hotkeyMusicFav.isEmpty() ? "Option+L" : cfg.hotkeyMusicFav;
+    QString hkMusicFav = cfg.hotkeyMusicFav.isEmpty() ? "Option+F" : cfg.hotkeyMusicFav;
+    QString hkLyricToggle = "Option+L";
 
-    // 音乐播放器全局热键 (打开独立窗口 / 播放暂停 / 下一首 / 上一首 / 一键收藏)
+    // 音乐播放器全局热键 (打开独立窗口 / 播放暂停 / 下一首 / 上一首 / 一键收藏 / 桌面歌词)
     HotkeyManager::instance()->registerMusicToggleHotkey(hkMusicToggle, []() {
         MusicPlayerDialog::instance()->toggleVisibility();
     });
@@ -750,6 +752,10 @@ void ShijimaManager::updateGlobalHotkeys() {
                 target->showMessage(isFav ? QString("❤️ 已收藏《%1》～").arg(song.name) : QString("🤍 已取消收藏《%1》").arg(song.name), 2500);
             }
         }
+    });
+
+    HotkeyManager::instance()->registerLyricToggleHotkey(hkLyricToggle, []() {
+        DesktopLyricWidget::instance()->toggleVisibility();
     });
 }
 
