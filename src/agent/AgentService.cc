@@ -3,6 +3,7 @@
 // 
 
 #include "AgentService.hpp"
+#include "WebSearchEngine.hpp"
 #include "AipyAdapter.hpp"
 #include "PetMemory.hpp"
 #include "LongTermMemoryEngine.hpp"
@@ -1249,7 +1250,10 @@ void AgentService::ask(QString const& contextText,
         "%1\n\n"
         "【当前本地真实系统时间】: %2。\n"
         "%3\n\n"
-        "你拥有管理本地系统定时器工具（timer_manage）、音乐播放器工具（music_player_manage）、网络热点搜索工具（web_search）与长期记忆管理工具（memory_manage）。\n"
+        "你拥有管理本地系统定时器工具（timer_manage）、音乐播放器工具（music_player_manage）、全网实时搜索工具（web_search）与长期记忆管理工具（memory_manage）。\n\n"
+        "【全网实时搜索工具（web_search）使用原则】\n"
+        "- 当用户询问任何最新事实、时事新闻、今日天气、地方领导人事（如现任/历任市委书记、市长、官员任免）、百科动态、股市金融、技术发布、热点排行等内容时，【必须第一步调用 web_search(query=...) 联网检索】！\n"
+        "- 严禁凭空盲猜或使用可能过时的离线训练记忆回答！先联网搜索获得最新真实证据后，再给出条理分明的回答。\n\n"
         "【长期记忆与画像工具使用指南】\n"
         "- 当用户透露其身份、技术栈、喜好、作息习惯或正在开发的项目时，主动调用 memory_manage 记录重要事实(remember)或更新主人档案(update_profile)；\n"
         "- 当需要检索用户过往信息时，可调用 memory_manage(action='search') 进行跨会话深度检索。\n\n"
@@ -1419,12 +1423,12 @@ void AgentService::testConnection(QString const& apiBase, QString const& apiKey,
 static QJsonObject getWebSearchToolDefinition() {
     QJsonObject fn;
     fn["name"] = "web_search";
-    fn["description"] = "搜索互联网获取最新资讯、热点榜单、抖音热门歌曲/民谣排行、百科知识等实时信息。当用户询问最新/实时数据或需要热点推荐时调用此工具。";
+    fn["description"] = "联网搜索工具。获取互联网最新资讯、新闻事件、百科数据、地方领导人事、天气、时事动态、股市行情、技术文档等全网实时事实。当用户询问最新/实时数据、地方政务历史事实、新闻热点或需要联网验证时必须调用此工具。";
 
     QJsonObject props;
     QJsonObject queryProp;
     queryProp["type"] = "string";
-    queryProp["description"] = "搜索关键词，例如'2026 抖音 热门民谣 歌曲'、'最新网络流行歌'";
+    queryProp["description"] = "搜索关键词，例如'四川巴中历任市委书记名单'、'今日上海天气'";
     props["query"] = queryProp;
 
     QJsonObject params;
@@ -1447,29 +1451,10 @@ static void executeWebSearchTool(const QJsonObject &args, std::function<void(QSt
         return;
     }
 
-    std::cout << "[WebSearchTool] 正在执行互联网搜索: query=" << query.toStdString() << std::endl;
+    std::cout << "[WebSearchTool] 正在执行互联网多源实时搜索: query=" << query.toStdString() << std::endl;
 
-    MusicApiService::instance()->search(query, "netease", 6, 1, [query, callback](bool success, const QVector<SongInfo>& songs, const QString &) {
-        if (success && !songs.isEmpty()) {
-            QString res = QString("🌐 互联网检索结果「%1」:\n").arg(query);
-            for (int i = 0; i < songs.size(); ++i) {
-                res += QString("%1. 《%2》 - %3 (专辑: %4)\n")
-                    .arg(i + 1)
-                    .arg(songs[i].name, songs[i].artist.isEmpty() ? "热门歌手" : songs[i].artist, songs[i].album.isEmpty() ? "单曲" : songs[i].album);
-            }
-            res += "\n💡 提示: 请根据以上检索到的热门曲目，调用 music_player_manage 的 batch_search_and_add 操作将其批量加入播放列表。";
-            if (callback) callback(res);
-        } else {
-            QString res = QString("🌐 互联网热点检索「%1」精选热门曲目:\n"
-                                  "1. 《若月亮没来》 - 宝石Gem / 于冬然\n"
-                                  "2. 《鲜花》 - 房东的猫\n"
-                                  "3. 《漠河舞厅》 - 柳爽\n"
-                                  "4. 《南山南》 - 马頔\n"
-                                  "5. 《离别开出花》 - 就是南方凯\n"
-                                  "6. 《安和桥》 - 宋冬野\n"
-                                  "\n💡 提示: 请根据以上热门曲目，调用 music_player_manage 的 batch_search_and_add 操作将其批量加入播放列表。");
-            if (callback) callback(res);
-        }
+    WebSearchEngine::instance()->search(query, [callback](bool, const QVector<WebSearchResult>&, const QString &formattedMarkdown) {
+        if (callback) callback(formattedMarkdown);
     });
 }
 
@@ -1522,6 +1507,12 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
         toolsArr.append(getTimerToolDefinition());
         toolsArr.append(getMusicToolDefinition());
         toolsArr.append(getWebSearchToolDefinition());
+
+        // 针对阿里云百炼 Qwen 模型，开启原生实时搜索
+        if (m_config.apiBase.contains("aliyuncs.com")) {
+            root["enable_search"] = true;
+        }
+
         QJsonArray mcpTools = McpManager::instance()->getAllToolDefinitions();
         for (auto tVal : mcpTools) {
             toolsArr.append(tVal);

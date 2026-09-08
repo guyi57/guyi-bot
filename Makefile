@@ -47,6 +47,7 @@ SOURCES = src/main.cc \
 	src/agent/McpClient.cc \
 	src/agent/McpManager.cc \
 	src/agent/ShijimaHttpApi.cc \
+	src/agent/WebSearchEngine.cc \
 	src/music/MusicFavoriteDb.cc \
 	src/music/MusicApiService.cc \
 	src/music/MusicPlayerManager.cc \
