@@ -51,7 +51,11 @@ public:
 
     // 锁定模式
     void setLocked(bool locked);
+    void toggleLocked();
     bool isLocked() const { return m_isLocked; }
+
+    // 填充设置上下文菜单
+    void populateSettingsMenu(QMenu *menu);
 
     // 单双行翻译开关 (向后兼容)
     void setShowTranslation(bool show);

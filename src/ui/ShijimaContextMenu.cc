@@ -185,20 +185,8 @@ ShijimaContextMenu::ShijimaContextMenu(ShijimaWidget *parent)
             MusicPlayerDialog::instance()->toggleVisibility();
         });
 
-        bool lyricVisible = DesktopLyricWidget::instance()->isLyricVisible();
-        action = behaviorsMenu->addAction(lyricVisible ? "💬 桌面悬浮歌词 [已开启] (⌥L)" : "💬 桌面悬浮歌词 [已关闭] (⌥L)");
-        action->setCheckable(true);
-        action->setChecked(lyricVisible);
-        connect(action, &QAction::triggered, [](){
-            DesktopLyricWidget::instance()->toggleVisibility();
-        });
-
-        if (DesktopLyricWidget::instance()->isLocked()) {
-            action = behaviorsMenu->addAction("🔓 解除桌面歌词位置锁定");
-            connect(action, &QAction::triggered, [](){
-                DesktopLyricWidget::instance()->setLocked(false);
-            });
-        }
+        QMenu *lyricMenu = behaviorsMenu->addMenu("💬 桌面歌词设置");
+        DesktopLyricWidget::instance()->populateSettingsMenu(lyricMenu);
 
         action = behaviorsMenu->addAction("🕳️ 黑洞吞噬本地文件...");
         connect(action, &QAction::triggered, [petPtr](){

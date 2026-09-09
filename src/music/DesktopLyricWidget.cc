@@ -295,6 +295,11 @@ void DesktopLyricWidget::setLyricFontSize(int size)
     update();
 }
 
+void DesktopLyricWidget::toggleLocked()
+{
+    setLocked(!m_isLocked);
+}
+
 void DesktopLyricWidget::setLocked(bool locked)
 {
     m_isLocked = locked;
@@ -306,13 +311,21 @@ void DesktopLyricWidget::setLocked(bool locked)
     // 关键：通知底层 macOS / 操作系统完全忽略鼠标事件，实现 100% 原生点击穿透
     Platform::setWindowClickThrough(this, m_isLocked);
 
+    ShijimaWidget *pet = BehaviorEngine::instance()->activeWidget();
+
     if (m_isLocked) {
         if (m_controlBar) m_controlBar->hide();
         setAttribute(Qt::WA_TransparentForMouseEvents, true);
-        showBubbleHint("🔒 歌词位置已锁定！鼠标点击可直接穿透。在桌宠右键可解锁。");
+        showBubbleHint("🔒 歌词已锁定 (鼠标完全穿透)。可在桌宠右键【桌面歌词设置】中解锁，或按 ⌥K 快捷键！");
+        if (pet) {
+            pet->showMessage("🔒 桌面歌词已锁定（鼠标完全穿透）～\n可在我的右键菜单【桌面歌词设置】或按 ⌥K 随时解锁！", 4000);
+        }
     } else {
         setAttribute(Qt::WA_TransparentForMouseEvents, false);
-        showBubbleHint("🔓 歌词已解除锁定，可自由拖拽位置。");
+        showBubbleHint("🔓 歌词已解除锁定，可自由拖拽位置与右键设置。");
+        if (pet) {
+            pet->showMessage("🔓 桌面歌词已解锁！现在可以随意拖动位置或右键选单啦～", 3000);
+        }
     }
     update();
 }
@@ -462,61 +475,26 @@ void DesktopLyricWidget::changeEvent(QEvent *event)
     QWidget::changeEvent(event);
 }
 
-void DesktopLyricWidget::contextMenuEvent(QContextMenuEvent *event)
+void DesktopLyricWidget::populateSettingsMenu(QMenu *menu)
 {
-    QMenu menu(this);
-    menu.setStyleSheet(
-        "QMenu {"
-        "  background-color: #1e293b;"
-        "  color: #f8fafc;"
-        "  border: 1px solid #334155;"
-        "  border-radius: 8px;"
-        "  padding: 4px;"
-        "}"
-        "QMenu::item {"
-        "  padding: 6px 20px;"
-        "  border-radius: 4px;"
-        "}"
-        "QMenu::item:selected {"
-        "  background-color: #3b82f6;"
-        "}"
-    );
+    if (!menu) return;
 
-    // 渐变配色方案二级菜单
-    auto colorMenu = menu.addMenu("🎨 切换渐变配色方案");
-    for (int i = 0; i < m_schemes.size(); ++i) {
-        const auto &s = m_schemes[i];
-        QString title = QString("%1 %2").arg(s.emoji, s.name);
-        auto act = colorMenu->addAction(title);
-        act->setCheckable(true);
-        act->setChecked(i == m_colorSchemeIndex);
-        connect(act, &QAction::triggered, this, [this, i]() {
-            setColorSchemeIndex(i);
-        });
-    }
+    // 显示 / 隐藏
+    auto visAct = menu->addAction(isLyricVisible() ? "👁️ 隐藏桌面歌词 (⌥L)" : "👁️ 显示桌面歌词 (⌥L)");
+    connect(visAct, &QAction::triggered, this, [this]() {
+        toggleVisibility();
+    });
 
-    // 字号调节
-    auto fontMenu = menu.addMenu("🔠 歌词字号大小");
-    QVector<QPair<QString, int>> sizes = {
-        {"小 (20px)", 20},
-        {"标准 (24px)", 24},
-        {"中大 (28px)", 28},
-        {"大 (32px)", 32},
-        {"超大 (36px)", 36}
-    };
-    for (const auto &item : sizes) {
-        auto act = fontMenu->addAction(item.first);
-        act->setCheckable(true);
-        act->setChecked(m_fontSize == item.second);
-        connect(act, &QAction::triggered, this, [this, item]() {
-            setLyricFontSize(item.second);
-        });
-    }
+    // 锁定与穿透
+    auto lockAct = menu->addAction(m_isLocked ? "🔓 解除位置锁定 (允许拖动与右击) (⌥K)" : "🔒 锁定歌词位置 (鼠标完全穿透) (⌥K)");
+    connect(lockAct, &QAction::triggered, this, [this]() {
+        setLocked(!m_isLocked);
+    });
 
-    menu.addSeparator();
+    menu->addSeparator();
 
     // 歌词显示模式二级菜单
-    auto modeMenu = menu.addMenu("📑 歌词显示模式");
+    auto modeMenu = menu->addMenu("📑 歌词显示模式");
     auto actTwoLines = modeMenu->addAction("📑 双句歌词 (当前句 + 下一句)");
     actTwoLines->setCheckable(true);
     actTwoLines->setChecked(m_displayMode == LyricDisplayMode::TwoLines);
@@ -538,26 +516,67 @@ void DesktopLyricWidget::contextMenuEvent(QContextMenuEvent *event)
         setDisplayMode(LyricDisplayMode::SingleLine);
     });
 
-    // 锁定与穿透
-    auto lockAct = menu.addAction(m_isLocked ? "🔓 解除位置锁定" : "🔒 锁定歌词位置 (防误触)");
-    connect(lockAct, &QAction::triggered, this, [this]() {
-        setLocked(!m_isLocked);
-    });
+    // 渐变配色方案二级菜单
+    auto colorMenu = menu->addMenu("🎨 切换渐变配色方案");
+    for (int i = 0; i < m_schemes.size(); ++i) {
+        const auto &s = m_schemes[i];
+        QString title = QString("%1 %2").arg(s.emoji, s.name);
+        auto act = colorMenu->addAction(title);
+        act->setCheckable(true);
+        act->setChecked(i == m_colorSchemeIndex);
+        connect(act, &QAction::triggered, this, [this, i]() {
+            setColorSchemeIndex(i);
+        });
+    }
 
-    menu.addSeparator();
+    // 字号调节
+    auto fontMenu = menu->addMenu("🔠 歌词字号大小");
+    QVector<QPair<QString, int>> sizes = {
+        {"小 (20px)", 20},
+        {"标准 (24px)", 24},
+        {"中大 (28px)", 28},
+        {"大 (32px)", 32},
+        {"超大 (36px)", 36}
+    };
+    for (const auto &item : sizes) {
+        auto act = fontMenu->addAction(item.first);
+        act->setCheckable(true);
+        act->setChecked(m_fontSize == item.second);
+        connect(act, &QAction::triggered, this, [this, item]() {
+            setLyricFontSize(item.second);
+        });
+    }
+
+    menu->addSeparator();
 
     // 唤起音乐面板
-    auto openPlayerAct = menu.addAction("🎵 打开音乐工坊 (⌥M)");
+    auto openPlayerAct = menu->addAction("🎵 打开音乐工坊 (⌥M)");
     connect(openPlayerAct, &QAction::triggered, []() {
         MusicPlayerDialog::instance()->toggleVisibility();
     });
+}
 
-    // 隐藏歌词
-    auto hideAct = menu.addAction("✕ 隐藏桌面歌词 (⌥L)");
-    connect(hideAct, &QAction::triggered, this, [this]() {
-        setLyricVisible(false);
-    });
+void DesktopLyricWidget::contextMenuEvent(QContextMenuEvent *event)
+{
+    QMenu menu(this);
+    menu.setStyleSheet(
+        "QMenu {"
+        "  background-color: #1e293b;"
+        "  color: #f8fafc;"
+        "  border: 1px solid #334155;"
+        "  border-radius: 8px;"
+        "  padding: 4px;"
+        "}"
+        "QMenu::item {"
+        "  padding: 6px 20px;"
+        "  border-radius: 4px;"
+        "}"
+        "QMenu::item:selected {"
+        "  background-color: #3b82f6;"
+        "}"
+    );
 
+    populateSettingsMenu(&menu);
     menu.exec(event->globalPos());
 }
 

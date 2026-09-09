@@ -22,6 +22,7 @@ static std::function<void()> s_musicNextCallback;
 static std::function<void()> s_musicPrevCallback;
 static std::function<void()> s_musicFavCallback;
 static std::function<void()> s_lyricToggleCallback;
+static std::function<void()> s_lyricLockCallback;
 
 static UInt32 parseKeyCode(QString const& keyName) {
     QString k = keyName.trimmed().toUpper();
@@ -169,6 +170,13 @@ static OSStatus hotKeyHandler(EventHandlerCallRef, EventRef theEvent, void*) {
         if (s_lyricToggleCallback) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 s_lyricToggleCallback();
+            });
+        }
+    } else if (hkId.id == 207) {
+        std::cout << "[全局快捷键] 触发 桌面歌词锁定/解锁切换 (⌥K)" << std::endl;
+        if (s_lyricLockCallback) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                s_lyricLockCallback();
             });
         }
     }
@@ -387,6 +395,27 @@ void HotkeyManager::registerLyricToggleHotkey(QString const& shortcutStr, std::f
     }
 }
 
+void HotkeyManager::registerLyricLockHotkey(QString const& shortcutStr, std::function<void()> callback) {
+    s_lyricLockCallback = callback;
+    if (m_lyricLockHotKeyRef) {
+        UnregisterEventHotKey((EventHotKeyRef)m_lyricLockHotKeyRef);
+        m_lyricLockHotKeyRef = nullptr;
+    }
+
+    UInt32 mods = 0, key = 0;
+    if (parseShortcut(shortcutStr, mods, key)) {
+        EventHotKeyID hkId;
+        hkId.signature = 'MS07';
+        hkId.id = 207;
+        EventHotKeyRef ref = NULL;
+        OSStatus status = RegisterEventHotKey(key, mods, hkId, GetApplicationEventTarget(), 0, &ref);
+        if (status == noErr) {
+            m_lyricLockHotKeyRef = (void *)ref;
+            std::cout << "[全局快捷键] 成功注册桌面歌词锁定/解锁快捷键: " << shortcutStr.toStdString() << std::endl;
+        }
+    }
+}
+
 void HotkeyManager::unregisterAll() {
     if (m_translateHotKeyRef) {
         UnregisterEventHotKey((EventHotKeyRef)m_translateHotKeyRef);
@@ -423,6 +452,10 @@ void HotkeyManager::unregisterAll() {
     if (m_lyricToggleHotKeyRef) {
         UnregisterEventHotKey((EventHotKeyRef)m_lyricToggleHotKeyRef);
         m_lyricToggleHotKeyRef = nullptr;
+    }
+    if (m_lyricLockHotKeyRef) {
+        UnregisterEventHotKey((EventHotKeyRef)m_lyricLockHotKeyRef);
+        m_lyricLockHotKeyRef = nullptr;
     }
 }
 

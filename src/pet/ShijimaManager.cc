@@ -757,6 +757,10 @@ void ShijimaManager::updateGlobalHotkeys() {
     HotkeyManager::instance()->registerLyricToggleHotkey(hkLyricToggle, []() {
         DesktopLyricWidget::instance()->toggleVisibility();
     });
+
+    HotkeyManager::instance()->registerLyricLockHotkey("Option+K", []() {
+        DesktopLyricWidget::instance()->toggleLocked();
+    });
 }
 
 ShijimaManager::~ShijimaManager() {

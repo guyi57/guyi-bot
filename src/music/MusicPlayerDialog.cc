@@ -673,7 +673,30 @@ void MusicPlayerDialog::setupUi()
     m_desktopLyricBtn = new QPushButton("💬 桌面歌词", bottomBar);
     m_desktopLyricBtn->setFixedSize(94, 30);
     m_desktopLyricBtn->setCursor(Qt::PointingHandCursor);
-    m_desktopLyricBtn->setToolTip("开启/关闭桌面透明悬浮歌词 (⌥L)");
+    m_desktopLyricBtn->setToolTip("左键：显示/隐藏桌面歌词 (⌥L)\n右键：歌词锁定/模式/配色设置\n快捷键：⌥K 切换锁定穿透");
+    m_desktopLyricBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_desktopLyricBtn, &QPushButton::customContextMenuRequested, this, [this](const QPoint &pos) {
+        QMenu menu(this);
+        menu.setStyleSheet(
+            "QMenu {"
+            "  background-color: #1e293b;"
+            "  color: #f8fafc;"
+            "  border: 1px solid #334155;"
+            "  border-radius: 8px;"
+            "  padding: 4px;"
+            "}"
+            "QMenu::item {"
+            "  padding: 6px 20px;"
+            "  border-radius: 4px;"
+            "}"
+            "QMenu::item:selected {"
+            "  background-color: #059669;"
+            "}"
+        );
+        DesktopLyricWidget::instance()->populateSettingsMenu(&menu);
+        menu.exec(m_desktopLyricBtn->mapToGlobal(pos));
+        updateDesktopLyricBtnState();
+    });
 
     controlsLayout->addWidget(m_modeBtn);
     controlsLayout->addWidget(m_desktopLyricBtn);

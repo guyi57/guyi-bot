@@ -23,6 +23,7 @@ public:
     void registerMusicPrevHotkey(QString const& shortcutStr, std::function<void()> callback);
     void registerMusicFavHotkey(QString const& shortcutStr, std::function<void()> callback);
     void registerLyricToggleHotkey(QString const& shortcutStr, std::function<void()> callback);
+    void registerLyricLockHotkey(QString const& shortcutStr, std::function<void()> callback);
 
     void unregisterAll();
 
@@ -42,5 +43,6 @@ private:
     void *m_musicPrevHotKeyRef = nullptr;
     void *m_musicFavHotKeyRef = nullptr;
     void *m_lyricToggleHotKeyRef = nullptr;
+    void *m_lyricLockHotKeyRef = nullptr;
     void *m_eventHandlerRef = nullptr;
 };

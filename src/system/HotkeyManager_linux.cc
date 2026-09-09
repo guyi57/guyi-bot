@@ -74,6 +74,11 @@ void HotkeyManager::registerLyricToggleHotkey(QString const& shortcutStr, std::f
     Q_UNUSED(callback);
 }
 
+void HotkeyManager::registerLyricLockHotkey(QString const& shortcutStr, std::function<void()> callback) {
+    Q_UNUSED(shortcutStr);
+    Q_UNUSED(callback);
+}
+
 void HotkeyManager::unregisterAll() {
     s_translateCallback = nullptr;
     s_askCallback = nullptr;
