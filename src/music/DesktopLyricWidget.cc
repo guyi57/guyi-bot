@@ -32,7 +32,7 @@ DesktopLyricWidget::DesktopLyricWidget(QWidget *parent)
     setAttribute(Qt::WA_ShowWithoutActivating, true);
     setMouseTracking(true);
 
-    resize(860, 115);
+    resize(880, 125);
 
     initColorSchemes();
     loadSettings();
@@ -43,8 +43,8 @@ DesktopLyricWidget::DesktopLyricWidget(QWidget *parent)
     pm->addSongChangedListener([this](const SongInfo &song) {
         updateSongInfo(song);
     });
-    pm->addLyricLineListener([this](int, const QString &text, const QString &trans) {
-        updateLyricContent(text, trans);
+    pm->addLyricLineListener([this](int idx, const QString &text, const QString &trans) {
+        updateLyricContent(idx, text, trans);
     });
     pm->addPlayStateListener([this](bool isPlaying) {
         updatePlayState(isPlaying);
@@ -95,7 +95,13 @@ void DesktopLyricWidget::loadSettings()
     if (m_fontSize < 16) m_fontSize = 16;
     if (m_fontSize > 40) m_fontSize = 40;
 
-    m_showTranslation = db->getBool("desktop_lyrics_show_trans", true);
+    int modeVal = db->getInt("desktop_lyrics_mode", (int)LyricDisplayMode::TwoLines);
+    if (modeVal >= 0 && modeVal <= 2) {
+        m_displayMode = static_cast<LyricDisplayMode>(modeVal);
+    } else {
+        m_displayMode = LyricDisplayMode::TwoLines;
+    }
+
     m_isLocked = db->getBool("desktop_lyrics_locked", false);
 
     // 屏幕居中靠下默认坐标
@@ -186,6 +192,11 @@ void DesktopLyricWidget::setupUi()
     m_colorBtn->setToolTip("切换流光渐变配色");
     connect(m_colorBtn, &QPushButton::clicked, this, &DesktopLyricWidget::nextColorScheme);
 
+    m_modeBtn = new QPushButton(m_displayMode == LyricDisplayMode::TwoLines ? "双句" : (m_displayMode == LyricDisplayMode::Translation ? "译文" : "单句"), m_controlBar);
+    m_modeBtn->setToolTip("切换显示模式：双句歌词 / 译文 / 单句");
+    m_modeBtn->setStyleSheet("font-size: 11px; font-weight: bold; padding: 2px 5px;");
+    connect(m_modeBtn, &QPushButton::clicked, this, &DesktopLyricWidget::cycleDisplayMode);
+
     m_fontDecBtn = new QPushButton("A-", m_controlBar);
     m_fontDecBtn->setToolTip("缩小歌词字号");
     connect(m_fontDecBtn, &QPushButton::clicked, this, [this]() {
@@ -220,6 +231,7 @@ void DesktopLyricWidget::setupUi()
     barLayout->addWidget(m_favBtn);
     barLayout->addWidget(sep1);
     barLayout->addWidget(m_colorBtn);
+    barLayout->addWidget(m_modeBtn);
     barLayout->addWidget(m_fontDecBtn);
     barLayout->addWidget(m_fontIncBtn);
     barLayout->addWidget(sep2);
@@ -312,27 +324,62 @@ void DesktopLyricWidget::showEvent(QShowEvent *event)
     Platform::setWindowClickThrough(this, m_isLocked);
 }
 
+void DesktopLyricWidget::setDisplayMode(LyricDisplayMode mode)
+{
+    m_displayMode = mode;
+    SettingsDb::instance()->setInt("desktop_lyrics_mode", (int)m_displayMode);
+    if (m_modeBtn) {
+        if (m_displayMode == LyricDisplayMode::TwoLines) m_modeBtn->setText("双句");
+        else if (m_displayMode == LyricDisplayMode::Translation) m_modeBtn->setText("译文");
+        else m_modeBtn->setText("单句");
+    }
+    if (mode == LyricDisplayMode::TwoLines) showBubbleHint("📑 歌词显示模式：双句歌词 (当前句 + 下一句)");
+    else if (mode == LyricDisplayMode::Translation) showBubbleHint("🌐 歌词显示模式：歌词与译文 (当前句 + 译文)");
+    else showBubbleHint("📄 歌词显示模式：单句精简 (仅当前句)");
+    update();
+}
+
+void DesktopLyricWidget::cycleDisplayMode()
+{
+    int next = ((int)m_displayMode + 1) % 3;
+    setDisplayMode(static_cast<LyricDisplayMode>(next));
+}
+
 void DesktopLyricWidget::setShowTranslation(bool show)
 {
-    m_showTranslation = show;
-    SettingsDb::instance()->setBool("desktop_lyrics_show_trans", m_showTranslation);
+    setDisplayMode(show ? LyricDisplayMode::TwoLines : LyricDisplayMode::SingleLine);
+}
+
+void DesktopLyricWidget::updateLyricContent(int lineIndex, const QString &text, const QString &trans)
+{
+    m_currentLyricIndex = lineIndex;
+    m_mainText = text.trimmed();
+    m_transText = trans.trimmed();
+
+    // 自动从播放引擎提取下一句歌词
+    const auto &lyrics = MusicPlayerManager::instance()->lyrics();
+    if (lineIndex >= 0 && lineIndex + 1 < lyrics.size()) {
+        m_nextText = lyrics[lineIndex + 1].text.trimmed();
+    } else {
+        m_nextText.clear();
+    }
     update();
 }
 
 void DesktopLyricWidget::updateLyricContent(const QString &text, const QString &trans)
 {
-    m_mainText = text.trimmed();
-    m_transText = trans.trimmed();
-    update();
+    updateLyricContent(m_currentLyricIndex, text, trans);
 }
 
 void DesktopLyricWidget::updateSongInfo(const SongInfo &song)
 {
     m_songTitle = song.name;
     m_artist = song.artist;
-    if (m_mainText.isEmpty()) {
-        update();
-    }
+    m_mainText.clear();
+    m_nextText.clear();
+    m_transText.clear();
+    m_currentLyricIndex = -1;
+    update();
 }
 
 void DesktopLyricWidget::updatePlayState(bool isPlaying)
@@ -468,12 +515,27 @@ void DesktopLyricWidget::contextMenuEvent(QContextMenuEvent *event)
 
     menu.addSeparator();
 
-    // 双行翻译切换
-    auto transAct = menu.addAction("📑 显示歌词翻译 / 次行");
-    transAct->setCheckable(true);
-    transAct->setChecked(m_showTranslation);
-    connect(transAct, &QAction::triggered, this, [this](bool checked) {
-        setShowTranslation(checked);
+    // 歌词显示模式二级菜单
+    auto modeMenu = menu.addMenu("📑 歌词显示模式");
+    auto actTwoLines = modeMenu->addAction("📑 双句歌词 (当前句 + 下一句)");
+    actTwoLines->setCheckable(true);
+    actTwoLines->setChecked(m_displayMode == LyricDisplayMode::TwoLines);
+    connect(actTwoLines, &QAction::triggered, this, [this]() {
+        setDisplayMode(LyricDisplayMode::TwoLines);
+    });
+
+    auto actTrans = modeMenu->addAction("🌐 歌词与译文 (当前句 + 译文)");
+    actTrans->setCheckable(true);
+    actTrans->setChecked(m_displayMode == LyricDisplayMode::Translation);
+    connect(actTrans, &QAction::triggered, this, [this]() {
+        setDisplayMode(LyricDisplayMode::Translation);
+    });
+
+    auto actSingle = modeMenu->addAction("📄 单句精简 (仅当前句)");
+    actSingle->setCheckable(true);
+    actSingle->setChecked(m_displayMode == LyricDisplayMode::SingleLine);
+    connect(actSingle, &QAction::triggered, this, [this]() {
+        setDisplayMode(LyricDisplayMode::SingleLine);
     });
 
     // 锁定与穿透
@@ -529,9 +591,18 @@ void DesktopLyricWidget::paintEvent(QPaintEvent *)
         }
     }
 
-    bool hasTrans = m_showTranslation && !m_transText.isEmpty();
+    // 4. 计算次行内容 (双句歌词 / 译文模式)
+    QString displaySecond;
+    if (m_displayMode == LyricDisplayMode::TwoLines) {
+        // 双句歌词模式：优先显示下一句歌词；若到曲目末尾无下一句则展示翻译
+        displaySecond = !m_nextText.isEmpty() ? m_nextText : m_transText;
+    } else if (m_displayMode == LyricDisplayMode::Translation) {
+        // 译文模式：优先显示本句翻译；若无翻译则显示下一句歌词
+        displaySecond = !m_transText.isEmpty() ? m_transText : m_nextText;
+    }
+    bool hasSecondLine = (m_displayMode != LyricDisplayMode::SingleLine) && !displaySecond.isEmpty();
 
-    // 4. 绘制主歌词（流光渐变 + 粗黑防背景干扰描边）
+    // 5. 绘制主歌词（当前句：大字号粗体 + 流光渐变 + 深色抗锯齿描边）
     QFont mainFont("PingFang SC", m_fontSize, QFont::Bold);
     mainFont.setStyleHint(QFont::SansSerif);
     painter.setFont(mainFont);
@@ -540,7 +611,7 @@ void DesktopLyricWidget::paintEvent(QPaintEvent *)
     // 计算主歌词位置
     int mainTextWidth = fmMain.horizontalAdvance(displayMain);
     int mainX = (width() - mainTextWidth) / 2;
-    int mainBaseline = hasTrans ? (m_fontSize + 44) : (height() / 2 + m_fontSize / 2 + 10);
+    int mainBaseline = hasSecondLine ? (m_fontSize + 38) : (height() / 2 + m_fontSize / 2 + 6);
 
     QPainterPath mainPath;
     mainPath.addText(mainX, mainBaseline, mainFont, displayMain);
@@ -557,26 +628,26 @@ void DesktopLyricWidget::paintEvent(QPaintEvent *)
     mainGrad.setColorAt(1.0, scheme.endColor);
     painter.fillPath(mainPath, QBrush(mainGrad));
 
-    // 5. 绘制次行翻译（若开启且存在）
-    if (hasTrans) {
-        int transSize = std::max(13, m_fontSize - 9);
-        QFont transFont("PingFang SC", transSize, QFont::Normal);
-        transFont.setStyleHint(QFont::SansSerif);
-        painter.setFont(transFont);
-        QFontMetrics fmTrans(transFont);
+    // 6. 绘制第二句歌词（下一句预告 / 译文）
+    if (hasSecondLine) {
+        int secondSize = std::max(14, m_fontSize - 7);
+        QFont secondFont("PingFang SC", secondSize, QFont::Normal);
+        secondFont.setStyleHint(QFont::SansSerif);
+        painter.setFont(secondFont);
+        QFontMetrics fmSecond(secondFont);
 
-        int transTextWidth = fmTrans.horizontalAdvance(m_transText);
-        int transX = (width() - transTextWidth) / 2;
-        int transBaseline = mainBaseline + transSize + 14;
+        int secondTextWidth = fmSecond.horizontalAdvance(displaySecond);
+        int secondX = (width() - secondTextWidth) / 2;
+        int secondBaseline = mainBaseline + secondSize + 15;
 
-        QPainterPath transPath;
-        transPath.addText(transX, transBaseline, transFont, m_transText);
+        QPainterPath secondPath;
+        secondPath.addText(secondX, secondBaseline, secondFont, displaySecond);
 
-        // 次行细微半透明描边
-        QPen transStrokePen(QColor(15, 23, 42, 190), 3.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-        painter.strokePath(transPath, transStrokePen);
+        // 次行细微半透明描边保护
+        QPen secondStrokePen(QColor(15, 23, 42, 200), 3.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        painter.strokePath(secondPath, secondStrokePen);
 
-        // 次行柔白填充
-        painter.fillPath(transPath, QBrush(QColor(248, 250, 252, 225)));
+        // 次行优雅浅白微透填充
+        painter.fillPath(secondPath, QBrush(QColor(241, 245, 249, 225)));
     }
 }

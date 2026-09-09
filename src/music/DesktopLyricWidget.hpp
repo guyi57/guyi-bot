@@ -19,6 +19,12 @@ struct LyricColorScheme {
     QColor shadowColor;
 };
 
+enum class LyricDisplayMode {
+    TwoLines = 0,       // 双句歌词 (当前句 + 下一句)
+    Translation = 1,    // 歌词与译文 (当前句 + 译文)
+    SingleLine = 2      // 单句精简 (仅当前句)
+};
+
 class DesktopLyricWidget : public QWidget
 {
 public:
@@ -38,15 +44,21 @@ public:
     void setLyricFontSize(int size);
     int lyricFontSize() const { return m_fontSize; }
 
+    // 歌词显示模式 (双句歌词 / 译文 / 单句)
+    void setDisplayMode(LyricDisplayMode mode);
+    LyricDisplayMode displayMode() const { return m_displayMode; }
+    void cycleDisplayMode();
+
     // 锁定模式
     void setLocked(bool locked);
     bool isLocked() const { return m_isLocked; }
 
-    // 单双行翻译开关
+    // 单双行翻译开关 (向后兼容)
     void setShowTranslation(bool show);
-    bool showTranslation() const { return m_showTranslation; }
+    bool showTranslation() const { return m_displayMode != LyricDisplayMode::SingleLine; }
 
     // 刷新显示文本
+    void updateLyricContent(int lineIndex, const QString &text, const QString &trans = QString());
     void updateLyricContent(const QString &text, const QString &trans = QString());
     void updateSongInfo(const SongInfo &song);
     void updatePlayState(bool isPlaying);
@@ -76,9 +88,11 @@ private:
 
     // 歌词内容
     QString m_mainText;
+    QString m_nextText;
     QString m_transText;
     QString m_songTitle;
     QString m_artist;
+    int m_currentLyricIndex = -1;
     bool m_isPlaying = false;
     bool m_isFavorite = false;
 
@@ -86,7 +100,7 @@ private:
     QVector<LyricColorScheme> m_schemes;
     int m_colorSchemeIndex = 0;
     int m_fontSize = 24;
-    bool m_showTranslation = true;
+    LyricDisplayMode m_displayMode = LyricDisplayMode::TwoLines;
     bool m_isLocked = false;
     bool m_isHovered = false;
 
@@ -101,6 +115,7 @@ private:
     QPushButton *m_nextBtn = nullptr;
     QPushButton *m_favBtn = nullptr;
     QPushButton *m_colorBtn = nullptr;
+    QPushButton *m_modeBtn = nullptr;
     QPushButton *m_fontDecBtn = nullptr;
     QPushButton *m_fontIncBtn = nullptr;
     QPushButton *m_lockBtn = nullptr;
