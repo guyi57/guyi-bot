@@ -22,7 +22,7 @@ class MessageBubble : public QWidget
 {
 public:
     explicit MessageBubble(QWidget *parent = nullptr);
-    void showMessage(QString const& text, int duration = 0, QString const& appTarget = "");
+    void showMessage(QString const& text, int duration = 0, QString const& appTarget = "", bool forceCompact = false);
     void hideMessage();
     void showHistoryDialog();
     bool hasMessage() const { return !m_text.isEmpty(); }
@@ -31,8 +31,10 @@ public:
     int remainingSeconds() const { return m_remainingSeconds; }
     QString const& message() const { return m_text; }
     bool isCompactCuteMode() const { return m_isCompactCuteMode; }
+    bool isHovered() const { return m_isHovered; }
 
     std::function<void()> onClosed = nullptr;
+    std::function<void(bool isHovered)> onHoverChanged = nullptr;
 
     static QString normalizeMarkdownText(QString const& raw);
     static QString markdownToRichHtml(QString const& raw);
@@ -49,6 +51,7 @@ protected:
 private:
     void openAppTarget();
     void updateCountdownDisplay();
+    void setHovered(bool hovered);
 
     QString m_text;
     QString m_appTarget;
@@ -57,6 +60,7 @@ private:
     int m_lastDuration = 0;
     int m_remainingSeconds = 0;
     bool m_isCountdownPaused = false;
+    bool m_isHovered = false;
     bool m_isCompactCuteMode = false;
     int m_tailX = -1;
     bool m_tailFlipped = false;

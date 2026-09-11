@@ -569,7 +569,7 @@ void MessageBubble::openAppTarget()
 }
 
 
-void MessageBubble::showMessage(QString const& text, int duration, QString const& appTarget)
+void MessageBubble::showMessage(QString const& text, int duration, QString const& appTarget, bool forceCompact)
 {
     m_text = normalizeMarkdownText(text);
     m_lastDuration = duration;
@@ -580,26 +580,21 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
         return;
     }
 
-    // 关键：更灵敏、全面的 Markdown 与结构化内容识别机制
-    bool hasMarkdown = m_text.contains("```") ||
-                       m_text.contains("|") ||
-                       m_text.contains("###") ||
-                       m_text.contains("##") ||
-                       m_text.startsWith("#") ||
-                       m_text.contains("\n#") ||
-                       m_text.startsWith("> ") ||
-                       m_text.contains("\n> ") ||
-                       m_text.startsWith("- ") ||
-                       m_text.contains("\n- ") ||
-                       m_text.startsWith("* ") ||
-                       m_text.contains("\n* ") ||
-                       m_text.startsWith("1. ") ||
-                       m_text.contains("\n1. ") ||
-                       m_text.contains("**") ||
-                       m_text.contains("`") ||
-                       !m_appTarget.isEmpty() ||
-                       m_text.length() > 50 ||
-                       m_text.count('\n') >= 2;
+    // 关键优化：日常主动发话、闲聊、系统短句、动作交互一律使用轻量简洁好看的萌系胶囊小气泡！
+    // 仅当确实存在多行代码块、长表格、明确的长篇任务/工具执行，或者内容篇幅极大 (>220 字符) 时，才唤起复杂卡片。
+    bool hasMarkdown = false;
+    if (forceCompact) {
+        hasMarkdown = false;
+    } else {
+        bool hasCodeBlock = m_text.contains("```");
+        bool hasTable = m_text.contains("\n|") && m_text.contains("|\n");
+        bool hasHeader = m_text.startsWith("# ") || m_text.contains("\n# ") ||
+                         m_text.startsWith("## ") || m_text.contains("\n## ");
+        bool hasAppAction = !m_appTarget.isEmpty();
+        bool isVeryLong = m_text.length() > 220;
+
+        hasMarkdown = hasCodeBlock || hasTable || hasHeader || hasAppAction || isVeryLong;
+    }
 
     m_isCompactCuteMode = !hasMarkdown;
 
@@ -643,12 +638,12 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
             m_textBrowser->setFixedWidth(bubbleWidth - 28);
             m_textBrowser->setFixedHeight(bubbleHeight - 16);
         } else {
-            bubbleWidth = std::clamp(std::min(textWidth + 52, 380), 220, 400);
+            bubbleWidth = std::clamp(std::min(textWidth + 52, 420), 200, 420);
             int innerW = bubbleWidth - 28;
             m_textBrowser->setFixedWidth(innerW);
             m_textBrowser->document()->setTextWidth(innerW);
             int docH = static_cast<int>(std::ceil(m_textBrowser->document()->size().height()));
-            bubbleHeight = std::clamp(docH + 26, 56, 120);
+            bubbleHeight = std::clamp(docH + 26, 52, 180);
             m_textBrowser->setFixedHeight(bubbleHeight - 18);
         }
 
@@ -757,9 +752,27 @@ void MessageBubble::updateCountdownDisplay()
     }
 }
 
+void MessageBubble::setHovered(bool hovered)
+{
+    if (m_isHovered != hovered) {
+        m_isHovered = hovered;
+        if (m_isCountdownPaused != hovered) {
+            m_isCountdownPaused = hovered;
+            if (!hovered && m_remainingSeconds < 3) {
+                m_remainingSeconds = 3; // 移出后给 3 秒缓冲自动关闭
+            }
+            updateCountdownDisplay();
+        }
+        if (onHoverChanged) {
+            onHoverChanged(hovered);
+        }
+    }
+}
+
 void MessageBubble::hideMessage()
 {
     bool wasDisplaying = isDisplaying();
+    setHovered(false);
     m_text.clear();
     m_appTarget.clear();
     if (m_openAppBtn) m_openAppBtn->hide();
@@ -793,23 +806,13 @@ bool MessageBubble::eventFilter(QObject *watched, QEvent *event)
         event->type() == QEvent::HoverEnter || 
         event->type() == QEvent::MouseMove ||
         event->type() == QEvent::MouseButtonPress) {
-        // 鼠标移入/悬停，暂停倒计时，用户想看多久就看多久
-        if (!m_isCountdownPaused) {
-            m_isCountdownPaused = true;
-            updateCountdownDisplay();
-        }
+        setHovered(true);
     } else if (event->type() == QEvent::Leave || event->type() == QEvent::HoverLeave) {
         // 检查鼠标是否完全离开当前气泡全局区域
         QPoint globalMousePos = QCursor::pos();
         QRect globalRect = QRect(mapToGlobal(QPoint(0, 0)), size());
         if (!globalRect.contains(globalMousePos)) {
-            if (m_isCountdownPaused) {
-                m_isCountdownPaused = false;
-                if (m_remainingSeconds < 3) {
-                    m_remainingSeconds = 3; // 移出后给 3 秒缓冲自动关闭
-                }
-                updateCountdownDisplay();
-            }
+            setHovered(false);
         }
     }
     return false;
@@ -817,10 +820,7 @@ bool MessageBubble::eventFilter(QObject *watched, QEvent *event)
 
 void MessageBubble::enterEvent(QEnterEvent *)
 {
-    if (!m_isCountdownPaused) {
-        m_isCountdownPaused = true;
-        updateCountdownDisplay();
-    }
+    setHovered(true);
 }
 
 void MessageBubble::leaveEvent(QEvent *)
@@ -828,13 +828,7 @@ void MessageBubble::leaveEvent(QEvent *)
     QPoint globalMousePos = QCursor::pos();
     QRect globalRect = QRect(mapToGlobal(QPoint(0, 0)), size());
     if (!globalRect.contains(globalMousePos)) {
-        if (m_isCountdownPaused) {
-            m_isCountdownPaused = false;
-            if (m_remainingSeconds < 3) {
-                m_remainingSeconds = 3;
-            }
-            updateCountdownDisplay();
-        }
+        setHovered(false);
     }
 }
 

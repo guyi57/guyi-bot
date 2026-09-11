@@ -26,10 +26,17 @@ class AssetLoader
 {
 private:
     QMap<QString, Asset> m_assets;
+    QList<QString> m_accessOrder;
+    int m_maxCacheSize = 160;
+
     AssetLoader();
+    void touchKey(const QString &key);
+    void pruneIfNeeded();
+
 public:
     static AssetLoader *defaultLoader();
     static void finalize();
     Asset const& loadAsset(QString path);
     void unloadAssets(QString root);
+    void setMaxCacheSize(int size) { m_maxCacheSize = size; }
 };

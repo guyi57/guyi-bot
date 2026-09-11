@@ -255,7 +255,7 @@ void FileDisposalSequence::step() {
     // 核心保证：直接根据 active_frame 平移重绘，彻底避免底层 Fall 覆盖！
     if (m_pet) {
         m_pet->updateOffsets();
-        m_pet->repaint();
+        m_pet->update();
     }
 }
 

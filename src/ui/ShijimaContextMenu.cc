@@ -33,6 +33,8 @@
 #include <QDir>
 #include <QPointer>
 #include <QMap>
+#include <QActionGroup>
+#include <QRandomGenerator>
 
 // 行为名称中文翻译映射表
 static QString translateBehaviorName(const std::string &name) {
@@ -237,11 +239,26 @@ ShijimaContextMenu::ShijimaContextMenu(ShijimaWidget *parent)
         action = behaviorsMenu->addAction("➕ 召唤同伴");
         connect(action, &QAction::triggered, [petPtr](){
             if (petPtr) {
+                auto bType = ShijimaManager::defaultManager()->breedingType();
+                if (bType == ShijimaManager::BreedingType::RandomMascot) {
+                    auto &mascots = ShijimaManager::defaultManager()->loadedMascots();
+                    if (!mascots.isEmpty()) {
+                        auto keys = mascots.keys();
+                        int idx = QRandomGenerator::global()->bounded(keys.size());
+                        ShijimaManager::defaultManager()->spawn(keys[idx].toStdString());
+                        return;
+                    }
+                }
                 ShijimaManager::defaultManager()->spawn(petPtr->mascotName().toStdString());
             }
         });
 
-        action = behaviorsMenu->addAction("👤 只保留一个");
+        action = behaviorsMenu->addAction("⚔️ 主宠清理克隆体");
+        connect(action, &QAction::triggered, [](){
+            ShijimaManager::defaultManager()->startEliminateClones(nullptr, true);
+        });
+
+        action = behaviorsMenu->addAction("👤 立即只保留一个");
         connect(action, &QAction::triggered, [petPtr](){
             if (petPtr) {
                 ShijimaManager::defaultManager()->killAllButOne(petPtr.data());
@@ -254,7 +271,63 @@ ShijimaContextMenu::ShijimaContextMenu(ShijimaWidget *parent)
         });
     }
 
-    // 2. 显示管理器
+    // 2. 繁殖模式专属菜单
+    {
+        auto breedMenu = addMenu("🧬 繁殖模式");
+        bool breedEnabled = ShijimaManager::defaultManager()->isBreedingEnabled();
+        action = breedMenu->addAction("启用繁殖模式");
+        action->setCheckable(true);
+        action->setChecked(breedEnabled);
+        connect(action, &QAction::triggered, [petPtr](bool checked){
+            ShijimaManager::defaultManager()->setBreedingEnabled(checked);
+            if (petPtr) {
+                if (checked) {
+                    petPtr->showMessage("🧬 繁殖模式已开启！桌宠可以自主分裂繁衍啦~", 2500);
+                } else {
+                    petPtr->showMessage("🛑 繁殖模式已关闭，停止克隆分裂。", 2500);
+                }
+            }
+        });
+
+        breedMenu->addSeparator();
+
+        auto *styleGroup = new QActionGroup(breedMenu);
+        auto breedType = ShijimaManager::defaultManager()->breedingType();
+
+        action = breedMenu->addAction("🔘 克隆同款桌宠");
+        action->setCheckable(true);
+        action->setActionGroup(styleGroup);
+        action->setChecked(breedType == ShijimaManager::BreedingType::SameMascot);
+        connect(action, &QAction::triggered, [petPtr](){
+            ShijimaManager::defaultManager()->setBreedingType(ShijimaManager::BreedingType::SameMascot);
+            if (petPtr) petPtr->showMessage("🧬 繁殖样式: 仅克隆同款桌宠", 2000);
+        });
+
+        action = breedMenu->addAction("🎲 随机已有样式");
+        action->setCheckable(true);
+        action->setActionGroup(styleGroup);
+        action->setChecked(breedType == ShijimaManager::BreedingType::RandomMascot);
+        connect(action, &QAction::triggered, [petPtr](){
+            ShijimaManager::defaultManager()->setBreedingType(ShijimaManager::BreedingType::RandomMascot);
+            if (petPtr) petPtr->showMessage("🧬 繁殖样式: 随机所有已安装桌宠", 2000);
+        });
+
+        breedMenu->addSeparator();
+
+        action = breedMenu->addAction("⚔️ 主宠清理克隆体");
+        connect(action, &QAction::triggered, [](){
+            ShijimaManager::defaultManager()->startEliminateClones(nullptr, true);
+        });
+
+        action = breedMenu->addAction("👤 立即只保留一个");
+        connect(action, &QAction::triggered, [petPtr](){
+            if (petPtr) {
+                ShijimaManager::defaultManager()->killAllButOne(petPtr.data());
+            }
+        });
+    }
+
+    // 3. 显示管理器
     action = addAction("显示管理器");
     connect(action, &QAction::triggered, [](){
         ShijimaManager::defaultManager()->setManagerVisible(true);

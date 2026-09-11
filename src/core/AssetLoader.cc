@@ -40,9 +40,22 @@ void AssetLoader::finalize() {
     }
 }
 
+void AssetLoader::touchKey(const QString &key) {
+    m_accessOrder.removeAll(key);
+    m_accessOrder.append(key);
+}
+
+void AssetLoader::pruneIfNeeded() {
+    while (m_assets.size() >= m_maxCacheSize && !m_accessOrder.isEmpty()) {
+        QString oldest = m_accessOrder.takeFirst();
+        m_assets.remove(oldest);
+    }
+}
+
 Asset const& AssetLoader::loadAsset(QString path) {
     path = QDir::cleanPath(path);
     if (!m_assets.contains(path)) {
+        pruneIfNeeded();
         Asset &asset = m_assets[path];
         QImage image;
         if (path.startsWith("@")) {
@@ -59,14 +72,18 @@ Asset const& AssetLoader::loadAsset(QString path) {
         }
         asset.setImage(image);
     }
+    touchKey(path);
     return m_assets[path];
 }
 
 void AssetLoader::unloadAssets(QString root) {
     root = QDir::cleanPath(root);
-    for (auto &path : m_assets.keys()) {
-        if (path.startsWith(root)) {
-            m_assets.remove(path);
+    for (auto it = m_assets.begin(); it != m_assets.end(); ) {
+        if (it.key().startsWith(root)) {
+            m_accessOrder.removeAll(it.key());
+            it = m_assets.erase(it);
+        } else {
+            ++it;
         }
     }
 }

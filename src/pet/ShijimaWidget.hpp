@@ -19,6 +19,7 @@
 // 
 
 #include <QWidget>
+#include <QPointer>
 #include <memory>
 #include <QRegion>
 #include <QTimer>
@@ -44,12 +45,14 @@ class SelectionToolbar;
 class AskDialog;
 class AgentSettingsDialog;
 class PetStatusBarWidget;
+class CloneEliminationSequence;
 
 class ShijimaWidget : public PlatformWidget<QWidget>
 {
 public:
     friend class ShijimaContextMenu;
     friend class FileDisposalSequence;
+    friend class CloneEliminationSequence;
     explicit ShijimaWidget(MascotData *mascotData,
         std::unique_ptr<shijima::mascot::manager> mascot,
         int mascotId, bool windowedMode, QWidget *parent = nullptr);
@@ -63,8 +66,12 @@ public:
     void showDiary();
     void markForDeletion() { m_markedForDeletion = true; }
     bool isMarkedForDeletion() const { return m_markedForDeletion; }
+    bool isClone() const { return m_isClone; }
+    void setClone(bool clone) { m_isClone = clone; }
     bool inspectorVisible();
-    bool paused() const { return m_paused || m_contextMenuVisible; }
+    bool paused() const {
+        return m_paused || m_contextMenuVisible || m_bubbleHovered || (m_petHovered && m_messageBubble && m_messageBubble->isDisplaying());
+    }
     shijima::mascot::manager &mascot() {
         return *m_mascot;
     }
@@ -80,7 +87,7 @@ public:
     QString const& mascotName() {
         return m_data->name();
     }
-    void showMessage(QString const& text, int duration = 0, QString const& appTarget = "", bool moveToCenter = false);
+    void showMessage(QString const& text, int duration = 0, QString const& appTarget = "", bool moveToCenter = false, bool forceCompact = false);
     void hideMessage();
 
     // 执行高阶动作指令
@@ -110,10 +117,11 @@ public:
         int duration = 0;
         QString appTarget;
         bool moveToCenter = false;
+        bool forceCompact = false;
         std::function<void()> onStart;
     };
 
-    void queueOrShowMessage(const QString &text, int duration = 0, const QString &appTarget = "", bool moveToCenter = false, std::function<void()> onStart = nullptr);
+    void queueOrShowMessage(const QString &text, int duration = 0, const QString &appTarget = "", bool moveToCenter = false, std::function<void()> onStart = nullptr, bool forceCompact = false);
     void processNextQueuedMessage();
     void handlePatrolInterruption(const QString &interruptType, const QString &customDetail = "");
 
@@ -123,6 +131,8 @@ protected:
     void mousePressEvent(QMouseEvent *) override;
     void mouseMoveEvent(QMouseEvent *) override;
     void mouseReleaseEvent(QMouseEvent *) override;
+    void enterEvent(QEnterEvent *) override;
+    void leaveEvent(QEvent *) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
 private:
@@ -142,8 +152,8 @@ private:
     ShimejiInspectorDialog *m_inspector;
     SoundEffectManager m_sounds;
     Asset const& getActiveAsset();
-    ShijimaWidget *m_dragTarget = nullptr;
-    ShijimaWidget **m_dragTargetPt = nullptr;
+    QPointer<ShijimaWidget> m_dragTarget;
+    QPointer<ShijimaWidget> *m_dragTargetPt = nullptr;
     std::unique_ptr<shijima::mascot::manager> m_mascot;
     QRect m_imageRect;
     QPoint m_anchorInWindow;
@@ -154,7 +164,10 @@ private:
     bool m_visible;
     bool m_contextMenuVisible = false;
     bool m_paused = false;
+    bool m_bubbleHovered = false;
+    bool m_petHovered = false;
     bool m_markedForDeletion = false;
+    bool m_isClone = false;
     int m_mascotId;
     MessageBubble *m_messageBubble;
     QVariantAnimation *m_moveAnimation = nullptr;

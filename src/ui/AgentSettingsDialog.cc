@@ -655,7 +655,31 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
 
     sysLayout->addWidget(displayGroup);
 
-    // 3. 本地数据与存储
+    // 3. 桌宠繁殖与克隆设置
+    auto breedGroup = new QGroupBox("🧬 桌宠繁殖与克隆模式", sysPage);
+    breedGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto breedForm = new QFormLayout(breedGroup);
+    breedForm->setSpacing(8);
+    breedForm->setLabelAlignment(Qt::AlignRight);
+
+    m_breedingEnabledCheck = new QCheckBox("启用桌宠繁殖 (允许自主分裂/拉起生成同伴与克隆体)", breedGroup);
+    m_breedingEnabledCheck->setStyleSheet("font-size: 13px; font-weight: 500; color: #303133;");
+    breedForm->addRow("繁殖模式开关:", m_breedingEnabledCheck);
+
+    m_breedingTypeCombo = new QComboBox(breedGroup);
+    m_breedingTypeCombo->addItem("🔘 克隆同款桌宠 (仅繁殖当前相同款式)", static_cast<int>(ShijimaManager::BreedingType::SameMascot));
+    m_breedingTypeCombo->addItem("🎲 随机已有样式 (从所有已安装桌宠列表中随机抽取)", static_cast<int>(ShijimaManager::BreedingType::RandomMascot));
+    m_breedingTypeCombo->setStyleSheet("padding: 4px 8px; font-size: 13px;");
+    breedForm->addRow("繁殖生成样式:", m_breedingTypeCombo);
+
+    auto breedTip = new QLabel("提示：繁殖模式开启后，桌宠可根据行为自主繁衍生息；主宠也会在桌面合理巡视并通过趣味动作淘汰多余克隆体。", breedGroup);
+    breedTip->setStyleSheet("font-size: 11px; color: #909399;");
+    breedTip->setWordWrap(true);
+    breedForm->addRow("", breedTip);
+
+    sysLayout->addWidget(breedGroup);
+
+    // 4. 本地数据与存储
     auto dataGroup = new QGroupBox("📁 本地数据与缓存", sysPage);
     dataGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
     auto dataForm = new QFormLayout(dataGroup);
@@ -999,6 +1023,10 @@ void AgentSettingsDialog::refreshValues() {
     if (bIdx >= 0) m_banterFreqCombo->setCurrentIndex(bIdx);
     m_contextualCareCheck->setChecked(cfg.enableContextualCare);
 
+    m_breedingEnabledCheck->setChecked(ShijimaManager::defaultManager()->isBreedingEnabled());
+    int breedIdx = m_breedingTypeCombo->findData(static_cast<int>(ShijimaManager::defaultManager()->breedingType()));
+    if (breedIdx >= 0) m_breedingTypeCombo->setCurrentIndex(breedIdx);
+
     m_testStatusLabel->clear();
     m_agentStatusLabel->clear();
 
@@ -1229,6 +1257,13 @@ void AgentSettingsDialog::saveAndClose() {
     bool showOrb = m_showHeadStatusOrbCheck->isChecked();
     SettingsDb::instance()->set("ui.show_head_status_orb", showOrb ? "true" : "false");
     SettingsDb::instance()->setBool("sys.auto_check_update", m_autoCheckUpdateCheck->isChecked());
+
+    // 保存繁殖模式设置
+    bool bEnabled = m_breedingEnabledCheck->isChecked();
+    ShijimaManager::defaultManager()->setBreedingEnabled(bEnabled);
+    int bTypeVal = m_breedingTypeCombo->currentData().toInt();
+    ShijimaManager::defaultManager()->setBreedingType(static_cast<ShijimaManager::BreedingType>(bTypeVal));
+
     for (auto pet : ShijimaManager::defaultManager()->mascots()) {
         if (pet) pet->repaint();
     }

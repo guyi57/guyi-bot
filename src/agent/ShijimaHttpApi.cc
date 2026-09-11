@@ -557,6 +557,20 @@ ShijimaHttpApi::ShijimaHttpApi(ShijimaManager *manager): m_server(new Server),
     m_server->Get("/guyi/api/v1/trash_file", handleTrashFileRequest);
     m_server->Post("/api/pet/trash_file", handleTrashFileRequest);
 
+    // 触发主宠淘汰克隆体动画
+    auto handleEliminateClonesRequest = [this](const Request &req, Response &res) {
+        QJsonObject responseObj;
+        m_manager->onTickSync([](ShijimaManager *manager) {
+            manager->startEliminateClones(nullptr, true);
+        });
+        responseObj["success"] = true;
+        responseObj["message"] = "Clone elimination sequence triggered";
+        sendJson(res, responseObj);
+    };
+    m_server->Post("/guyi/api/v1/eliminate_clones", handleEliminateClonesRequest);
+    m_server->Get("/guyi/api/v1/eliminate_clones", handleEliminateClonesRequest);
+    m_server->Post("/api/pet/eliminate_clones", handleEliminateClonesRequest);
+
     // 接收 Coding Agent 状态感知（生命周期、动作与播报）
     auto handleStatusRequest = [](const Request &req, Response &res) {
         QJsonObject responseObj;

@@ -87,6 +87,10 @@ private:
     QComboBox *m_banterFreqCombo;
     QCheckBox *m_contextualCareCheck;
 
+    // 🧬 繁殖模式与克隆
+    QCheckBox *m_breedingEnabledCheck;
+    QComboBox *m_breedingTypeCombo;
+
     // 🤖 Coding Agent 状态感知与 Token 省流开关
     QCheckBox *m_enableStateHookCheck;
     QCheckBox *m_enableLlmNarrationCheck;

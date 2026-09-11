@@ -105,6 +105,13 @@ ShijimaWidget::ShijimaWidget(MascotData *mascotData,
     m_messageBubble->onClosed = [this]() {
         processNextQueuedMessage();
     };
+    m_messageBubble->onHoverChanged = [this](bool hovered) {
+        m_bubbleHovered = hovered;
+        if (hovered && m_mascot && m_mascot->state) {
+            // 当用户鼠标悬停在消息弹窗上阅读时，让桌宠原地安静坐下或面对鼠标，绝不上蹿下跳
+            trySetBehavior("SitAndFaceMouse") || trySetBehavior("SitDown");
+        }
+    };
     m_selectionToolbar = new SelectionToolbar(m_windowedMode ? parent : nullptr);
     m_askDialog = new AskDialog(m_windowedMode ? parent : nullptr);
     m_settingsDialog = new AgentSettingsDialog(m_windowedMode ? parent : nullptr);
@@ -131,37 +138,43 @@ ShijimaWidget::ShijimaWidget(MascotData *mascotData,
         ShijimaManager::defaultManager()->updateGlobalHotkeys();
     });
 
-    // 绑定定时器到期联动：自动弹出提醒气泡或触发 Agent 自动执行任务
-    TimerManager::instance()->onTimerTriggered = [this](const ScheduledTimer &timer) {
-        if (timer.type == TimerType::AiTask) {
-            std::cout << "[定时器调度] 到期自动执行 Agent 任务: " << timer.title.toStdString() << std::endl;
-            setWaitingForAgent(true);
-            showMessage("🤖 **定时任务触发**\n\n正在自动执行: " + timer.title + "...", 0, "", true);
+    // 绑定定时器到期联动：自动弹出提醒气泡或触发 Agent 自动执行任务（仅主宠监听，严禁克隆体抢占）
+    if (!m_isClone) {
+        QPointer<ShijimaWidget> petPtr(this);
+        TimerManager::instance()->onTimerTriggered = [petPtr](const ScheduledTimer &timer) {
+            if (!petPtr) return;
+            if (timer.type == TimerType::AiTask) {
+                std::cout << "[定时器调度] 到期自动执行 Agent 任务: " << timer.title.toStdString() << std::endl;
+                petPtr->setWaitingForAgent(true);
+                petPtr->showMessage("🤖 **定时任务触发**\n\n正在自动执行: " + timer.title + "...", 0, "", true);
 
-            QString prompt = timer.taskPrompt.isEmpty() ? timer.title : timer.taskPrompt;
-            AgentService::instance()->ask("", prompt,
-                [this, timer](QString const& progressMsg) {
-                    showMessage(QString("🤖 **定时任务: %1**\n\n%2").arg(timer.title, progressMsg), 0, "", true);
-                },
-                [this, timer](bool success, QString const& result, QString const& appTarget) {
-                    setWaitingForAgent(false);
-                    if (success) {
-                        BehaviorEngine::instance()->addAffection(3, 8);
-                        showMessage(QString("⏰ **定时任务交付: %1**\n\n%2").arg(timer.title, result), 14000, appTarget, true);
-                    } else {
-                        showMessage(QString("❌ **定时任务失败: %1**\n\n%2").arg(timer.title, result), 6000, appTarget, true);
+                QString prompt = timer.taskPrompt.isEmpty() ? timer.title : timer.taskPrompt;
+                AgentService::instance()->ask("", prompt,
+                    [petPtr, timer](QString const& progressMsg) {
+                        if (!petPtr) return;
+                        petPtr->showMessage(QString("🤖 **定时任务: %1**\n\n%2").arg(timer.title, progressMsg), 0, "", true);
+                    },
+                    [petPtr, timer](bool success, QString const& result, QString const& appTarget) {
+                        if (!petPtr) return;
+                        petPtr->setWaitingForAgent(false);
+                        if (success) {
+                            BehaviorEngine::instance()->addAffection(3, 8);
+                            petPtr->showMessage(QString("⏰ **定时任务交付: %1**\n\n%2").arg(timer.title, result), 14000, appTarget, true);
+                        } else {
+                            petPtr->showMessage(QString("❌ **定时任务失败: %1**\n\n%2").arg(timer.title, result), 6000, appTarget, true);
+                        }
                     }
-                }
-            );
-        } else {
-            std::cout << "[定时器提醒] 到期弹出提醒气泡: " << timer.title.toStdString() << std::endl;
-            BehaviorEngine::instance()->addAffection(2, 5);
-            QString msg = QString("⏰ **定时提醒到达！**\n\n📌 **%1**\n\n*（时间: %2）*")
-                .arg(timer.title)
-                .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
-            showMessage(msg, 10000, "", true);
-        }
-    };
+                );
+            } else {
+                std::cout << "[定时器提醒] 到期弹出提醒气泡: " << timer.title.toStdString() << std::endl;
+                BehaviorEngine::instance()->addAffection(2, 5);
+                QString msg = QString("⏰ **定时提醒到达！**\n\n📌 **%1**\n\n*（时间: %2）*")
+                    .arg(timer.title)
+                    .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"));
+                petPtr->showMessage(msg, 10000, "", true);
+            }
+        };
+    }
 }
 
 ShijimaWidget::ShijimaWidget(ShijimaWidget &old, bool windowedMode,
@@ -547,13 +560,13 @@ void ShijimaWidget::tick() {
 
     if (m_isRunningToCenter) {
         updateOffsets();
-        repaint();
+        update();
         return;
     }
 
     if (m_isThrowFlying) {
         updateOffsets();
-        repaint();
+        update();
         return;
     }
 
@@ -635,7 +648,6 @@ void ShijimaWidget::tick() {
         markForDeletion();
     }
     if (offsetsChanged || forceRepaint) {
-        repaint();
         update();
     }
     if (m_mascot->state->active_sound_changed) {
@@ -800,7 +812,7 @@ void ShijimaWidget::mouseMoveEvent(QMouseEvent *event) {
     bool isMouseDown = (event->buttons() & Qt::LeftButton);
     if (m_dragTarget->m_motion.handlePettingSample(localPos, isMouseDown, headRect)) {
         BehaviorEngine::instance()->addAffection(1, 1);
-        repaint();
+        update();
     }
 
     QPoint curPos = event->globalPosition().toPoint();
@@ -898,6 +910,20 @@ void ShijimaWidget::mouseReleaseEvent(QMouseEvent *event) {
 
         setDragTarget(nullptr);
     }
+}
+
+void ShijimaWidget::enterEvent(QEnterEvent *event) {
+    QWidget::enterEvent(event);
+    m_petHovered = true;
+    if (m_messageBubble && m_messageBubble->isDisplaying() && m_mascot && m_mascot->state) {
+        // 用户鼠标悬停在正在说话的桌宠上，原地安静坐下面对鼠标，避免到处乱跑
+        trySetBehavior("SitAndFaceMouse") || trySetBehavior("SitDown");
+    }
+}
+
+void ShijimaWidget::leaveEvent(QEvent *event) {
+    QWidget::leaveEvent(event);
+    m_petHovered = false;
 }
 
 void ShijimaWidget::dragEnterEvent(QDragEnterEvent *event) {
@@ -1027,7 +1053,7 @@ void ShijimaWidget::applyThrowPhysics(double vx, double vy) {
         }
 
         updateOffsets();
-        repaint();
+        update();
 
         if (landed) {
             m_isThrowFlying = false;
@@ -1064,7 +1090,7 @@ void ShijimaWidget::snapToNearestBorderOrWindow() {
         anchor.y = env->floor.y;
         m_mascot->next_behavior("SitDown");
         updateOffsets();
-        repaint();
+        update();
         return;
     }
 
@@ -1078,7 +1104,7 @@ void ShijimaWidget::snapToNearestBorderOrWindow() {
             anchor.x = std::clamp(anchor.x, ie.left + 15.0, ie.right - 15.0);
             m_mascot->next_behavior("WalkAlongIECeiling");
             updateOffsets();
-            repaint();
+            update();
             return;
         }
 
@@ -1088,7 +1114,7 @@ void ShijimaWidget::snapToNearestBorderOrWindow() {
             m_mascot->state->looking_right = false;
             m_mascot->next_behavior("ClimbAlongWall");
             updateOffsets();
-            repaint();
+            update();
             return;
         }
         // 靠近窗口右边缘 (15px 极近贴近) -> 抓壁
@@ -1097,7 +1123,7 @@ void ShijimaWidget::snapToNearestBorderOrWindow() {
             m_mascot->state->looking_right = true;
             m_mascot->next_behavior("ClimbAlongWall");
             updateOffsets();
-            repaint();
+            update();
             return;
         }
     }
@@ -1107,7 +1133,7 @@ void ShijimaWidget::snapToNearestBorderOrWindow() {
         anchor.y = env->ceiling.y;
         m_mascot->next_behavior("ClimbAlongCeiling");
         updateOffsets();
-        repaint();
+        update();
         return;
     }
 
@@ -1117,7 +1143,7 @@ void ShijimaWidget::snapToNearestBorderOrWindow() {
         m_mascot->state->looking_right = false;
         m_mascot->next_behavior("ClimbAlongWall");
         updateOffsets();
-        repaint();
+        update();
         return;
     }
     if (std::abs(anchor.x - env->work_area.right) <= 20.0) {
@@ -1125,14 +1151,14 @@ void ShijimaWidget::snapToNearestBorderOrWindow() {
         m_mascot->state->looking_right = true;
         m_mascot->next_behavior("ClimbAlongWall");
         updateOffsets();
-        repaint();
+        update();
         return;
     }
 
     // 5. 其他任何空中位置：原地笔直自然掉落，绝不横向吸附或跳跃！
     m_mascot->next_behavior("Fall");
     updateOffsets();
-    repaint();
+    update();
 }
 
 bool ShijimaWidget::checkAndJumpToActiveIE() {
@@ -1191,7 +1217,7 @@ bool ShijimaWidget::checkAndJumpToActiveIE() {
     return false;
 }
 
-void ShijimaWidget::queueOrShowMessage(const QString &text, int duration, const QString &appTarget, bool moveToCenter, std::function<void()> onStart) {
+void ShijimaWidget::queueOrShowMessage(const QString &text, int duration, const QString &appTarget, bool moveToCenter, std::function<void()> onStart, bool forceCompact) {
     (void)moveToCenter;
     if (m_messageBubble == nullptr || !m_mascot || !m_mascot->state || !m_mascot->state->env) {
         return;
@@ -1203,7 +1229,7 @@ void ShijimaWidget::queueOrShowMessage(const QString &text, int duration, const 
     if (m_messageBubble->isDisplaying() && m_messageBubble->isCountdownRunning()) {
         std::cout << "[气泡防冲突队列] 检测到当前有正在阅读的弹窗 (剩余倒计时 " << m_messageBubble->remainingSeconds()
                   << "s)，新动作与消息已加入队列排队等待: " << text.left(25).toStdString() << std::endl;
-        m_bubbleQueue.enqueue({text, duration, appTarget, moveToCenter, onStart});
+        m_bubbleQueue.enqueue({text, duration, appTarget, moveToCenter, forceCompact, onStart});
         return;
     }
 
@@ -1222,8 +1248,18 @@ void ShijimaWidget::queueOrShowMessage(const QString &text, int duration, const 
     // 设置当前发言桌宠为活跃对象
     BehaviorEngine::instance()->setActiveWidget(this);
 
+    // 说话时如果正在奔跑或走动，优先原地乖巧坐下或面对鼠标，避免一边说话一边在屏幕乱窜
+    if (m_mascot && m_mascot->state) {
+        QString beh = currentBehaviorName();
+        if (beh.contains("Run", Qt::CaseInsensitive) ||
+            beh.contains("Walk", Qt::CaseInsensitive) ||
+            beh.contains("Climb", Qt::CaseInsensitive)) {
+            trySetBehavior("SitAndFaceMouse") || trySetBehavior("SitDown");
+        }
+    }
+
     // 立即在当前桌宠头顶弹出气泡并计算贴合位置
-    m_messageBubble->showMessage(text, duration, appTarget);
+    m_messageBubble->showMessage(text, duration, appTarget, forceCompact);
     updateOffsets();
 }
 
@@ -1245,13 +1281,21 @@ void ShijimaWidget::processNextQueuedMessage() {
             m_moveAnimation = nullptr;
         }
         BehaviorEngine::instance()->setActiveWidget(this);
-        m_messageBubble->showMessage(item.text, item.duration, item.appTarget);
+        if (m_mascot && m_mascot->state) {
+            QString beh = currentBehaviorName();
+            if (beh.contains("Run", Qt::CaseInsensitive) ||
+                beh.contains("Walk", Qt::CaseInsensitive) ||
+                beh.contains("Climb", Qt::CaseInsensitive)) {
+                trySetBehavior("SitAndFaceMouse") || trySetBehavior("SitDown");
+            }
+        }
+        m_messageBubble->showMessage(item.text, item.duration, item.appTarget, item.forceCompact);
         updateOffsets();
     });
 }
 
-void ShijimaWidget::showMessage(QString const& text, int duration, QString const& appTarget, bool moveToCenter) {
-    queueOrShowMessage(text, duration, appTarget, moveToCenter, nullptr);
+void ShijimaWidget::showMessage(QString const& text, int duration, QString const& appTarget, bool moveToCenter, bool forceCompact) {
+    queueOrShowMessage(text, duration, appTarget, moveToCenter, nullptr, forceCompact);
 }
 
 void ShijimaWidget::hideMessage() {
@@ -1368,7 +1412,7 @@ void ShijimaWidget::setWaitingForAgent(bool waiting) {
             m_mascot->next_behavior("SitDown");
         }
         updateOffsets();
-        repaint();
+        update();
     }
 }
 
@@ -1378,13 +1422,15 @@ void ShijimaWidget::onTranslateRequested(QString const& text) {
     setWaitingForAgent(true);
     showMessage("🔍 正在翻译...", 0, "", true);
 
-    AgentService::instance()->translate(text, [this](bool success, QString const& result) {
-        setWaitingForAgent(false);
+    QPointer<ShijimaWidget> petPtr(this);
+    AgentService::instance()->translate(text, [petPtr](bool success, QString const& result) {
+        if (!petPtr) return;
+        petPtr->setWaitingForAgent(false);
         if (success) {
             BehaviorEngine::instance()->addAffection(2, 5);
-            showMessage(result, 12000, "", true);
+            petPtr->showMessage(result, 12000, "", true);
         } else {
-            showMessage("❌ " + result, 5000, "", true);
+            petPtr->showMessage("❌ " + result, 5000, "", true);
         }
     });
 }
@@ -1416,17 +1462,20 @@ void ShijimaWidget::onQuestionSubmitted(QString const& context, QString const& q
     setWaitingForAgent(true);
     showMessage("🤔 正在分析问题...", 0, "", true);
 
+    QPointer<ShijimaWidget> petPtr(this);
     AgentService::instance()->ask(context, question,
-        [this](QString const& progressMsg) {
-            showMessage(progressMsg, 0, "", true);
+        [petPtr](QString const& progressMsg) {
+            if (!petPtr) return;
+            petPtr->showMessage(progressMsg, 0, "", true);
         },
-        [this](bool success, QString const& result, QString const& appTarget) {
-            setWaitingForAgent(false);
+        [petPtr](bool success, QString const& result, QString const& appTarget) {
+            if (!petPtr) return;
+            petPtr->setWaitingForAgent(false);
             if (success) {
                 BehaviorEngine::instance()->addAffection(3, 8);
-                showMessage(result, 14000, appTarget, true);
+                petPtr->showMessage(result, 14000, appTarget, true);
             } else {
-                showMessage("❌ " + result, 5000, appTarget, true);
+                petPtr->showMessage("❌ " + result, 5000, appTarget, true);
             }
         });
 }
@@ -1479,7 +1528,7 @@ void ShijimaWidget::moveToCorner(bool toLeftCorner) {
             double curY = currentY + (targetY - currentY) * t;
             m_mascot->state->anchor = { curX, curY };
             updateOffsets();
-            repaint();
+            update();
         }
     });
 
@@ -1498,7 +1547,7 @@ void ShijimaWidget::moveToCorner(bool toLeftCorner) {
             }
         }
         updateOffsets();
-        repaint();
+        update();
         if (m_moveAnimation != nullptr) {
             m_moveAnimation->deleteLater();
             m_moveAnimation = nullptr;
@@ -1607,52 +1656,55 @@ void ShijimaWidget::handlePatrolInterruption(const QString &interruptType, const
         "ClimbAlongWall (沿墙壁向上攀爬，适合探险或想要登高)"
     };
 
+    QPointer<ShijimaWidget> safePet(this);
     AgentService::instance()->requestPetInterruptionDecision(
         interruptType,
         detail,
         petStateInfo,
         allowedBehaviors,
-        [this](bool success, const AIBehaviorIntent &intent) {
-            if (!success || intent.speech.trimmed().isEmpty()) return;
+        [safePet](bool success, const AIBehaviorIntent &intent) {
+            if (!safePet || !success || intent.speech.trimmed().isEmpty()) return;
 
-            QMetaObject::invokeMethod(this, [this, intent]() {
-                queueOrShowMessage(
+            QMetaObject::invokeMethod(safePet.data(), [safePet, intent]() {
+                if (!safePet) return;
+                safePet->queueOrShowMessage(
                     intent.speech,
                     4000,
                     "",
                     false,
-                    [this, intent]() {
+                    [safePet, intent]() {
+                        if (!safePet) return;
                         // 1. 切换动作行为
                         if (!intent.behavior.isEmpty()) {
-                            trySetBehavior(intent.behavior.toStdString());
+                            safePet->trySetBehavior(intent.behavior.toStdString());
                         }
 
                         // 2. 表情贴纸
                         if (intent.emote == "💖" || intent.emote == "🌸") {
-                            m_motion.triggerEmote(PetEmoteType::HappyHeart, 2.5f);
+                            safePet->m_motion.triggerEmote(PetEmoteType::HappyHeart, 2.5f);
                         } else if (intent.emote == "✨" || intent.emote == "🐾") {
-                            m_motion.triggerEmote(PetEmoteType::Sparkle, 2.5f);
+                            safePet->m_motion.triggerEmote(PetEmoteType::Sparkle, 2.5f);
                         } else if (intent.emote == "💢") {
-                            m_motion.triggerEmote(PetEmoteType::AngryVein, 2.5f);
+                            safePet->m_motion.triggerEmote(PetEmoteType::AngryVein, 2.5f);
                         } else if (intent.emote == "💫") {
-                            m_motion.triggerEmote(PetEmoteType::DizzySwirl, 2.5f);
+                            safePet->m_motion.triggerEmote(PetEmoteType::DizzySwirl, 2.5f);
                         } else if (intent.emote == "💡") {
-                            m_motion.triggerEmote(PetEmoteType::ThinkingBulb, 2.5f);
+                            safePet->m_motion.triggerEmote(PetEmoteType::ThinkingBulb, 2.5f);
                         } else if (intent.emote == "💤") {
-                            m_motion.triggerEmote(PetEmoteType::SleepZzz, 2.5f);
+                            safePet->m_motion.triggerEmote(PetEmoteType::SleepZzz, 2.5f);
                         }
 
                         // 3. 微物理形变
                         if (intent.action == "bounce" || intent.action == "jump") {
-                            m_motion.triggerStretch(0.92f, 1.15f);
+                            safePet->m_motion.triggerStretch(0.92f, 1.15f);
                         } else if (intent.action == "stretch") {
-                            m_motion.triggerStretch(0.88f, 1.22f);
+                            safePet->m_motion.triggerStretch(0.88f, 1.22f);
                         } else if (intent.action == "squash") {
-                            m_motion.triggerSquash(1.18f, 0.82f);
+                            safePet->m_motion.triggerSquash(1.18f, 0.82f);
                         }
 
                         if (intent.blush) {
-                            m_motion.spawnHeart(QPointF(0, -25.0f));
+                            safePet->m_motion.spawnHeart(QPointF(0, -25.0f));
                         }
                     }
                 );

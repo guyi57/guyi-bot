@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QTimer>
+#include <QPointer>
 #include <memory>
 #include "PetState.hpp"
 #include "PetAction.hpp"
@@ -33,7 +34,7 @@ public:
 
     // 绑定当前处于前台交互的桌宠
     void setActiveWidget(ShijimaWidget *widget);
-    ShijimaWidget *activeWidget() const { return m_activeWidget; }
+    ShijimaWidget *activeWidget() const { return m_activeWidget.data(); }
 
     PetState &state() { return m_state; }
     const PetState &state() const { return m_state; }
@@ -68,7 +69,7 @@ private:
 
     QTimer *m_tickTimer;
     PetState m_state;
-    ShijimaWidget *m_activeWidget = nullptr;
+    QPointer<ShijimaWidget> m_activeWidget;
     PetActionType m_currentAction = PetActionType::Idle;
     qint64 m_actionEndTime = 0;
     bool m_isThinking = false;

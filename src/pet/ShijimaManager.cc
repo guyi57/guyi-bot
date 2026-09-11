@@ -44,6 +44,8 @@
 #include "HotkeyManager.hpp"
 #include "AgentService.hpp"
 #include "BehaviorEngine.hpp"
+#include "CloneEliminationSequence.hpp"
+#include <QActionGroup>
 #include "MusicPlayerDialog.hpp"
 #include "MusicPlayerManager.hpp"
 #include "DesktopLyricWidget.hpp"
@@ -72,7 +74,7 @@
 #include <cstring>
 #include <cstdint>
 
-#define SHIJIMAQT_SUBTICK_COUNT 4
+#define SHIJIMAQT_SUBTICK_COUNT 1
 
 using namespace shijima;
 
@@ -146,6 +148,95 @@ void ShijimaManager::killAllButOne(QString const& name) {
                 continue;
             }
             mascot->markForDeletion();
+        }
+    }
+}
+
+bool ShijimaManager::isBreedingEnabled() const {
+    if (m_env.isEmpty()) return true;
+    return m_env.first()->allows_breeding;
+}
+
+void ShijimaManager::setBreedingEnabled(bool enabled) {
+    for (auto &env : m_env) {
+        env->allows_breeding = enabled;
+    }
+    m_settings.setValue("multiplicationEnabled", enabled);
+    if (m_breedingAction) {
+        m_breedingAction->setChecked(enabled);
+    }
+}
+
+ShijimaManager::BreedingType ShijimaManager::breedingType() const {
+    return m_breedingType;
+}
+
+void ShijimaManager::setBreedingType(BreedingType type) {
+    m_breedingType = type;
+    m_settings.setValue("breedingType", static_cast<int>(type));
+    if (m_sameBreedAction && m_randomBreedAction) {
+        m_sameBreedAction->setChecked(type == BreedingType::SameMascot);
+        m_randomBreedAction->setChecked(type == BreedingType::RandomMascot);
+    }
+}
+
+ShijimaWidget *ShijimaManager::mainPet() const {
+    for (auto *mascot : m_mascots) {
+        if (mascot && !mascot->isClone() && !mascot->isMarkedForDeletion()) {
+            return mascot;
+        }
+    }
+    if (!m_mascots.empty()) {
+        return m_mascots.front();
+    }
+    return nullptr;
+}
+
+std::vector<ShijimaWidget *> ShijimaManager::clonePets() const {
+    std::vector<ShijimaWidget *> list;
+    ShijimaWidget *main = mainPet();
+    for (auto *mascot : m_mascots) {
+        if (mascot && mascot != main && !mascot->isMarkedForDeletion()) {
+            list.push_back(mascot);
+        }
+    }
+    return list;
+}
+
+void ShijimaManager::startEliminateClones(ShijimaWidget *targetClone, bool chainAll) {
+    ShijimaWidget *main = mainPet();
+    if (!main) return;
+    CloneEliminationSequence::instance()->start(main, targetClone, chainAll);
+}
+
+void ShijimaManager::checkAutoEliminateClones() {
+    if (!isBreedingEnabled()) return;
+    if (CloneEliminationSequence::instance()->isRunning()) return;
+
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_lastAutoEliminateCheck == 0) {
+        m_lastAutoEliminateCheck = now;
+        return;
+    }
+
+    auto clones = clonePets();
+    if (clones.empty()) {
+        m_lastAutoEliminateCheck = now;
+        return;
+    }
+
+    // 优化：加快淘汰清理节奏，当克隆体达到或超过上限(>=3)时 6 秒内即启动淘汰，2只时 12 秒，1只时 20 秒
+    qint64 threshold = 20000;
+    if (clones.size() >= 3) {
+        threshold = 6000;
+    } else if (clones.size() == 2) {
+        threshold = 12000;
+    }
+    if (now - m_lastAutoEliminateCheck >= threshold) {
+        m_lastAutoEliminateCheck = now;
+        ShijimaWidget *main = mainPet();
+        if (main && !main->isMarkedForDeletion() && !main->paused()) {
+            startEliminateClones(nullptr, false);
         }
     }
 }
@@ -353,14 +444,38 @@ void ShijimaManager::buildToolbar() {
             action = menu->addAction("启用繁殖");
             action->setCheckable(true);
             action->setChecked(initial);
+            m_breedingAction = action;
             for (auto &env : m_env) {
                 env->allows_breeding = initial;
             }
             connect(action, &QAction::triggered, [this](bool checked){
-                for (auto &env : m_env) {
-                    env->allows_breeding = checked;
-                }
-                m_settings.setValue(key, QVariant::fromValue(checked));
+                setBreedingEnabled(checked);
+            });
+
+            submenu = menu->addMenu("繁殖样式");
+            auto *bGroup = new QActionGroup(submenu);
+
+            action = submenu->addAction("克隆同款桌宠");
+            action->setCheckable(true);
+            action->setActionGroup(bGroup);
+            action->setChecked(m_breedingType == BreedingType::SameMascot);
+            m_sameBreedAction = action;
+            connect(action, &QAction::triggered, [this](){
+                setBreedingType(BreedingType::SameMascot);
+            });
+
+            action = submenu->addAction("随机列表所有样式");
+            action->setCheckable(true);
+            action->setActionGroup(bGroup);
+            action->setChecked(m_breedingType == BreedingType::RandomMascot);
+            m_randomBreedAction = action;
+            connect(action, &QAction::triggered, [this](){
+                setBreedingType(BreedingType::RandomMascot);
+            });
+
+            action = menu->addAction("⚔️ 主宠清理克隆体");
+            connect(action, &QAction::triggered, [this](){
+                startEliminateClones(nullptr, true);
             });
         }
 
@@ -852,6 +967,8 @@ ShijimaManager::ShijimaManager(QWidget *parent):
     m_idCounter(0), m_httpApi(this),
     m_hasTickCallbacks(false)
 {
+    m_breedingType = static_cast<BreedingType>(m_settings.value("breedingType", 0).toInt());
+
     for (auto screen : QGuiApplication::screens()) {
         screenAdded(screen);
     }
@@ -1225,8 +1342,20 @@ void ShijimaManager::tick() {
             }
         }
         if (breedRequest.available) {
-            if (breedRequest.name == "") {
-                breedRequest.name = shimeji->mascotName().toStdString();
+            // 关键保护：限制桌面克隆体最大数量为 3 只，超出时压制分裂请求，避免无限分裂导致 CPU / 内存雪崩
+            const size_t kMaxClonePets = 3;
+            if (clonePets().size() >= kMaxClonePets) {
+                breedRequest.available = false;
+                continue;
+            }
+            if (m_breedingType == BreedingType::RandomMascot && !m_loadedMascots.isEmpty()) {
+                auto keys = m_loadedMascots.keys();
+                int idx = QRandomGenerator::global()->bounded(keys.size());
+                breedRequest.name = keys[idx].toStdString();
+            } else {
+                if (breedRequest.name == "") {
+                    breedRequest.name = shimeji->mascotName().toStdString();
+                }
             }
             // only consider the last path component
             breedRequest.name = breedRequest.name.substr(breedRequest.name.rfind('\\')+1);
@@ -1246,6 +1375,7 @@ void ShijimaManager::tick() {
                     std::move(product->manager), m_idCounter++,
                     windowedMode(), mascotParent());
                 child->setEnv(shimeji->env());
+                child->setClone(true);
                 child->show();
                 m_mascots.push_back(child);
                 m_mascotsById[child->mascotId()] = child;
@@ -1257,6 +1387,8 @@ void ShijimaManager::tick() {
     for (auto &env : m_env) {
         env->reset_scale();
     }
+
+    checkAutoEliminateClones();
 
     if (m_mascots.size() == 0 && !windowedMode()) {
         // All mascots self-destructed, show manager
@@ -1310,6 +1442,8 @@ ShijimaWidget *ShijimaManager::spawn(std::string const& name) {
             m_loadedMascots[qName],
             std::move(product.manager), m_idCounter++,
             windowedMode(), mascotParent());
+        bool isFirst = m_mascots.empty();
+        shimeji->setClone(!isFirst);
         shimeji->show();
         m_mascots.push_back(shimeji);
         m_mascotsById[shimeji->mascotId()] = shimeji;

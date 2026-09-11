@@ -38,6 +38,7 @@ SOURCES = src/main.cc \
 	src/pet/ReactionEngine.cc \
 	src/pet/InitiativeTrigger.cc \
 	src/pet/FileDisposalSequence.cc \
+	src/pet/CloneEliminationSequence.cc \
 	src/pet/PetDiaryManager.cc \
 	src/agent/AgentService.cc \
 	src/agent/LongTermMemoryEngine.cc \
@@ -182,7 +183,21 @@ publish/macOS/$(CONFIG): $(TARGET)$(EXE)
 	$(call copy_changed,$<,$@)
 	if [ $(CONFIG) = release ]; then $(STRIP) -S $@/libunarr.1.dylib; fi
 	install_name_tool -add_rpath "@loader_path" $@/$< 2>/dev/null || true
-	install_name_tool -add_rpath "$$(realpath $@)" $@/$< 2>/dev/null || true
+	if [ -d $@/$(TARGET).app/Contents/MacOS ]; then \
+		cp $@/$< $@/$(TARGET).app/Contents/MacOS/$(TARGET); \
+		install_name_tool \
+			-change /opt/homebrew/opt/qtbase/lib/QtWidgets.framework/Versions/A/QtWidgets @executable_path/../Frameworks/QtWidgets.framework/Versions/A/QtWidgets \
+			-change /opt/homebrew/opt/qtbase/lib/QtCore.framework/Versions/A/QtCore @executable_path/../Frameworks/QtCore.framework/Versions/A/QtCore \
+			-change /opt/homebrew/opt/qtbase/lib/QtGui.framework/Versions/A/QtGui @executable_path/../Frameworks/QtGui.framework/Versions/A/QtGui \
+			-change /opt/homebrew/opt/qtbase/lib/QtConcurrent.framework/Versions/A/QtConcurrent @executable_path/../Frameworks/QtConcurrent.framework/Versions/A/QtConcurrent \
+			-change /opt/homebrew/opt/qtbase/lib/QtNetwork.framework/Versions/A/QtNetwork @executable_path/../Frameworks/QtNetwork.framework/Versions/A/QtNetwork \
+			-change /opt/homebrew/opt/qtmultimedia/lib/QtMultimedia.framework/Versions/A/QtMultimedia @executable_path/../Frameworks/QtMultimedia.framework/Versions/A/QtMultimedia \
+			-change /opt/homebrew/opt/libarchive/lib/libarchive.13.dylib @executable_path/../Frameworks/libarchive.13.dylib \
+			$@/$(TARGET).app/Contents/MacOS/$(TARGET) 2>/dev/null || true; \
+	fi
+	if [ -d $(TARGET).app/Contents/MacOS ]; then \
+		cp $@/$(TARGET).app/Contents/MacOS/$(TARGET) $(TARGET).app/Contents/MacOS/$(TARGET) 2>/dev/null || true; \
+	fi
 
 publish/Linux/$(CONFIG): $(TARGET)$(EXE)
 	mkdir -p $@

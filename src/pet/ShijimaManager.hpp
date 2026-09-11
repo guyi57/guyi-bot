@@ -67,6 +67,21 @@ public:
     void updateGlobalHotkeys();
     QString defaultMascotName() const;
     void setDefaultMascot(const QString &name);
+
+    enum class BreedingType {
+        SameMascot = 0,    // 克隆同款桌宠
+        RandomMascot = 1   // 繁殖列表所有样式桌宠
+    };
+
+    bool isBreedingEnabled() const;
+    void setBreedingEnabled(bool enabled);
+    BreedingType breedingType() const;
+    void setBreedingType(BreedingType type);
+
+    ShijimaWidget *mainPet() const;
+    std::vector<ShijimaWidget *> clonePets() const;
+    void startEliminateClones(ShijimaWidget *targetClone = nullptr, bool chainAll = true);
+
     ~ShijimaManager();
 protected:
     void timerEvent(QTimerEvent *event) override;
@@ -136,4 +151,11 @@ private:
     std::mutex m_mutex;
     std::condition_variable m_tickCallbackCompletion;
     std::list<std::function<void(ShijimaManager *)>> m_tickCallbacks;
+
+    BreedingType m_breedingType = BreedingType::SameMascot;
+    QAction *m_breedingAction = nullptr;
+    QAction *m_sameBreedAction = nullptr;
+    QAction *m_randomBreedAction = nullptr;
+    qint64 m_lastAutoEliminateCheck = 0;
+    void checkAutoEliminateClones();
 };
