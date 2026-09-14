@@ -326,4 +326,6 @@ $(TARGET).a: $(OBJECTS) Makefile
 shijima-qt.a: $(TARGET).a
 	ln -sf $< $@
 
+-include $(OBJECTS:.o=.d)
+
 .PHONY: install uninstall
