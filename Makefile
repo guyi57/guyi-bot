@@ -283,7 +283,7 @@ libshijima/build/Makefile: libshijima/CMakeLists.txt FORCE
 
 libshimejifinder/build/Makefile: libshimejifinder/CMakeLists.txt FORCE
 	chmod +x libshimejifinder/bin2cpp.sh 2>/dev/null || true
-	python3 -c 'import os; [open(o, "w").write("#include <cstddef>\nstatic const char " + os.path.splitext(os.path.basename(o))[0] + "[] = \n" + "\n".join(["    \"" + "".join(fr"\x{b:02X}" for b in open(i, "rb").read()[j:j+16]) + "\"" for j in range(0, len(open(i, "rb").read()), 16)]) + "\n;\nstatic const size_t " + os.path.splitext(os.path.basename(o))[0] + "_len = " + str(len(open(i, "rb").read())) + ";\n") for i, o in [("libshimejifinder/default_actions.xml", "libshimejifinder/shimejifinder/default_actions.cc"), ("libshimejifinder/default_behaviors.xml", "libshimejifinder/shimejifinder/default_behaviors.cc")]]'
+	python3 -c 'import os; [open(o, "w").write("#include <cstddef>\nstatic const char " + os.path.splitext(os.path.basename(o))[0] + "[] = \n" + "\n".join(["    \"" + "".join(fr"\x{b:02X}" for b in open(i, "rb").read()[j:j+16]) + "\"" for j in range(0, len(open(i, "rb").read()), 16)]) + "\n;\nstatic const size_t " + os.path.splitext(os.path.basename(o))[0] + "_len = " + str(len(open(i, "rb").read())) + ";\n") for i, o in [("DefaultMascot/actions.xml", "libshimejifinder/shimejifinder/default_actions.cc"), ("DefaultMascot/behaviors.xml", "libshimejifinder/shimejifinder/default_behaviors.cc")]]'
 	mkdir -p libshimejifinder/build && cd libshimejifinder/build && \
 		PKG_CONFIG_PATH="/opt/homebrew/opt/libarchive/lib/pkgconfig:$$PKG_CONFIG_PATH" \
 		$(CMAKE) $(CMAKEFLAGS) \
