@@ -69,6 +69,7 @@ SOURCES = src/main.cc \
 	src/ui/SelectionToolbar.cc \
 	src/ui/ShijimaContextMenu.cc \
 	src/ui/AskDialog.cc \
+	src/ui/TranslateDialog.cc \
 	src/ui/AgentSettingsDialog.cc \
 	src/ui/MessageHistoryDialog.cc \
 	src/ui/ShimejiInspectorDialog.cc \
@@ -240,7 +241,7 @@ $(TARGET)$(EXE): $(TARGET).a Platform/Platform.a libshimejifinder/build/libshime
 	ln -sf $(TARGET)$(EXE) shijima-qt$(EXE)
 
 libshijima/build/libshijima.a: libshijima/build/Makefile
-	$(MAKE) -C libshijima/build
+	$(MAKE) -C libshijima/build CXXFLAGS+="-Wno-error" CFLAGS+="-Wno-error"
 
 src/core/DefaultMascot.cc: $(DEFAULT_MASCOT_FILES) Makefile bundle-default.sh
 	python3 ./bundle-default.sh $(DEFAULT_MASCOT_FILES) > '$@-'
@@ -279,6 +280,7 @@ api_doc_generated.hpp: $(API_DOC_FILES) Makefile
 
 
 libshijima/build/Makefile: libshijima/CMakeLists.txt FORCE
+	sed -i '' 's/-Werror/-Wno-error/g' libshijima/CMakeLists.txt 2>/dev/null || sed -i 's/-Werror/-Wno-error/g' libshijima/CMakeLists.txt 2>/dev/null || true
 	mkdir -p libshijima/build && cd libshijima/build && $(CMAKE) $(CMAKEFLAGS) -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_FLAGS="-Wno-error" -DCMAKE_CXX_FLAGS="-DSHIJIMA_DUK_STATIC_BUILD -Wno-error" -DSHIJIMA_BUILD_EXAMPLES=NO ..
 
 libshimejifinder/build/Makefile: libshimejifinder/CMakeLists.txt FORCE

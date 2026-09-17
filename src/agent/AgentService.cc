@@ -33,6 +33,7 @@
 #include <QThread>
 #include <QCoreApplication>
 #include <QDebug>
+#include <QSet>
 #include <iostream>
 
 static QJsonObject getMusicToolDefinition() {
@@ -1087,15 +1088,28 @@ void AgentService::loadMemoryFromFile() {
     }
 }
 
-void AgentService::translate(QString const& text, std::function<void(bool success, QString const& result)> callback) {
+void AgentService::translate(QString const& text, std::function<void(bool success, QString const& result)> callback, QString const& targetLanguage) {
     if (text.trimmed().isEmpty()) {
-        callback(false, "没有选中文本");
+        callback(false, "没有选中文本或输入文本为空");
         return;
     }
 
     bool isChinese = containsChinese(text);
     QString systemPrompt;
-    if (isChinese) {
+    if (!targetLanguage.isEmpty() && targetLanguage != "自动互译 (中英互换)" && targetLanguage != "AUTO") {
+        systemPrompt = QString(
+            "你是一位精通多语言互译的高级翻译与语言学专家。请将用户输入的文本精准翻译为【%1】。\n\n"
+            "1. **若输入为单个单词/短语/词组**：\n"
+            "   - 给出最贴切、常用的目标语言翻译，并标注词性与发音；\n"
+            "   - 提供不同语境下的表达（如常用口语、正式书面等）；\n"
+            "   - 附带 1~2 个典型地道的双语示例短语或例句。\n"
+            "2. **若输入为句子/段落**：\n"
+            "   - **🎯 首选译文**：最自然流畅、符合母语表达习惯的翻译；\n"
+            "   - **🔄 多元表达**：提供不同风格的备选表达（如口语/书面/精炼表达）；\n"
+            "   - **💡 难点/核心词汇解析**（如适用）：提炼核心搭配与用法要点。\n\n"
+            "【排版规范】：请使用结构清晰优雅的 Markdown 格式输出，排版整洁，直接输出翻译与解析内容，严禁任何废话或客套寒暄。"
+        ).arg(targetLanguage);
+    } else if (isChinese) {
         systemPrompt = 
             "你是一位精通中英双语的高级翻译与语言学专家。请针对用户输入的中文内容提供专业、详尽、多元的英文翻译：\n\n"
             "1. **若输入为单词/短语/词组**：\n"
@@ -1139,7 +1153,7 @@ void AgentService::translate(QString const& text, std::function<void(bool succes
             appendMemory("assistant", QString("[译文]: %1").arg(result));
         }
         callback(success, result);
-    });
+    }, true /* isUserFacing */);
 }
 
 void AgentService::ask(QString const& contextText,
@@ -1335,7 +1349,7 @@ void AgentService::ask(QString const& contextText,
             LongTermMemoryEngine::instance()->triggerAsyncReflection(question, cleanResult, m_config.apiBase, m_config.apiKey, m_config.model);
         }
         finishCallback(success, cleanResult, "");
-    });
+    }, true /* isUserFacing */);
 }
 
 void AgentService::openTask(QString const& taskId) {
@@ -1459,33 +1473,55 @@ static void executeWebSearchTool(const QJsonObject &args, std::function<void(QSt
     });
 }
 
-void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<void(bool success, QString const& result)> callback) {
+void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<void(bool success, QString const& result)> callback, bool isUserFacing) {
     if (QThread::currentThread() != QCoreApplication::instance()->thread()) {
-        QMetaObject::invokeMethod(QCoreApplication::instance(), [this, messages, callback]() {
-            sendChatCompletion(messages, callback);
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [this, messages, callback, isUserFacing]() {
+            sendChatCompletion(messages, callback, isUserFacing);
         }, Qt::QueuedConnection);
         return;
     }
 
-    if (m_config.apiKey.trimmed().isEmpty() || m_config.apiKey.contains("YOUR_API_KEY")) {
-        QString demoReply = QString("💡 提示: 请在项目设置或 config.json 中配置您的 api_key 启用大模型推理。");
-        callback(true, demoReply);
-        return;
+    auto isLocalProfile = [](const ModelProfile &p) {
+        return p.apiBase.contains("127.0.0.1") || p.apiBase.contains("localhost");
+    };
+
+    ModelProfile initialProfile = getActiveProfile();
+    if ((initialProfile.apiKey.trimmed().isEmpty() || initialProfile.apiKey.contains("YOUR_API_KEY")) && !isLocalProfile(initialProfile)) {
+        bool canFallback = false;
+        if (m_config.enableAutoFailover) {
+            for (const auto &p : m_config.modelProfiles) {
+                if (p.id != initialProfile.id && p.enabled && (!p.apiKey.trimmed().isEmpty() || isLocalProfile(p))) {
+                    initialProfile = p;
+                    canFallback = true;
+                    break;
+                }
+            }
+        }
+        if (!canFallback) {
+            QString demoReply = QString("💡 提示: 请在项目设置或 config.json 中配置您的 api_key 启用大模型推理。");
+            callback(true, demoReply);
+            return;
+        }
     }
+
+    auto currentProfile = std::make_shared<ModelProfile>(initialProfile);
+    auto triedProfileIds = std::make_shared<QSet<QString>>();
+    triedProfileIds->insert(currentProfile->id);
+    auto failoverNotified = std::make_shared<bool>(false);
 
     auto currentMessages = std::make_shared<QJsonArray>(messages);
     auto turnCount = std::make_shared<int>(0);
     auto accumulatedActions = std::make_shared<QStringList>();
 
     auto runStep = std::make_shared<std::function<void()>>();
-    *runStep = [this, currentMessages, turnCount, accumulatedActions, runStep, callback]() {
+    *runStep = [this, currentProfile, triedProfileIds, failoverNotified, isUserFacing, isLocalProfile, currentMessages, turnCount, accumulatedActions, runStep, callback]() {
         if (*turnCount >= 5) {
             callback(true, accumulatedActions->join("\n\n"));
             return;
         }
         (*turnCount)++;
 
-        QString endpoint = m_config.apiBase.trimmed();
+        QString endpoint = currentProfile->apiBase.trimmed();
         while (endpoint.endsWith('/')) {
             endpoint.chop(1);
         }
@@ -1495,10 +1531,10 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
 
         QNetworkRequest request{QUrl(endpoint)};
         request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-        request.setRawHeader("Authorization", QString("Bearer %1").arg(m_config.apiKey).toUtf8());
+        request.setRawHeader("Authorization", QString("Bearer %1").arg(currentProfile->apiKey).toUtf8());
 
         QJsonObject root;
-        root["model"] = m_config.model;
+        root["model"] = currentProfile->model;
         root["messages"] = *currentMessages;
         root["temperature"] = 0.3;
 
@@ -1510,7 +1546,7 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
         toolsArr.append(getWebSearchToolDefinition());
 
         // 针对阿里云百炼 Qwen 模型，开启原生实时搜索
-        if (m_config.apiBase.contains("aliyuncs.com")) {
+        if (currentProfile->apiBase.contains("aliyuncs.com")) {
             root["enable_search"] = true;
         }
 
@@ -1525,37 +1561,46 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
         QByteArray postData = QJsonDocument(root).toJson();
         QNetworkReply *reply = m_networkManager->post(request, postData);
 
-        QObject::connect(reply, &QNetworkReply::finished, [this, reply, currentMessages, turnCount, accumulatedActions, runStep, callback]() {
+        QObject::connect(reply, &QNetworkReply::finished, [this, reply, currentProfile, triedProfileIds, failoverNotified, isUserFacing, isLocalProfile, currentMessages, turnCount, accumulatedActions, runStep, callback]() {
             reply->deleteLater();
 
-            auto handleFailover = [this, currentMessages, turnCount, accumulatedActions, runStep, callback](const QString &failedReason) -> bool {
+            auto handleFailover = [this, currentProfile, triedProfileIds, failoverNotified, isUserFacing, isLocalProfile, runStep, callback](const QString &failedReason, bool isOfflineError) -> bool {
                 if (!m_config.enableAutoFailover) return false;
 
-                // 寻找下一个有效且启用的备用模型
+                // 寻找下一个有效、启用且在本次请求中尚未尝试过的备用模型
                 ModelProfile nextProfile;
                 bool foundNext = false;
                 for (const auto &p : m_config.modelProfiles) {
-                    if (p.id != m_config.activeProfileId && p.enabled && (!p.apiKey.isEmpty() || p.id == "ollama")) {
-                        nextProfile = p;
-                        foundNext = true;
-                        break;
-                    }
+                    if (!p.enabled) continue;
+                    if (triedProfileIds->contains(p.id)) continue;
+                    if (p.apiKey.trimmed().isEmpty() && !isLocalProfile(p)) continue;
+                    // 如果是断网/离线错误，远端云模型必然无法连接，仅允许尝试本地模型（如 Ollama）
+                    if (isOfflineError && !isLocalProfile(p)) continue;
+
+                    nextProfile = p;
+                    foundNext = true;
+                    break;
                 }
 
                 if (foundNext) {
-                    QString oldName = getActiveProfile().name;
+                    QString oldName = currentProfile->name;
+                    triedProfileIds->insert(nextProfile.id);
+                    *currentProfile = nextProfile;
+
                     std::cout << "[AgentService Failover] 模型【" << oldName.toStdString() << "】调用失败 ("
                               << failedReason.toStdString() << ")，正在自动切换至备用模型【"
-                              << nextProfile.name.toStdString() << "】重新生成..." << std::endl;
+                              << nextProfile.name.toStdString() << "】重试..." << std::endl;
 
-                    setActiveProfile(nextProfile.id);
-
-                    ShijimaManager::defaultManager()->onTickAsync([oldName, nextProfile](ShijimaManager *mgr) {
-                        auto const& mascots = mgr->mascots();
-                        if (!mascots.empty()) {
-                            mascots.front()->showMessage(QString("⚠️ 【%1】调用异常，已自动无缝切换至【%2】重新生成！").arg(oldName, nextProfile.name), 4000);
-                        }
-                    });
+                    // 仅在用户交互式会话中提醒，且单次操作最多只提示一次，杜绝弹窗轰炸；后台静默任务完全不打扰用户
+                    if (isUserFacing && !*failoverNotified) {
+                        *failoverNotified = true;
+                        ShijimaManager::defaultManager()->onTickAsync([oldName, nextProfile](ShijimaManager *mgr) {
+                            auto const& mascots = mgr->mascots();
+                            if (!mascots.empty()) {
+                                mascots.front()->showMessage(QString("⚠️ 【%1】调用异常，正在自动切换至备用模型【%2】重试...").arg(oldName, nextProfile.name), 4000);
+                            }
+                        });
+                    }
 
                     (*runStep)();
                     return true;
@@ -1565,7 +1610,13 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
 
             if (reply->error() != QNetworkReply::NoError) {
                 QString errStr = QString("请求失败: %1").arg(reply->errorString());
-                if (handleFailover(errStr)) {
+                bool isOffline = (
+                    reply->error() == QNetworkReply::HostNotFoundError ||
+                    reply->error() == QNetworkReply::NetworkSessionFailedError ||
+                    reply->error() == QNetworkReply::TemporaryNetworkFailureError ||
+                    reply->error() == QNetworkReply::UnknownNetworkError
+                );
+                if (handleFailover(errStr, isOffline)) {
                     return;
                 }
                 callback(false, errStr);
@@ -1577,7 +1628,7 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
             auto doc = QJsonDocument::fromJson(data, &parseError);
             if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
                 QString errStr = "解析响应数据失败";
-                if (handleFailover(errStr)) {
+                if (handleFailover(errStr, false)) {
                     return;
                 }
                 callback(false, errStr);
@@ -1587,7 +1638,7 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
             auto rootObj = doc.object();
             if (rootObj.contains("error")) {
                 QString err = rootObj["error"].toObject()["message"].toString();
-                if (handleFailover(err)) {
+                if (handleFailover(err, false)) {
                     return;
                 }
                 callback(false, "API错误: " + err);
@@ -1597,7 +1648,7 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
             auto choices = rootObj["choices"].toArray();
             if (choices.isEmpty()) {
                 QString errStr = "模型返回内容为空";
-                if (handleFailover(errStr)) {
+                if (handleFailover(errStr, false)) {
                     return;
                 }
                 callback(false, errStr);

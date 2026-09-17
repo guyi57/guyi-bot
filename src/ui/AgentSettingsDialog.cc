@@ -24,6 +24,15 @@
 #include <QDesktopServices>
 #include <QUrl>
 #include <QFileInfo>
+#include <QPointer>
+
+AgentSettingsDialog::~AgentSettingsDialog()
+{
+    if (m_memoryListenerId > 0) {
+        LongTermMemoryEngine::instance()->removeMemoryListener(m_memoryListenerId);
+        m_memoryListenerId = 0;
+    }
+}
 
 AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     : QDialog(parent)
@@ -803,9 +812,13 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     connect(m_sensorOpenFolderBtn, &QPushButton::clicked, this, []() {
         QDesktopServices::openUrl(QUrl::fromLocalFile(SensorManager::instance()->sensorDirectory()));
     });
-    LongTermMemoryEngine::instance()->addMemoryListener([this]() {
-        QMetaObject::invokeMethod(this, [this]() {
-            refreshMemoryTab();
+    QPointer<AgentSettingsDialog> self(this);
+    m_memoryListenerId = LongTermMemoryEngine::instance()->addMemoryListener([self]() {
+        if (!self) return;
+        QMetaObject::invokeMethod(self.data(), [self]() {
+            if (self) {
+                self->refreshMemoryTab();
+            }
         }, Qt::QueuedConnection);
     });
 

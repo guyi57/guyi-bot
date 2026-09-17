@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <unordered_set>
+#include <unordered_map>
 
 struct AppSemanticContext
 {
@@ -77,5 +78,6 @@ private:
     QString m_lastProbedTarget;
 
     std::unordered_set<std::string> m_pendingSynthesis;
+    std::unordered_map<std::string, qint64> m_failedSynthesisCooldown;
     QList<QJsonObject> m_activityHistory;
 };

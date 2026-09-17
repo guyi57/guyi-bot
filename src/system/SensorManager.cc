@@ -531,9 +531,14 @@ QStringList SensorManager::installedSensors() const
 void SensorManager::requestSensorSynthesis(const QString &appName, const QString &bundleId, const QString &windowTitle)
 {
     std::string key = (bundleId.isEmpty() ? appName : bundleId).toStdString();
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
     {
         QMutexLocker locker(&m_mutex);
         if (m_pendingSynthesis.find(key) != m_pendingSynthesis.end()) {
+            return;
+        }
+        auto it = m_failedSynthesisCooldown.find(key);
+        if (it != m_failedSynthesisCooldown.end() && (now - it->second < 600000)) { // 10分钟冷却
             return;
         }
         m_pendingSynthesis.insert(key);
@@ -545,6 +550,11 @@ void SensorManager::requestSensorSynthesis(const QString &appName, const QString
         if (success && !scriptCode.trimmed().isEmpty()) {
             QString identifier = bundleId.isEmpty() ? appName.toLower() : bundleId;
             saveSensor(identifier, scriptCode);
+            QMutexLocker locker(&m_mutex);
+            m_failedSynthesisCooldown.erase(key);
+        } else {
+            QMutexLocker locker(&m_mutex);
+            m_failedSynthesisCooldown[key] = QDateTime::currentMSecsSinceEpoch();
         }
         {
             QMutexLocker locker(&m_mutex);

@@ -48,6 +48,7 @@
 #include "TimerManager.hpp"
 #include "TimerListDialog.hpp"
 #include "AgentSettingsDialog.hpp"
+#include "TranslateDialog.hpp"
 #include "HotkeyManager.hpp"
 #include "PetEventBus.hpp"
 #include "PetAction.hpp"
@@ -1416,23 +1417,24 @@ void ShijimaWidget::setWaitingForAgent(bool waiting) {
     }
 }
 
-void ShijimaWidget::onTranslateRequested(QString const& text) {
-    if (text.trimmed().isEmpty()) return;
-
-    setWaitingForAgent(true);
-    showMessage("🔍 正在翻译...", 0, "", true);
-
-    QPointer<ShijimaWidget> petPtr(this);
-    AgentService::instance()->translate(text, [petPtr](bool success, QString const& result) {
-        if (!petPtr) return;
-        petPtr->setWaitingForAgent(false);
-        if (success) {
+void ShijimaWidget::showTranslateDialog(QString const& text) {
+    if (m_translateDialog == nullptr) {
+        m_translateDialog = new TranslateDialog(m_windowedMode ? parentWidget() : nullptr);
+        QPointer<ShijimaWidget> petPtr(this);
+        m_translateDialog->onTranslated = [petPtr](const QString &, const QString &) {
+            if (!petPtr) return;
             BehaviorEngine::instance()->addAffection(2, 5);
-            petPtr->showMessage(result, 12000, "", true);
-        } else {
-            petPtr->showMessage("❌ " + result, 5000, "", true);
-        }
-    });
+        };
+    }
+    m_translateDialog->promptForText(text);
+}
+
+void ShijimaWidget::onTranslateRequested(QString const& text) {
+    if (text.trimmed().isEmpty()) {
+        showTranslateDialog("");
+        return;
+    }
+    showTranslateDialog(text);
 }
 
 void ShijimaWidget::onAskRequested(QString const& text) {

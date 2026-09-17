@@ -98,7 +98,8 @@ public:
     static float cosineSimilarity(const QVector<float> &v1, const QVector<float> &v2);
 
     // === 监听与通知机制 (Observer Pattern) ===
-    void addMemoryListener(std::function<void()> listener);
+    int addMemoryListener(std::function<void()> listener);
+    void removeMemoryListener(int id);
     void notifyMemoryUpdated();
 
 private:
@@ -112,5 +113,6 @@ private:
     void *m_sqliteHandle = nullptr;
     QString m_dbPath;
     QNetworkAccessManager *m_netManager = nullptr;
-    std::vector<std::function<void()>> m_listeners;
+    std::map<int, std::function<void()>> m_listeners;
+    int m_nextListenerId = 1;
 };

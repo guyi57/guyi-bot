@@ -100,8 +100,8 @@ public:
     void setAutoFailover(bool enable);
     static QVector<ModelProfile> defaultBuiltinProfiles();
 
-    // 智能翻译：中文 -> 英文，非中文 -> 中文
-    void translate(QString const& text, std::function<void(bool success, QString const& result)> callback);
+    // 智能翻译：支持指定目标语言或中英自动互译
+    void translate(QString const& text, std::function<void(bool success, QString const& result)> callback, QString const& targetLanguage = "");
 
     // 智能提问：支持分流路由（简单问题直答，复杂任务交给 Agent 适配器执行）
     void ask(QString const& contextText,
@@ -145,7 +145,7 @@ public:
 
     void clearMemory();
     QJsonArray const& memoryHistory() const { return m_history; }
-    void sendChatCompletion(QJsonArray const& messages, std::function<void(bool success, QString const& result)> callback);
+    void sendChatCompletion(QJsonArray const& messages, std::function<void(bool success, QString const& result)> callback, bool isUserFacing = false);
 
 private:
     AgentService();

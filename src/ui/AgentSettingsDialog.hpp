@@ -22,6 +22,7 @@ class AgentSettingsDialog : public QDialog
 {
 public:
     explicit AgentSettingsDialog(QWidget *parent = nullptr);
+    ~AgentSettingsDialog() override;
     void refreshValues();
 
 private:
@@ -152,4 +153,6 @@ private:
     QPushButton *m_clearMemoryBtn;
     QPushButton *m_saveBtn;
     QPushButton *m_cancelBtn;
+
+    int m_memoryListenerId = 0;
 };

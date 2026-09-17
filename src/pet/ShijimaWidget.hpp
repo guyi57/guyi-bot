@@ -100,6 +100,7 @@ public:
 
     // 划词操作与提问响应
     void onTranslateRequested(QString const& text);
+    void showTranslateDialog(QString const& text = "");
     void onAskRequested(QString const& text);
     void onQuestionSubmitted(QString const& context, QString const& question);
     void showMessageHistory();
@@ -178,9 +179,10 @@ private:
     bool m_isRunningToCenter = false;
     bool m_isWaitingForAgent = false;
 
-    // 划词操作栏、提问弹窗、配置窗口与定时器窗口
+    // 划词操作栏、提问弹窗、翻译弹窗、配置窗口与定时器窗口
     SelectionToolbar *m_selectionToolbar = nullptr;
     AskDialog *m_askDialog = nullptr;
+    class TranslateDialog *m_translateDialog = nullptr;
     AgentSettingsDialog *m_settingsDialog = nullptr;
     class TimerListDialog *m_timerDialog = nullptr;
     class PetDiaryDialog *m_diaryDialog = nullptr;

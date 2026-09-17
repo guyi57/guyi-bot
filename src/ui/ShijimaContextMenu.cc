@@ -167,6 +167,11 @@ ShijimaContextMenu::ShijimaContextMenu(ShijimaWidget *parent)
             if (petPtr) petPtr->onAskRequested("");
         });
 
+        action = behaviorsMenu->addAction("🌐 翻译文本 (⌥T)...");
+        connect(action, &QAction::triggered, [petPtr](){
+            if (petPtr) petPtr->showTranslateDialog("");
+        });
+
         action = behaviorsMenu->addAction("📖 桌宠私密日记...");
         connect(action, &QAction::triggered, [petPtr](){
             if (petPtr) petPtr->showDiary();

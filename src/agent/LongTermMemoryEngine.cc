@@ -42,10 +42,18 @@ LongTermMemoryEngine::~LongTermMemoryEngine()
     }
 }
 
-void LongTermMemoryEngine::addMemoryListener(std::function<void()> listener)
+int LongTermMemoryEngine::addMemoryListener(std::function<void()> listener)
 {
     QMutexLocker locker(&m_mutex);
-    m_listeners.push_back(listener);
+    int id = m_nextListenerId++;
+    m_listeners[id] = listener;
+    return id;
+}
+
+void LongTermMemoryEngine::removeMemoryListener(int id)
+{
+    QMutexLocker locker(&m_mutex);
+    m_listeners.erase(id);
 }
 
 void LongTermMemoryEngine::notifyMemoryUpdated()
@@ -53,7 +61,11 @@ void LongTermMemoryEngine::notifyMemoryUpdated()
     std::vector<std::function<void()>> copy;
     {
         QMutexLocker locker(&m_mutex);
-        copy = m_listeners;
+        for (const auto &pair : m_listeners) {
+            if (pair.second) {
+                copy.push_back(pair.second);
+            }
+        }
     }
     for (const auto &fn : copy) {
         if (fn) fn();

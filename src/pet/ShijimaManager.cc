@@ -803,11 +803,7 @@ void ShijimaManager::updateGlobalHotkeys() {
         }
         if (target != nullptr) {
             QString text = HotkeyManager::instance()->getActiveSelectedText();
-            if (text.isEmpty()) {
-                target->showMessage("💡 请先划选文字，再按快捷键翻译～", 3500);
-            } else {
-                target->onTranslateRequested(text);
-            }
+            target->showTranslateDialog(text);
         }
     });
 
