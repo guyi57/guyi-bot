@@ -1,7 +1,7 @@
 #pragma once
 
 // 
-// Shijima-Qt - Quick Translation Dialog with Input Box
+// Shijima-Qt - Quick Multi-Engine Fast Translation Dialog
 // 
 
 #include <QDialog>
@@ -10,9 +10,22 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QComboBox>
+#include <QCheckBox>
+#include <QScrollArea>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <functional>
+
+struct TranslationEngineCard {
+    QWidget *cardWidget = nullptr;
+    QLabel *iconLabel = nullptr;
+    QLabel *nameLabel = nullptr;
+    QLabel *badgeLabel = nullptr;
+    QPushButton *copyBtn = nullptr;
+    QPushButton *speakBtn = nullptr;
+    QTextBrowser *contentBrowser = nullptr;
+    QString resultText;
+};
 
 class TranslateDialog : public QDialog
 {
@@ -38,6 +51,11 @@ private slots:
 
 private:
     void setupUi();
+    TranslationEngineCard createEngineCard(const QString &engineId, const QString &icon, const QString &name);
+    void updateCardResult(TranslationEngineCard &card, bool success, const QString &text, qint64 elapsedMs, const QString &errorMsg);
+    void resetCard(TranslationEngineCard &card, const QString &placeholder);
+    void copyCardText(const QString &text, QPushButton *btn);
+    void speakText(const QString &text);
 
     QComboBox *m_sourceLangCombo = nullptr;
     QPushButton *m_swapLangBtn = nullptr;
@@ -48,14 +66,20 @@ private:
     QPushButton *m_pasteBtn = nullptr;
     QPushButton *m_clearBtn = nullptr;
 
+    QCheckBox *m_enableAiCheck = nullptr;
     QPushButton *m_translateBtn = nullptr;
     QLabel *m_statusLabel = nullptr;
 
-    QTextBrowser *m_resultBrowser = nullptr;
-    QPushButton *m_copyBtn = nullptr;
-    QPushButton *m_speakPetBtn = nullptr;
+    QPushButton *m_copyPrimaryBtn = nullptr;
+    QPushButton *m_speakPrimaryBtn = nullptr;
+
+    QScrollArea *m_scrollArea = nullptr;
+    TranslationEngineCard m_edgeCard;
+    TranslationEngineCard m_googleCard;
+    TranslationEngineCard m_dictCard;
+    TranslationEngineCard m_aiCard;
 
     QString m_lastSourceText;
-    QString m_lastResultText;
+    QString m_lastPrimaryResult;
     bool m_isTranslating = false;
 };

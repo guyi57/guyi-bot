@@ -15,6 +15,163 @@
 #include <QScreen>
 #include <iostream>
 
+// =========================================================================
+// MusicSourceConfigDialog: 洛雪与音源引擎配置窗口
+// =========================================================================
+MusicSourceConfigDialog::MusicSourceConfigDialog(QWidget *parent)
+    : QDialog(parent)
+{
+    setWindowTitle("音源引擎配置 (LX-Music / GDStudio)");
+    setFixedSize(460, 360);
+    setStyleSheet("QDialog { background-color: #ffffff; }");
+
+    auto mainLayout = new QVBoxLayout(this);
+    mainLayout->setContentsMargins(24, 20, 24, 20);
+    mainLayout->setSpacing(14);
+
+    auto title = new QLabel("🎵 <b>音源引擎与接口设置</b>", this);
+    title->setStyleSheet("font-size: 16px; color: #0f172a; font-weight: bold;");
+    mainLayout->addWidget(title);
+
+    auto desc = new QLabel("支持切换「洛雪/聚合音源」与「原版 GD 音乐台」，并可自定义外部 LX-Music 服务端。", this);
+    desc->setStyleSheet("font-size: 12px; color: #64748b;");
+    desc->setWordWrap(true);
+    mainLayout->addWidget(desc);
+
+    // 引擎选择
+    auto engineLayout = new QHBoxLayout();
+    auto engineLabel = new QLabel("当前引擎:", this);
+    engineLabel->setStyleSheet("font-size: 13px; font-weight: 600; color: #334155;");
+    engineLabel->setFixedWidth(90);
+
+    m_engineCombo = new QComboBox(this);
+    m_engineCombo->addItem("🎵 洛雪/全网聚合 (推荐 · 支持VIP歌曲/无损直链)", static_cast<int>(MusicEngine::LX_Music));
+    m_engineCombo->addItem("📻 GD音乐台 (原版 Meting 接口)", static_cast<int>(MusicEngine::GDStudio));
+    
+    MusicEngine curEng = MusicApiService::instance()->currentEngine();
+    int idx = m_engineCombo->findData(static_cast<int>(curEng));
+    if (idx >= 0) m_engineCombo->setCurrentIndex(idx);
+    m_engineCombo->setStyleSheet(
+        "QComboBox { background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 10px; font-size: 12px; color: #1e293b; }"
+    );
+    engineLayout->addWidget(engineLabel);
+    engineLayout->addWidget(m_engineCombo, 1);
+    mainLayout->addLayout(engineLayout);
+
+    // LX API 地址
+    auto urlLayout = new QHBoxLayout();
+    auto urlLabel = new QLabel("LX 自定义端点:", this);
+    urlLabel->setStyleSheet("font-size: 13px; font-weight: 600; color: #334155;");
+    urlLabel->setFixedWidth(90);
+
+    m_lxUrlEdit = new QLineEdit(this);
+    m_lxUrlEdit->setPlaceholderText("可选，如 http://127.0.0.1:8080 (留空使用内置直链)");
+    m_lxUrlEdit->setText(MusicApiService::instance()->lxApiUrl());
+    m_lxUrlEdit->setStyleSheet(
+        "QLineEdit { background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 10px; font-size: 12px; color: #1e293b; }"
+    );
+    urlLayout->addWidget(urlLabel);
+    urlLayout->addWidget(m_lxUrlEdit, 1);
+    mainLayout->addLayout(urlLayout);
+
+    // LX 请求密钥
+    auto keyLayout = new QHBoxLayout();
+    auto keyLabel = new QLabel("X-Request-Key:", this);
+    keyLabel->setStyleSheet("font-size: 13px; font-weight: 600; color: #334155;");
+    keyLabel->setFixedWidth(90);
+
+    m_lxKeyEdit = new QLineEdit(this);
+    m_lxKeyEdit->setPlaceholderText("可选，第三方音源 API 密钥");
+    m_lxKeyEdit->setText(MusicApiService::instance()->lxRequestKey());
+    m_lxKeyEdit->setStyleSheet(
+        "QLineEdit { background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 10px; font-size: 12px; color: #1e293b; }"
+    );
+    keyLayout->addWidget(keyLabel);
+    keyLayout->addWidget(m_lxKeyEdit, 1);
+    mainLayout->addLayout(keyLayout);
+
+    // 状态与测试回显
+    m_statusLabel = new QLabel("提示: 洛雪聚合模式默认支持酷我全版权 320k 直链与网易云歌词同步。", this);
+    m_statusLabel->setStyleSheet("font-size: 11px; color: #64748b; background: #f1f5f9; border-radius: 6px; padding: 8px 10px;");
+    m_statusLabel->setWordWrap(true);
+    mainLayout->addWidget(m_statusLabel);
+
+    // 按钮栏
+    auto btnLayout = new QHBoxLayout();
+    m_testBtn = new QPushButton("⚡ 测试连通性", this);
+    m_testBtn->setStyleSheet("QPushButton { background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #334155; font-weight: 600; } QPushButton:hover { background: #e2e8f0; }");
+    m_testBtn->setCursor(Qt::PointingHandCursor);
+
+    m_resetBtn = new QPushButton("恢复默认", this);
+    m_resetBtn->setStyleSheet("QPushButton { background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; padding: 6px 12px; font-size: 12px; color: #64748b; } QPushButton:hover { background: #fee2e2; color: #ef4444; }");
+    m_resetBtn->setCursor(Qt::PointingHandCursor);
+
+    m_saveBtn = new QPushButton("保存并应用", this);
+    m_saveBtn->setStyleSheet("QPushButton { background: #6366f1; border: none; border-radius: 6px; padding: 6px 16px; font-size: 12px; color: #ffffff; font-weight: 600; } QPushButton:hover { background: #4f46e5; }");
+    m_saveBtn->setCursor(Qt::PointingHandCursor);
+
+    btnLayout->addWidget(m_testBtn);
+    btnLayout->addWidget(m_resetBtn);
+    btnLayout->addStretch(1);
+    btnLayout->addWidget(m_saveBtn);
+    mainLayout->addLayout(btnLayout);
+
+    connect(m_testBtn, &QPushButton::clicked, this, &MusicSourceConfigDialog::onTestConnection);
+    connect(m_saveBtn, &QPushButton::clicked, this, &MusicSourceConfigDialog::onSave);
+    connect(m_resetBtn, &QPushButton::clicked, this, &MusicSourceConfigDialog::onResetDefaults);
+}
+
+void MusicSourceConfigDialog::onTestConnection()
+{
+    m_statusLabel->setText("正在测试接口连通性，请稍候...");
+    m_statusLabel->setStyleSheet("font-size: 11px; color: #0284c7; background: #e0f2fe; border-radius: 6px; padding: 8px 10px;");
+    m_testBtn->setEnabled(false);
+
+    MusicEngine selectedEng = static_cast<MusicEngine>(m_engineCombo->currentData().toInt());
+    MusicEngine oldEng = MusicApiService::instance()->currentEngine();
+    QString oldUrl = MusicApiService::instance()->lxApiUrl();
+    QString oldKey = MusicApiService::instance()->lxRequestKey();
+
+    MusicApiService::instance()->setEngine(selectedEng);
+    MusicApiService::instance()->setLxApiUrl(m_lxUrlEdit->text());
+    MusicApiService::instance()->setLxRequestKey(m_lxKeyEdit->text());
+
+    MusicApiService::instance()->testConnection([this, oldEng, oldUrl, oldKey](bool ok, const QString &msg) {
+        MusicApiService::instance()->setEngine(oldEng);
+        MusicApiService::instance()->setLxApiUrl(oldUrl);
+        MusicApiService::instance()->setLxRequestKey(oldKey);
+
+        m_testBtn->setEnabled(true);
+        if (ok) {
+            m_statusLabel->setText("✅ " + msg);
+            m_statusLabel->setStyleSheet("font-size: 11px; color: #15803d; background: #dcfce7; border-radius: 6px; padding: 8px 10px;");
+        } else {
+            m_statusLabel->setText("❌ " + msg);
+            m_statusLabel->setStyleSheet("font-size: 11px; color: #b91c1c; background: #fee2e2; border-radius: 6px; padding: 8px 10px;");
+        }
+    });
+}
+
+void MusicSourceConfigDialog::onSave()
+{
+    MusicEngine selectedEng = static_cast<MusicEngine>(m_engineCombo->currentData().toInt());
+    MusicApiService::instance()->setEngine(selectedEng);
+    MusicApiService::instance()->setLxApiUrl(m_lxUrlEdit->text());
+    MusicApiService::instance()->setLxRequestKey(m_lxKeyEdit->text());
+    accept();
+}
+
+void MusicSourceConfigDialog::onResetDefaults()
+{
+    MusicApiService::instance()->resetToDefaults();
+    int idx = m_engineCombo->findData(static_cast<int>(MusicEngine::LX_Music));
+    if (idx >= 0) m_engineCombo->setCurrentIndex(idx);
+    m_lxUrlEdit->clear();
+    m_lxKeyEdit->clear();
+    m_statusLabel->setText("已恢复为默认「洛雪/聚合音源」引擎配置。");
+    m_statusLabel->setStyleSheet("font-size: 11px; color: #15803d; background: #dcfce7; border-radius: 6px; padding: 8px 10px;");
+}
+
 MusicPlayerDialog* MusicPlayerDialog::instance()
 {
     static MusicPlayerDialog s_instance;
@@ -153,11 +310,36 @@ void MusicPlayerDialog::setupUi()
     // 1. 顶部标题栏 & 搜索操作栏
     // ==========================================
     auto topBarLayout = new QHBoxLayout();
-    topBarLayout->setSpacing(8);
+    topBarLayout->setSpacing(6);
 
-    auto titleBadge = new QLabel("🎵 <b>音乐工坊</b> <span style=\"font-size: 11px; font-weight: normal; color: #94a3b8;\">· GD音乐台</span>", mainCard);
-    titleBadge->setStyleSheet("QLabel { font-size: 15px; color: #0f172a; }");
+    m_titleBadge = new QLabel("🎵 <b>音乐工坊</b>", mainCard);
+    m_titleBadge->setStyleSheet("QLabel { font-size: 15px; color: #0f172a; }");
 
+    m_engineCombo = new QComboBox(mainCard);
+    m_engineCombo->addItem("🎵 洛雪/全网源", static_cast<int>(MusicEngine::LX_Music));
+    m_engineCombo->addItem("📻 GD音乐台 (原版)", static_cast<int>(MusicEngine::GDStudio));
+    m_engineCombo->setToolTip("切换音乐源引擎 (支持洛雪全网源与原版 GD 音乐台)");
+    m_engineCombo->setStyleSheet(
+        "QComboBox {"
+        "  background-color: #ede9fe;"
+        "  border: 1px solid #c4b5fd;"
+        "  border-radius: 8px;"
+        "  padding: 5px 8px;"
+        "  font-size: 11.5px;"
+        "  font-weight: 600;"
+        "  color: #4f46e5;"
+        "}"
+        "QComboBox::drop-down { border: none; width: 16px; }"
+    );
+
+    m_engineConfigBtn = new QPushButton("⚙️", mainCard);
+    m_engineConfigBtn->setFixedSize(28, 28);
+    m_engineConfigBtn->setToolTip("音源设置 / 配置洛雪自定义 API");
+    m_engineConfigBtn->setStyleSheet(
+        "QPushButton { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; color: #475569; }"
+        "QPushButton:hover { background: #f1f5f9; border-color: #94a3b8; }"
+    );
+    m_engineConfigBtn->setCursor(Qt::PointingHandCursor);
 
     m_sourceCombo = new QComboBox(mainCard);
     for (const auto &src : MusicApiService::availableSources()) {
@@ -221,8 +403,11 @@ void MusicPlayerDialog::setupUi()
     closeBtn->setCursor(Qt::PointingHandCursor);
     connect(closeBtn, &QPushButton::clicked, this, &QWidget::hide);
 
-    topBarLayout->addWidget(titleBadge);
-    topBarLayout->addSpacing(8);
+    topBarLayout->addWidget(m_titleBadge);
+    topBarLayout->addSpacing(4);
+    topBarLayout->addWidget(m_engineCombo);
+    topBarLayout->addWidget(m_engineConfigBtn);
+    topBarLayout->addSpacing(6);
     topBarLayout->addWidget(m_sourceCombo);
     topBarLayout->addWidget(m_searchInput, 1);
     topBarLayout->addWidget(m_searchBtn);
@@ -728,12 +913,24 @@ void MusicPlayerDialog::setupUi()
 
     cardLayout->addWidget(bottomBar);
 
+    refreshEngineUI();
     rootLayout->addWidget(mainCard);
 }
 
 
 void MusicPlayerDialog::setupConnections()
 {
+    // 音源引擎切换与配置
+    connect(m_engineCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        MusicEngine eng = static_cast<MusicEngine>(m_engineCombo->currentData().toInt());
+        MusicApiService::instance()->setEngine(eng);
+        refreshEngineUI();
+    });
+    connect(m_engineConfigBtn, &QPushButton::clicked, this, &MusicPlayerDialog::showSourceConfigDialog);
+    MusicApiService::instance()->setOnEngineChanged([this](MusicEngine) {
+        refreshEngineUI();
+    });
+
     connect(m_searchBtn, &QPushButton::clicked, this, [this]() {
         onSearchClicked();
     });
@@ -1221,3 +1418,30 @@ void MusicPlayerDialog::updateDesktopLyricBtnState()
         );
     }
 }
+
+void MusicPlayerDialog::refreshEngineUI()
+{
+    if (!m_engineCombo || !m_titleBadge) return;
+    MusicEngine eng = MusicApiService::instance()->currentEngine();
+    int idx = m_engineCombo->findData(static_cast<int>(eng));
+    if (idx >= 0 && m_engineCombo->currentIndex() != idx) {
+        m_engineCombo->blockSignals(true);
+        m_engineCombo->setCurrentIndex(idx);
+        m_engineCombo->blockSignals(false);
+    }
+
+    if (eng == MusicEngine::LX_Music) {
+        m_titleBadge->setText("🎵 <b>音乐工坊</b> <span style=\"font-size: 11px; font-weight: normal; color: #6366f1;\">· 洛雪/全网</span>");
+    } else {
+        m_titleBadge->setText("🎵 <b>音乐工坊</b> <span style=\"font-size: 11px; font-weight: normal; color: #94a3b8;\">· GD音乐台</span>");
+    }
+}
+
+void MusicPlayerDialog::showSourceConfigDialog()
+{
+    MusicSourceConfigDialog dlg(this);
+    if (dlg.exec() == QDialog::Accepted) {
+        refreshEngineUI();
+    }
+}
+

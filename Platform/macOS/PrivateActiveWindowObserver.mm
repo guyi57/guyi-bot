@@ -142,9 +142,20 @@ static BOOL GetWindowFromCG(CGRect *outRect, pid_t *outPid, CGWindowID *outWindo
 namespace Platform {
 
 PrivateActiveWindowObserver::PrivateActiveWindowObserver() {
-    AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)@{
-        (__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES
-    });
+    // 1. 若当前已获得辅助功能授权，直接返回，绝不弹窗打扰
+    if (AXIsProcessTrusted()) {
+        return;
+    }
+
+    // 2. 若尚未授权，仅在首次运行时引导提示一次，避免每次启动都弹出系统授权窗口
+    //    注：系统默认优先采用 Quartz WindowServer (GetWindowFromCG) 探测前台窗口，无需辅助功能权限亦可工作
+    NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+    if (![defaults boolForKey:@"hasPromptedAccessibility"]) {
+        [defaults setBool:YES forKey:@"hasPromptedAccessibility"];
+        AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)@{
+            (__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES
+        });
+    }
 }
 
 ActiveWindow PrivateActiveWindowObserver::getActiveWindow() {

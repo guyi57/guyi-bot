@@ -41,6 +41,7 @@ SOURCES = src/main.cc \
 	src/pet/CloneEliminationSequence.cc \
 	src/pet/PetDiaryManager.cc \
 	src/agent/AgentService.cc \
+	src/agent/FastTranslateService.cc \
 	src/agent/LongTermMemoryEngine.cc \
 	src/agent/AipyAdapter.cc \
 	src/agent/PersonaManager.cc \

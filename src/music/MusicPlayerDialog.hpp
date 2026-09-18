@@ -15,6 +15,27 @@
 #include "MusicApiService.hpp"
 #include "MusicFavoriteDb.hpp"
 
+// 音源引擎与洛雪自定义配置弹窗
+class MusicSourceConfigDialog : public QDialog
+{
+public:
+    explicit MusicSourceConfigDialog(QWidget *parent = nullptr);
+    ~MusicSourceConfigDialog() override = default;
+
+    void onTestConnection();
+    void onSave();
+    void onResetDefaults();
+
+private:
+    QComboBox *m_engineCombo = nullptr;
+    QLineEdit *m_lxUrlEdit = nullptr;
+    QLineEdit *m_lxKeyEdit = nullptr;
+    QLabel *m_statusLabel = nullptr;
+    QPushButton *m_testBtn = nullptr;
+    QPushButton *m_saveBtn = nullptr;
+    QPushButton *m_resetBtn = nullptr;
+};
+
 class MusicPlayerDialog : public QDialog
 {
 public:
@@ -44,6 +65,9 @@ public:
     void refreshFavoritesList();
     void refreshPlaylist();
 
+    void showSourceConfigDialog();
+    void refreshEngineUI();
+
 private:
     explicit MusicPlayerDialog(QWidget *parent = nullptr);
     ~MusicPlayerDialog();
@@ -53,6 +77,9 @@ private:
     void loadCoverImage(const QString &url);
 
     // 顶部组件
+    QLabel *m_titleBadge = nullptr;
+    QComboBox *m_engineCombo = nullptr;
+    QPushButton *m_engineConfigBtn = nullptr;
     QLineEdit *m_searchInput = nullptr;
     QComboBox *m_sourceCombo = nullptr;
     QPushButton *m_searchBtn = nullptr;

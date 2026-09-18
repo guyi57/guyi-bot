@@ -40,6 +40,10 @@ MusicPlayerManager::MusicPlayerManager(QObject *parent)
     connect(m_player, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus status) {
         onMediaStatusChanged(status);
     });
+    connect(m_player, &QMediaPlayer::errorOccurred, this, [this](QMediaPlayer::Error error, const QString &errorString) {
+        std::cerr << "[MusicPlayer] QMediaPlayer 播放器发生错误 (" << static_cast<int>(error) << "): " << errorString.toStdString() << std::endl;
+        notifyErrorOccurred(QString("音频加载失败: %1").arg(errorString));
+    });
 
     // 注册切歌时桌宠原地弹出气泡提示并向事件总线广播
     addSongChangedListener([](const SongInfo &song) {
