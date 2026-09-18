@@ -3,6 +3,7 @@
 #include "AgentService.hpp"
 #include "ShijimaManager.hpp"
 #include "BehaviorEngine.hpp"
+#include "Platform/Platform.hpp"
 #include <QGuiApplication>
 #include <QClipboard>
 #include <QKeyEvent>
@@ -14,7 +15,7 @@
 TranslateDialog::TranslateDialog(QWidget *parent)
     : QDialog(parent)
 {
-    setWindowTitle("🌐 极速多通道翻译 (微软 Edge / 谷歌 / 词典 / AI)");
+    setWindowTitle("🌐 智能多通道划词翻译");
     setWindowFlags(Qt::Dialog | Qt::WindowStaysOnTopHint | Qt::WindowCloseButtonHint);
     setMinimumWidth(620);
     setMinimumHeight(560);
@@ -83,7 +84,7 @@ void TranslateDialog::setupUi()
     auto *topRow = new QHBoxLayout();
     topRow->setSpacing(8);
 
-    auto *titleLabel = new QLabel("🌐 极速多通道翻译", this);
+    auto *titleLabel = new QLabel("🌐 智能多通道翻译", this);
     titleLabel->setStyleSheet("font-size: 14px; font-weight: bold; color: #0f172a;");
     topRow->addWidget(titleLabel);
     topRow->addStretch();
@@ -143,7 +144,7 @@ void TranslateDialog::setupUi()
         "  border-color: #6366f1;"
         "}"
     );
-    m_inputEdit->setFixedHeight(85);
+    m_inputEdit->setFixedHeight(82);
     m_inputEdit->installEventFilter(this);
     mainLayout->addWidget(m_inputEdit);
 
@@ -157,9 +158,9 @@ void TranslateDialog::setupUi()
 
     inputActionRow->addSpacing(10);
 
-    m_enableAiCheck = new QCheckBox("启用 AI 大模型深度润色 (耗时较长)", this);
-    m_enableAiCheck->setToolTip("勾选后将额外调用大模型进行上下文润色与深度解析；默认关闭以保证毫秒级秒出");
-    m_enableAiCheck->setChecked(false);
+    m_enableAiCheck = new QCheckBox("启用 AI 大模型深度精析与记忆沉淀", this);
+    m_enableAiCheck->setToolTip("勾选后将自动调用大模型进行上下文深度润色、语法精析并沉淀入桌宠记忆库；上方极速通道依然毫秒级秒出");
+    m_enableAiCheck->setChecked(true);
     inputActionRow->addWidget(m_enableAiCheck);
 
     inputActionRow->addStretch();
@@ -205,7 +206,7 @@ void TranslateDialog::setupUi()
 
     // 4. 多引擎结果滚动展示区
     auto *resultHeaderRow = new QHBoxLayout();
-    auto *resultTitle = new QLabel("📖 多通道极速对照", this);
+    auto *resultTitle = new QLabel("📖 译文展示与精析", this);
     resultTitle->setStyleSheet("font-size: 12px; font-weight: bold; color: #475569;");
     resultHeaderRow->addWidget(resultTitle);
 
@@ -227,7 +228,7 @@ void TranslateDialog::setupUi()
     resultHeaderRow->addWidget(m_copyPrimaryBtn);
 
     m_speakPrimaryBtn = new QPushButton("💬 桌宠念出", this);
-    m_speakPrimaryBtn->setToolTip("让桌宠在屏幕上念出首选翻译");
+    m_speakPrimaryBtn->setToolTip("让桌宠在屏幕上以气泡念出首选翻译");
     m_speakPrimaryBtn->setCursor(Qt::PointingHandCursor);
     m_speakPrimaryBtn->setEnabled(false);
     m_speakPrimaryBtn->setStyleSheet(
@@ -248,28 +249,28 @@ void TranslateDialog::setupUi()
 
     auto *cardsContainer = new QWidget();
     cardsContainer->setStyleSheet("background: transparent;");
-    auto *cardsLayout = new QVBoxLayout(cardsContainer);
-    cardsLayout->setContentsMargins(0, 0, 0, 0);
-    cardsLayout->setSpacing(8);
+    m_cardsLayout = new QVBoxLayout(cardsContainer);
+    m_cardsLayout->setContentsMargins(0, 0, 0, 0);
+    m_cardsLayout->setSpacing(8);
 
-    // 创建 4 大引擎卡片
-    m_edgeCard = createEngineCard("edge", "⚡", "微软 Edge 翻译 (神经网络)");
+    // 创建引擎卡片
+    m_dictCard = createEngineCard("dict", "📖", "有道词典 (释义与词性)");
+    m_edgeCard = createEngineCard("edge", "⚡", "微软 Edge / 必应翻译 (神经网络)");
     m_googleCard = createEngineCard("google", "🚀", "谷歌翻译 (Google GTX)");
-    m_dictCard = createEngineCard("dict", "📖", "词典释义 (有道词典)");
-    m_aiCard = createEngineCard("ai", "🤖", "AI 大模型深度润色");
+    m_aiCard = createEngineCard("ai", "🤖", "AI 大模型深度精析与润色");
 
-    cardsLayout->addWidget(m_edgeCard.cardWidget);
-    cardsLayout->addWidget(m_googleCard.cardWidget);
-    cardsLayout->addWidget(m_dictCard.cardWidget);
-    cardsLayout->addWidget(m_aiCard.cardWidget);
-    cardsLayout->addStretch();
+    m_cardsLayout->addWidget(m_dictCard.cardWidget);
+    m_cardsLayout->addWidget(m_edgeCard.cardWidget);
+    m_cardsLayout->addWidget(m_googleCard.cardWidget);
+    m_cardsLayout->addWidget(m_aiCard.cardWidget);
+    m_cardsLayout->addStretch();
 
     m_scrollArea->setWidget(cardsContainer);
     mainLayout->addWidget(m_scrollArea, 1);
 
     // 5. 底部快捷提示栏
     auto *bottomRow = new QHBoxLayout();
-    auto *hintLabel = new QLabel("💡 提示: 划选任意文本按 Option+T 可一键带入极速翻译 | 回车立即翻译", this);
+    auto *hintLabel = new QLabel("💡 提示: 选中文本按 Option+T 自动带入 | 单词优先有道+必应，句子极速双机翻+AI深度解析", this);
     hintLabel->setStyleSheet("font-size: 11px; color: #94a3b8;");
     bottomRow->addWidget(hintLabel);
     bottomRow->addStretch();
@@ -300,8 +301,10 @@ void TranslateDialog::setupUi()
     connect(m_copyPrimaryBtn, &QPushButton::clicked, this, &TranslateDialog::copyResult);
     connect(m_speakPrimaryBtn, &QPushButton::clicked, this, &TranslateDialog::speakWithPet);
 
-    // 默认隐藏词典与 AI 卡片（根据查询内容与勾选自动激活）
+    // 初始状态隐藏卡片
     m_dictCard.cardWidget->setVisible(false);
+    m_edgeCard.cardWidget->setVisible(false);
+    m_googleCard.cardWidget->setVisible(false);
     m_aiCard.cardWidget->setVisible(false);
 }
 
@@ -382,21 +385,25 @@ TranslationEngineCard TranslateDialog::createEngineCard(const QString &engineId,
         "}"
     );
     card.contentBrowser->setPlaceholderText("等待翻译...");
-    card.contentBrowser->setMinimumHeight(46);
-    card.contentBrowser->setMaximumHeight(140);
+    card.contentBrowser->setMinimumHeight(44);
+    if (engineId == "ai") {
+        card.contentBrowser->setMaximumHeight(260);
+    } else {
+        card.contentBrowser->setMaximumHeight(130);
+    }
     layout->addWidget(card.contentBrowser);
 
     connect(card.copyBtn, &QPushButton::clicked, this, [this, engineId]() {
-        if (engineId == "edge") copyCardText(m_edgeCard.resultText, m_edgeCard.copyBtn);
+        if (engineId == "dict") copyCardText(m_dictCard.resultText, m_dictCard.copyBtn);
+        else if (engineId == "edge") copyCardText(m_edgeCard.resultText, m_edgeCard.copyBtn);
         else if (engineId == "google") copyCardText(m_googleCard.resultText, m_googleCard.copyBtn);
-        else if (engineId == "dict") copyCardText(m_dictCard.resultText, m_dictCard.copyBtn);
         else if (engineId == "ai") copyCardText(m_aiCard.resultText, m_aiCard.copyBtn);
     });
 
     connect(card.speakBtn, &QPushButton::clicked, this, [this, engineId]() {
-        if (engineId == "edge") speakText(m_edgeCard.resultText);
+        if (engineId == "dict") speakText(m_dictCard.resultText);
+        else if (engineId == "edge") speakText(m_edgeCard.resultText);
         else if (engineId == "google") speakText(m_googleCard.resultText);
-        else if (engineId == "dict") speakText(m_dictCard.resultText);
         else if (engineId == "ai") speakText(m_aiCard.resultText);
     });
 
@@ -417,14 +424,18 @@ void TranslateDialog::updateCardResult(TranslationEngineCard &card, bool success
 {
     if (success) {
         card.resultText = text;
-        card.contentBrowser->setPlainText(text);
+        if (&card == &m_aiCard) {
+            card.contentBrowser->setMarkdown(text);
+        } else {
+            card.contentBrowser->setPlainText(text);
+        }
         card.badgeLabel->setText(QString("%1 ms").arg(elapsedMs));
         card.badgeLabel->setStyleSheet("font-size: 10.5px; color: #059669; background: #ecfdf5; border-radius: 4px; padding: 1px 6px; border: 1px solid #a7f3d0;");
         card.badgeLabel->setVisible(true);
         card.copyBtn->setEnabled(true);
         card.speakBtn->setEnabled(true);
 
-        // 如果首选结果尚未填充，采用最先返回成功的极速引擎作为首选
+        // 首选结果自动设定：优先采纳最先返回成功的首个卡片
         if (m_lastPrimaryResult.isEmpty()) {
             m_lastPrimaryResult = text;
             m_copyPrimaryBtn->setEnabled(true);
@@ -441,6 +452,28 @@ void TranslateDialog::updateCardResult(TranslationEngineCard &card, bool success
         card.copyBtn->setEnabled(false);
         card.speakBtn->setEnabled(false);
     }
+}
+
+bool TranslateDialog::isWordOrPhrase(const QString &text)
+{
+    QString trimmed = text.trimmed();
+    if (trimmed.isEmpty()) return true;
+
+    // 换行符判定为多行/长文本
+    if (trimmed.contains('\n') || trimmed.contains('\r')) return false;
+
+    // 句式标点判定
+    static QRegularExpression sentencePunct("[.!?;。！？；]");
+    if (trimmed.contains(sentencePunct)) return false;
+
+    // 英文单词数量判定（若有空格，词数超过4个通常为完整句子）
+    QStringList words = trimmed.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+    if (words.size() > 4) return false;
+
+    // 字符长度判定（中日韩无空格单词一般小于15个汉字）
+    if (trimmed.length() > 25) return false;
+
+    return true;
 }
 
 void TranslateDialog::showEvent(QShowEvent *event)
@@ -478,6 +511,8 @@ void TranslateDialog::promptForText(const QString &text)
     show();
     raise();
     activateWindow();
+    Platform::activateApp();
+    m_inputEdit->setFocus();
 }
 
 void TranslateDialog::doTranslate()
@@ -503,29 +538,55 @@ void TranslateDialog::doTranslate()
     QString targetLang = m_targetLangCombo->currentData().toString();
     if (targetLang == "AUTO") targetLang = "";
 
-    // 1. 重置并激活 微软 Edge 与 谷歌翻译 卡片
-    m_edgeCard.cardWidget->setVisible(true);
-    resetCard(m_edgeCard, "⏳ 微软 Edge 神经网络翻译中...");
-
-    m_googleCard.cardWidget->setVisible(true);
-    resetCard(m_googleCard, "⏳ 谷歌极速翻译中...");
-
-    // 2. 词典释义判断：如果是单行且短于50字符（单词/短语），启用词典卡片
-    bool isShortWord = !text.contains('\n') && text.length() <= 50;
-    m_dictCard.cardWidget->setVisible(isShortWord);
-    if (isShortWord) {
-        resetCard(m_dictCard, "⏳ 正在检索词典词义与词性...");
-    }
-
-    // 3. AI 大模型卡片判断：如果勾选则启用
+    bool isWord = isWordOrPhrase(text);
     bool enableAi = m_enableAiCheck->isChecked();
-    m_aiCard.cardWidget->setVisible(enableAi);
-    if (enableAi) {
-        resetCard(m_aiCard, "⏳ AI 大模型深度润色中（稍候片刻）...");
+
+    // 动态调整卡片顺序与显示策略：
+    // 规则 1：如果是词语/单词 -> 有道往前排（置顶），谷歌和必应只显示一个（必应优先），最后展示 AI 解析
+    // 规则 2：如果是句子 -> 只显示谷歌和必应双通道对照，不显示有道，最后展示 AI 润色
+    if (isWord) {
+        m_cardsLayout->insertWidget(0, m_dictCard.cardWidget);
+        m_cardsLayout->insertWidget(1, m_edgeCard.cardWidget);
+        m_cardsLayout->insertWidget(2, m_aiCard.cardWidget);
+
+        m_dictCard.nameLabel->setText("有道词典 (释义与词性)");
+        m_edgeCard.nameLabel->setText("必应翻译 (极速机翻)");
+        m_aiCard.nameLabel->setText("AI 词汇深度精析 (音标与双语例句)");
+
+        m_dictCard.cardWidget->setVisible(true);
+        resetCard(m_dictCard, "⏳ 正在检索有道词典释义与词性...");
+
+        m_edgeCard.cardWidget->setVisible(true);
+        resetCard(m_edgeCard, "⏳ 必应极速机翻中...");
+
+        m_googleCard.cardWidget->setVisible(false); // 词语时只显示一个，隐藏谷歌
+    } else {
+        m_cardsLayout->insertWidget(0, m_edgeCard.cardWidget);
+        m_cardsLayout->insertWidget(1, m_googleCard.cardWidget);
+        m_cardsLayout->insertWidget(2, m_aiCard.cardWidget);
+
+        m_edgeCard.nameLabel->setText("微软 Edge 翻译 (神经网络)");
+        m_googleCard.nameLabel->setText("谷歌翻译 (Google GTX)");
+        m_aiCard.nameLabel->setText("AI 深度润色与语法解析");
+
+        m_dictCard.cardWidget->setVisible(false); // 句子时不显示有道
+
+        m_edgeCard.cardWidget->setVisible(true);
+        resetCard(m_edgeCard, "⏳ 微软 Edge 神经网络翻译中...");
+
+        m_googleCard.cardWidget->setVisible(true);
+        resetCard(m_googleCard, "⏳ 谷歌极速翻译中...");
     }
 
+    if (enableAi) {
+        m_aiCard.cardWidget->setVisible(true);
+        resetCard(m_aiCard, "⏳ AI 正在深度分析中（后台并发，不阻塞上方极速结果）...");
+    } else {
+        m_aiCard.cardWidget->setVisible(false);
+    }
+
+    int totalFastTasks = isWord ? 2 : 2; // 无论哪种模式，极速任务均为 2 个 (单词: 有道+必应; 句子: 必应+谷歌)
     auto finishedTracker = std::make_shared<int>(0);
-    int totalFastTasks = isShortWord ? 3 : 2;
 
     auto checkAllFastDone = [this, finishedTracker, totalFastTasks]() {
         (*finishedTracker)++;
@@ -538,37 +599,47 @@ void TranslateDialog::doTranslate()
 
     QPointer<TranslateDialog> self(this);
 
-    // 并行发起 1: 微软 Edge 翻译
-    FastTranslateService::instance()->translateEdge(text, targetLang, [self, checkAllFastDone](const EngineTranslationResult &res) {
-        if (!self) return;
-        self->updateCardResult(self->m_edgeCard, res.success, res.translatedText, res.elapsedMs, res.errorMsg);
-        checkAllFastDone();
-    });
-
-    // 并行发起 2: 谷歌翻译
-    FastTranslateService::instance()->translateGoogle(text, targetLang, [self, checkAllFastDone](const EngineTranslationResult &res) {
-        if (!self) return;
-        self->updateCardResult(self->m_googleCard, res.success, res.translatedText, res.elapsedMs, res.errorMsg);
-        checkAllFastDone();
-    });
-
-    // 并行发起 3: 词典释义（若适用）
-    if (isShortWord) {
+    if (isWord) {
+        // 词语模式：查询有道 + 必应
         FastTranslateService::instance()->lookupDict(text, [self, checkAllFastDone](const EngineTranslationResult &res) {
             if (!self) return;
             self->updateCardResult(self->m_dictCard, res.success, res.translatedText, res.elapsedMs, res.errorMsg);
             checkAllFastDone();
         });
+
+        FastTranslateService::instance()->translateEdge(text, targetLang, [self, checkAllFastDone](const EngineTranslationResult &res) {
+            if (!self) return;
+            self->updateCardResult(self->m_edgeCard, res.success, res.translatedText, res.elapsedMs, res.errorMsg);
+            checkAllFastDone();
+        });
+    } else {
+        // 句子模式：查询微软 Edge + 谷歌双机翻
+        FastTranslateService::instance()->translateEdge(text, targetLang, [self, checkAllFastDone](const EngineTranslationResult &res) {
+            if (!self) return;
+            self->updateCardResult(self->m_edgeCard, res.success, res.translatedText, res.elapsedMs, res.errorMsg);
+            checkAllFastDone();
+        });
+
+        FastTranslateService::instance()->translateGoogle(text, targetLang, [self, checkAllFastDone](const EngineTranslationResult &res) {
+            if (!self) return;
+            self->updateCardResult(self->m_googleCard, res.success, res.translatedText, res.elapsedMs, res.errorMsg);
+            checkAllFastDone();
+        });
     }
 
-    // 并行发起 4: AI 大模型深度翻译（若启用，异步不阻塞主流程）
+    // AI 大模型全链路并发（自动完成上下文分析、记忆写入与历史沉淀）
     if (enableAi) {
         auto aiTimer = std::make_shared<QElapsedTimer>();
         aiTimer->start();
-        AgentService::instance()->translate(text, [self, aiTimer](bool success, QString const& result) {
+        AgentService::instance()->translate(text, [self, aiTimer, text](bool success, QString const& result) {
             if (!self) return;
             qint64 elapsed = aiTimer->elapsed();
             self->updateCardResult(self->m_aiCard, success, result, elapsed, success ? "" : result);
+
+            // 联动触发好感度与首选备选
+            if (success && self->onTranslated) {
+                self->onTranslated(text, result);
+            }
         }, targetLang);
     }
 }
@@ -606,6 +677,8 @@ void TranslateDialog::clearInput()
     resetCard(m_dictCard, "等待翻译...");
     resetCard(m_aiCard, "等待翻译...");
     m_dictCard.cardWidget->setVisible(false);
+    m_edgeCard.cardWidget->setVisible(false);
+    m_googleCard.cardWidget->setVisible(false);
     m_aiCard.cardWidget->setVisible(false);
     m_inputEdit->setFocus();
 }

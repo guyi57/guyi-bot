@@ -56,6 +56,7 @@ private:
     void resetCard(TranslationEngineCard &card, const QString &placeholder);
     void copyCardText(const QString &text, QPushButton *btn);
     void speakText(const QString &text);
+    bool isWordOrPhrase(const QString &text);
 
     QComboBox *m_sourceLangCombo = nullptr;
     QPushButton *m_swapLangBtn = nullptr;
@@ -74,6 +75,7 @@ private:
     QPushButton *m_speakPrimaryBtn = nullptr;
 
     QScrollArea *m_scrollArea = nullptr;
+    QVBoxLayout *m_cardsLayout = nullptr;
     TranslationEngineCard m_edgeCard;
     TranslationEngineCard m_googleCard;
     TranslationEngineCard m_dictCard;
