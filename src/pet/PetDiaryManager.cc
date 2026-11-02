@@ -5,6 +5,7 @@
 #include "PetMemory.hpp"
 #include "BehaviorEngine.hpp"
 #include "ShijimaWidget.hpp"
+#include "VocabLearningEngine.hpp"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QUuid>
@@ -164,6 +165,12 @@ void PetDiaryManager::generateDailyDiary(bool forceRegenerate, std::function<voi
 
     auto activePersona = PersonaManager::instance()->currentPersona();
     auto profile = PetMemory::instance()->userProfile();
+    auto vocabStats = VocabLearningEngine::instance()->stats();
+    QString vocabInfo;
+    if (VocabLearningEngine::instance()->isEnabled()) {
+        vocabInfo = QString("- 英语背词学习: 今日伴学复习了 %1 个单词，累计已掌握熟记 %2 个单词\n")
+            .arg(vocabStats.todayReviewedCount).arg(vocabStats.masteredCount);
+    }
 
     QString prompt = QString(
         "你是运行在主人电脑桌面上的桌宠伴侣。\n"
@@ -175,7 +182,8 @@ void PetDiaryManager::generateDailyDiary(bool forceRegenerate, std::function<voi
         "- 听歌陪伴: %9 首\n"
         "- 摸头互动: %10 次\n"
         "- 与我对话: %11 次\n"
-        "- 清理桌面文件: %12 个\n\n"
+        "- 清理桌面文件: %12 个\n"
+        "%13\n"
         "【任务要求】\n"
         "请以第一人称写一篇 80~150 字的桌宠秘密观察日记，记录今天陪伴主人的点滴、小情绪（可以傲娇、可以感动、可以吐槽主人辛苦）与对明天的期待。\n"
         "请严格输出 JSON 格式（不要输出 markdown 代码块）：\n"
@@ -195,7 +203,8 @@ void PetDiaryManager::generateDailyDiary(bool forceRegenerate, std::function<voi
      .arg(m_todayMusicCount)
      .arg(m_todayPettingCount)
      .arg(m_todayChatCount)
-     .arg(m_todayTrashCount);
+     .arg(m_todayTrashCount)
+     .arg(vocabInfo);
 
     QJsonArray messages;
     QJsonObject sysMsg, usrMsg;

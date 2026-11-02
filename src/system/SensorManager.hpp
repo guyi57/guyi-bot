@@ -16,6 +16,7 @@ struct AppSemanticContext
     QString semanticActivity; // 例如: "正在调试 MessageBubble.cc 气泡排版崩溃"
     QString detail;           // 例如: "修改了 2 个源文件，git 状态为 modified"
     QString activeFile;       // 例如: "src/ui/MessageBubble.cc"
+    QString contentSummary;   // 例如: 窗口 OCR 提取的内容摘要/报错/核心代码
     QString url;              // 例如: "https://github.com/..."
     QString workspace;        // 例如: "xuanfu"
     QString focusLevel;       // "high", "normal", "low"
@@ -33,8 +34,11 @@ public:
     // 初始化探针目录并预置主流应用探针
     void init();
 
-    // 前台应用切换通知
-    void onAppActivated(const QString &appName, const QString &bundleId, const QString &windowTitle);
+    // 前台应用切换通知 (支持传入直接提取的 documentPath)
+    void onAppActivated(const QString &appName, const QString &bundleId, const QString &windowTitle, const QString &documentPath = QString());
+
+    // 更新原生 OCR 识别到的当前窗口内容摘要
+    void updateOcrSummary(const QString &appName, const QString &bundleId, const QString &contentSummary);
 
     // 获取当前前台应用的最新语义感知数据
     QJsonObject currentContext() const;

@@ -64,4 +64,7 @@ memory.json
 message_history.json
 music_favorites.db
 .DS_Store
+node_modules/
+mac_cutout
+
 

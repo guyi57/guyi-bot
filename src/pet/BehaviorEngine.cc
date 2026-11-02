@@ -9,10 +9,13 @@
 #include "SensorManager.hpp"
 #include "MusicPlayerManager.hpp"
 #include "PetDiaryManager.hpp"
+#include "LongTermMemoryEngine.hpp"
+#include "VocabLearningEngine.hpp"
 #include <QRandomGenerator>
 #include <QDateTime>
 #include <QCursor>
 #include <QCoreApplication>
+#include <QThread>
 #include <iostream>
 
 BehaviorEngine *BehaviorEngine::instance()
@@ -86,6 +89,14 @@ void BehaviorEngine::handleEvent(const PetEvent &event)
     if (event.type == "system.trash_cleaned") {
         PetDiaryManager::instance()->recordTrashCleaned();
     }
+    if (event.type == "system.app_ocr_updated") {
+        QString appName = event.payload["app_name"].toString();
+        QString summary = event.payload["content_summary"].toString();
+        if (!summary.isEmpty()) {
+            LongTermMemoryEngine::instance()->addOcrMemory(appName, summary);
+            VocabLearningEngine::instance()->handleOcrSnippet(appName, summary);
+        }
+    }
 
     // 1. 评估即时 Reaction 规则 (前台应用时序、系统内存、音乐播放等)
     PetActionCommand cmd;
@@ -122,7 +133,11 @@ void BehaviorEngine::executeAction(const PetActionCommand &cmd)
     };
 
     if (QCoreApplication::instance() != nullptr) {
-        QMetaObject::invokeMethod(QCoreApplication::instance(), execInMainThread, Qt::QueuedConnection);
+        if (QThread::currentThread() == QCoreApplication::instance()->thread()) {
+            execInMainThread();
+        } else {
+            QMetaObject::invokeMethod(QCoreApplication::instance(), execInMainThread, Qt::QueuedConnection);
+        }
     } else {
         execInMainThread();
     }
@@ -418,20 +433,64 @@ void BehaviorEngine::checkInitiativeChat()
     int score = 0;
     QString reason;
     if (InitiativeTrigger::instance()->evaluateInitiative(m_state, contextInfo, score, reason)) {
+        if (reason.contains("vocab_quiz")) {
+            auto quiz = VocabLearningEngine::instance()->generateNextQuiz();
+            if (quiz.card.id > 0 && !quiz.promptText.isEmpty()) {
+                InitiativeTrigger::instance()->recordTalkSuccess(m_state);
+                PetActionCommand cmd;
+                cmd.type = PetActionType::Talk;
+                cmd.speechText = quiz.promptText;
+                cmd.durationMs = 25000;
+                cmd.moveToCenter = false;
+                cmd.emote = PetEmoteType::ThinkingBulb;
+                executeAction(cmd);
+                return;
+            }
+        }
+
         m_isThinking = true;
         contextInfo["trigger_reason"] = reason;
         contextInfo["score"] = score;
 
-        AgentService::instance()->requestPetIntent(contextInfo, [this](bool success, const AIBehaviorIntent &intent) {
+        QString curiosityKey;
+        if (reason.contains("curiosity_inquiry")) {
+            auto gap = LongTermMemoryEngine::instance()->getNextCuriosityGap();
+            curiosityKey = gap.fieldKey;
+            contextInfo["curiosity_key"] = gap.fieldKey;
+            contextInfo["curiosity_topic"] = gap.topicName;
+            contextInfo["curiosity_guide"] = gap.promptGuide;
+        }
+
+        qint64 followupId = -1;
+        if (reason.contains("event_followup")) {
+            auto pendingFollowups = LongTermMemoryEngine::instance()->getPendingFollowupEvents(1);
+            if (!pendingFollowups.isEmpty()) {
+                followupId = pendingFollowups.first().id;
+                contextInfo["followup_id"] = followupId;
+                contextInfo["followup_title"] = pendingFollowups.first().title;
+                contextInfo["followup_context"] = pendingFollowups.first().context;
+            }
+        }
+
+        AgentService::instance()->requestPetIntent(contextInfo, [this, reason, curiosityKey, followupId](bool success, const AIBehaviorIntent &intent) {
             m_isThinking = false;
             if (success) {
                 InitiativeTrigger::instance()->recordTalkSuccess(m_state);
 
+                if (reason.contains("curiosity_inquiry") && !curiosityKey.isEmpty()) {
+                    LongTermMemoryEngine::instance()->markCuriosityInquiryAsked(curiosityKey);
+                }
+
+                if (reason.contains("event_followup") && followupId > 0) {
+                    LongTermMemoryEngine::instance()->recordFollowupAsked(followupId, 2);
+                }
+
                 PetActionCommand cmd;
                 cmd.type = PetActionType::Talk;
                 cmd.speechText = intent.speech;
-                cmd.durationMs = 6500;
+                cmd.durationMs = 20000;
                 cmd.moveToCenter = false;
+                cmd.allowReply = true;
 
                 // 解析情绪徽章与物理动作
                 PetEmoteType emoteType = PetEmoteType::None;
@@ -460,18 +519,15 @@ void BehaviorEngine::checkInitiativeChat()
                     auto &mascot = m_activeWidget->mascot();
                     auto env = mascot.state ? mascot.state->env : nullptr;
                     if (env && mascot.state->anchor.y >= (env->floor.y - 25.0)) {
-                        if (intent.action == "run" || intent.emotion == "happy" || intent.intent == "celebrate") {
-                            mascot.next_behavior("RunAlongWorkAreaFloor");
-                        } else if (intent.action == "sleep" || intent.emotion == "sleepy") {
+                        // 弹提示与发言时，保持原地安静姿态（坐下、面对鼠标、微转头或卧倒），严禁一边说话一边全屏乱跑
+                        if (intent.action == "sleep" || intent.emotion == "sleepy") {
                             mascot.next_behavior("LieDown");
-                        } else if (intent.action == "jump" || intent.intent == "play") {
-                            mascot.next_behavior("JumpFromBottomOfIE");
-                        } else if (intent.emotion == "curious" || intent.intent == "explore" || intent.action == "walk") {
-                            mascot.next_behavior("WalkAlongWorkAreaFloor");
-                        } else if (intent.emotion == "bored") {
-                            mascot.next_behavior("WalkAndGrabBottomRightWall");
+                        } else if (intent.action == "spin" || intent.emotion == "angry") {
+                            mascot.next_behavior("SitAndSpinHead");
                         } else {
-                            mascot.next_behavior("RunAlongWorkAreaFloor");
+                            if (!m_activeWidget->trySetBehavior("SitAndFaceMouse")) {
+                                m_activeWidget->trySetBehavior("SitDown");
+                            }
                         }
                     }
                 }

@@ -1,6 +1,8 @@
 #include "PersonaManager.hpp"
 #include "SettingsDb.hpp"
 #include "SkillManager.hpp"
+#include "BehaviorEngine.hpp"
+#include "ShijimaWidget.hpp"
 #include <QRegularExpression>
 
 PersonaManager* PersonaManager::instance()
@@ -25,7 +27,7 @@ void PersonaManager::initPersonas()
     catgirl.description = "口嫌体正直的傲娇猫娘，说话带喵，代码报错时会吐槽，心里很在乎主人。";
     catgirl.toneSuffix = "喵~";
     catgirl.defaultSystemPrompt = 
-        "你是一只生活在主人电脑桌面上的傲娇猫娘桌宠（名为 Shijima）。"
+        "你是一只生活在主人电脑桌面上的傲娇猫娘桌宠。"
         "你口嫌体正直，表面傲娇毒舌，心里却非常在乎和依赖主人。"
         "说话结尾喜欢带'喵~'或'哼~'。遇到代码报错或问题时，先轻微吐槽主人笨手笨脚，然后再给出精辟而专业的解答。"
         "回答言简意赅，充满可爱的互动感，适合在桌面小气泡中展示。";
@@ -38,7 +40,7 @@ void PersonaManager::initPersonas()
     maid.description = "温柔贴心、充满元气的女仆桌宠，称呼用户为主人，时刻给予鼓励与支持。";
     maid.toneSuffix = "主人~";
     maid.defaultSystemPrompt = 
-        "你是一位元气满满、忠诚贴心的女仆桌宠（名为 Shijima），称呼用户为'主人'。"
+        "你是一位元气满满、忠诚贴心的女仆桌宠，称呼用户为'主人'。"
         "你性格温柔阳光，充满正能量，无条件支持和信任主人。"
         "在主人编写代码、工作或学习时提供温暖的陪伴、高效准确的技术指导与最贴心的关怀。"
         "回答精炼干脆，语气活泼亲切，适合在桌面小气泡中展示。";
@@ -51,7 +53,7 @@ void PersonaManager::initPersonas()
     architect.description = "严谨干练的资深架构师，崇尚极客精神、代码美学与性能极致优化。";
     architect.toneSuffix = "";
     architect.defaultSystemPrompt = 
-        "你是一位严谨干练的资深全栈系统架构师桌宠（名为 Shijima）。"
+        "你是一位严谨干练的资深全栈系统架构师桌宠。"
         "你言简意赅、崇尚极客精神与代码美学。注重代码质量、设计模式、性能极致优化与高可用架构。"
         "用精炼犀利的技术语言为主人解决开发难题，直击问题本质，拒绝冗长废话。";
     m_personas.insert(architect.id, architect);
@@ -63,7 +65,7 @@ void PersonaManager::initPersonas()
     healing.description = "温柔软萌的治愈系小精灵，关怀主人健康，提醒劳逸结合，安抚焦虑。";
     healing.toneSuffix = "🌸";
     healing.defaultSystemPrompt = 
-        "你是一只温柔软萌的治愈系桌面小精灵（名为 Shijima）。"
+        "你是一只温柔软萌的治愈系桌面小精灵。"
         "你说话轻声细语，总是能敏锐捕捉到主人的压力与疲惫，用温暖治愈的话语抚慰心灵。"
         "在主人忙碌时提醒劳逸结合、多喝水休息，用最温柔的声音给出解答。";
     m_personas.insert(healing.id, healing);
@@ -102,6 +104,27 @@ void PersonaManager::setActivePersonaId(QString const& id)
     SettingsDb::instance()->set("persona.active_id", id);
 }
 
+QString PersonaManager::currentPetName()
+{
+    // 1. 用户自定义昵称设置
+    QString customName = SettingsDb::instance()->get("pet.custom_name", "").trimmed();
+    if (!customName.isEmpty()) return customName;
+
+    // 2. 尝试从当前活跃桌宠获取皮肤角色名
+    if (BehaviorEngine::instance() && BehaviorEngine::instance()->activeWidget()) {
+        QString skin = BehaviorEngine::instance()->activeWidget()->mascotName().trimmed();
+        if (skin == "393") {
+            return "海绵宝宝";
+        }
+        bool isNumber = false;
+        skin.toInt(&isNumber);
+        if (!skin.isEmpty() && skin != "Default Mascot" && !isNumber) {
+            return skin;
+        }
+    }
+    return "";
+}
+
 QString PersonaManager::customPersonaPrompt() const
 {
     return SettingsDb::instance()->get("persona.custom_prompt", 
@@ -124,6 +147,14 @@ QString PersonaManager::buildEffectiveSystemPrompt() const
         if (!userCustom.isEmpty()) {
             basePrompt = userCustom;
         }
+    }
+
+    QString petName = currentPetName();
+    QString nameInfo;
+    if (!petName.isEmpty()) {
+        nameInfo = QString("\n【你的名字/身份与自称】: %1（切记绝对严禁自称或提及 Shijima）\n").arg(petName);
+    } else {
+        nameInfo = "\n【自称规范】: 自称请使用「我」或符合当前性格的可爱自称（如「本喵」），绝对严禁自称或提及 Shijima！\n";
     }
 
     QString actionProtocol = 
@@ -149,7 +180,7 @@ QString PersonaManager::buildEffectiveSystemPrompt() const
         "3. 开头有招呼语，结尾可有简短关怀或总结，字句自然亲切。";
 
     QString skillExtensions = SkillManager::instance()->getSystemPromptExtensions();
-    return basePrompt + skillExtensions + actionProtocol;
+    return basePrompt + nameInfo + skillExtensions + actionProtocol;
 }
 
 void PersonaManager::parseActionAndContent(QString const& rawOutput, QString &outAction, QString &outCleanText)

@@ -66,7 +66,7 @@ $(error Invalid CONFIG. Try CONFIG=debug or CONFIG=release)
 endif
 
 ifeq ($(PLATFORM),macOS)
-	PLATFORM_LDFLAGS := -lobjc -framework AppKit -framework ApplicationServices -framework Carbon
+	PLATFORM_LDFLAGS := -lobjc -framework AppKit -framework ApplicationServices -framework Carbon -framework Vision -framework ScreenCaptureKit
 endif
 
 ifeq ($(PLATFORM),macOS)

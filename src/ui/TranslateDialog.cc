@@ -3,6 +3,7 @@
 #include "AgentService.hpp"
 #include "ShijimaManager.hpp"
 #include "BehaviorEngine.hpp"
+#include "VocabLearningEngine.hpp"
 #include "Platform/Platform.hpp"
 #include <QGuiApplication>
 #include <QClipboard>
@@ -239,6 +240,18 @@ void TranslateDialog::setupUi()
     );
     resultHeaderRow->addWidget(m_speakPrimaryBtn);
 
+    m_addToVocabBtn = new QPushButton("⭐ 记入背词本", this);
+    m_addToVocabBtn->setToolTip("将当前词汇加入桌宠每日背词与艾宾浩斯复习计划");
+    m_addToVocabBtn->setCursor(Qt::PointingHandCursor);
+    m_addToVocabBtn->setEnabled(false);
+    m_addToVocabBtn->setStyleSheet(
+        "QPushButton {"
+        "  border: 1px solid #fef08a; background: #fefce8; color: #b45309; font-size: 11px; padding: 3px 8px; border-radius: 4px;"
+        "}"
+        "QPushButton:hover { background: #fef9c3; color: #92400e; border-color: #fde047; }"
+    );
+    resultHeaderRow->addWidget(m_addToVocabBtn);
+
     mainLayout->addLayout(resultHeaderRow);
 
     // 滚动区域装载引擎卡片
@@ -300,6 +313,22 @@ void TranslateDialog::setupUi()
     connect(m_swapLangBtn, &QPushButton::clicked, this, &TranslateDialog::swapLanguages);
     connect(m_copyPrimaryBtn, &QPushButton::clicked, this, &TranslateDialog::copyResult);
     connect(m_speakPrimaryBtn, &QPushButton::clicked, this, &TranslateDialog::speakWithPet);
+    connect(m_addToVocabBtn, &QPushButton::clicked, this, [this]() {
+        QString word = m_lastSourceText.trimmed();
+        QString trans = m_lastPrimaryResult.trimmed();
+        if (word.isEmpty()) return;
+        bool ok = VocabLearningEngine::instance()->addWord(word, "", trans, "", "custom_saved", "通过划词翻译快捷加入");
+        if (ok) {
+            m_addToVocabBtn->setText("✓ 已记入背词本");
+            m_addToVocabBtn->setEnabled(false);
+            QTimer::singleShot(2500, this, [this]() {
+                if (m_addToVocabBtn) {
+                    m_addToVocabBtn->setText("⭐ 记入背词本");
+                    m_addToVocabBtn->setEnabled(true);
+                }
+            });
+        }
+    });
 
     // 初始状态隐藏卡片
     m_dictCard.cardWidget->setVisible(false);
@@ -440,6 +469,8 @@ void TranslateDialog::updateCardResult(TranslationEngineCard &card, bool success
             m_lastPrimaryResult = text;
             m_copyPrimaryBtn->setEnabled(true);
             m_speakPrimaryBtn->setEnabled(true);
+            m_addToVocabBtn->setEnabled(true);
+            m_addToVocabBtn->setText("⭐ 记入背词本");
             if (onTranslated) {
                 onTranslated(m_lastSourceText, m_lastPrimaryResult);
             }
@@ -533,6 +564,7 @@ void TranslateDialog::doTranslate()
     m_lastPrimaryResult.clear();
     m_copyPrimaryBtn->setEnabled(false);
     m_speakPrimaryBtn->setEnabled(false);
+    m_addToVocabBtn->setEnabled(false);
 
     // 目标语言
     QString targetLang = m_targetLangCombo->currentData().toString();
@@ -672,6 +704,7 @@ void TranslateDialog::clearInput()
     m_lastPrimaryResult.clear();
     m_copyPrimaryBtn->setEnabled(false);
     m_speakPrimaryBtn->setEnabled(false);
+    m_addToVocabBtn->setEnabled(false);
     resetCard(m_edgeCard, "等待翻译...");
     resetCard(m_googleCard, "等待翻译...");
     resetCard(m_dictCard, "等待翻译...");

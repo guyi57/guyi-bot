@@ -6,6 +6,12 @@
 #include <QScreen>
 #include <QGuiApplication>
 #include <QComboBox>
+#include <QDesktopServices>
+#include <QUrl>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
+#include <QFileInfo>
 
 AskDialog::AskDialog(QWidget *parent)
     : QDialog(parent)
@@ -13,6 +19,7 @@ AskDialog::AskDialog(QWidget *parent)
     setWindowTitle("向桌宠 AI 提问");
     setWindowFlags(Qt::Dialog | Qt::WindowStaysOnTopHint | Qt::WindowCloseButtonHint);
     setMinimumWidth(430);
+    setAcceptDrops(true);
 
     auto mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(16, 16, 16, 16);
@@ -109,6 +116,7 @@ AskDialog::AskDialog(QWidget *parent)
 
     connect(m_clearContextBtn, &QPushButton::clicked, this, [this]() {
         m_contextText.clear();
+        m_droppedPath.clear();
         m_contextWidget->hide();
         m_titleLabel->setText("💬 自由向 AI 提问 (保留历史记忆)");
         adjustSize();
@@ -219,8 +227,63 @@ void AskDialog::setupQuickPills(QVBoxLayout *mainLayout) {
         });
         pillLayout->addWidget(btn);
     }
+
+    auto compressBtn = new QPushButton("🖼️ 视觉压缩", m_quickPillsWidget);
+    compressBtn->setToolTip("打开 Squoosh 风格的图片/目录无损与视觉压缩工坊");
+    compressBtn->setCursor(Qt::PointingHandCursor);
+    compressBtn->setStyleSheet(
+        "QPushButton {"
+        "  background: #f0fdf4;"
+        "  color: #15803d;"
+        "  font-size: 11px;"
+        "  font-weight: 600;"
+        "  border: 1px solid #86efac;"
+        "  border-radius: 12px;"
+        "  padding: 3px 8px;"
+        "}"
+        "QPushButton:hover {"
+        "  background: #dcfce7;"
+        "  color: #166534;"
+        "  border-color: #4ade80;"
+        "}"
+    );
+    connect(compressBtn, &QPushButton::clicked, this, [this]() {
+        QString url = "http://127.0.0.1:32456/compress";
+        if (!m_droppedPath.isEmpty()) {
+            url += "?path=" + QUrl::toPercentEncoding(m_droppedPath);
+        }
+        QDesktopServices::openUrl(QUrl(url));
+    });
+    pillLayout->addWidget(compressBtn);
+
     pillLayout->addStretch();
     mainLayout->addWidget(m_quickPillsWidget);
+}
+
+void AskDialog::dragEnterEvent(QDragEnterEvent *event) {
+    if (event->mimeData()->hasUrls()) {
+        event->acceptProposedAction();
+    }
+}
+
+void AskDialog::dropEvent(QDropEvent *event) {
+    const auto urls = event->mimeData()->urls();
+    if (urls.isEmpty()) return;
+    QString localPath = urls.first().toLocalFile();
+    if (localPath.isEmpty()) return;
+
+    m_droppedPath = localPath;
+    QFileInfo fi(localPath);
+    QString displayName = fi.fileName();
+    if (fi.isDir()) {
+        promptForContext(QString("📁 已载入文件夹: %1\n(可点击【🖼️ 视觉压缩】进行 Squoosh 对比调节，或输入文字让 AI 处理)").arg(localPath));
+    } else {
+        promptForContext(QString("🖼️ 已载入图片: %1\n(可点击【🖼️ 视觉压缩】进行 Squoosh 对比调节，或输入文字让 AI 处理)").arg(displayName));
+    }
+    m_inputEdit->setText("帮我压缩这个图片/目录并优化画质");
+    m_inputEdit->selectAll();
+    m_inputEdit->setFocus();
+    event->acceptProposedAction();
 }
 
 void AskDialog::promptForContext(QString const& contextText) {

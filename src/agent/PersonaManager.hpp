@@ -27,6 +27,9 @@ public:
     void setActivePersonaId(QString const& id);
     PersonaDefinition currentPersona() const { return getPersona(activePersonaId()); }
 
+    // 动态获取当前桌宠名称（优先读取自定义昵称，否则获取当前有效皮肤名）
+    static QString currentPetName();
+
     QString customPersonaPrompt() const;
     void setCustomPersonaPrompt(QString const& prompt);
 

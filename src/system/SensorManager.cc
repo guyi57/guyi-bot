@@ -22,6 +22,7 @@ QJsonObject AppSemanticContext::toJson() const
     obj["semantic_activity"] = semanticActivity;
     obj["detail"] = detail;
     obj["active_file"] = activeFile;
+    obj["content_summary"] = contentSummary;
     obj["url"] = url;
     obj["workspace"] = workspace;
     obj["focus_level"] = focusLevel.isEmpty() ? "normal" : focusLevel;
@@ -38,6 +39,7 @@ AppSemanticContext AppSemanticContext::fromJson(const QJsonObject &obj)
     ctx.semanticActivity = obj["semantic_activity"].toString();
     ctx.detail = obj["detail"].toString();
     ctx.activeFile = obj["active_file"].toString();
+    ctx.contentSummary = obj["content_summary"].toString();
     ctx.url = obj["url"].toString();
     ctx.workspace = obj["workspace"].toString();
     ctx.focusLevel = obj["focus_level"].toString("normal");
@@ -407,14 +409,14 @@ QJsonObject SensorManager::runSensor(const QString &scriptPath, const QString &a
     return QJsonObject();
 }
 
-void SensorManager::onAppActivated(const QString &appName, const QString &bundleId, const QString &windowTitle)
+void SensorManager::onAppActivated(const QString &appName, const QString &bundleId, const QString &windowTitle, const QString &documentPath)
 {
     if (isBlacklisted(bundleId, appName)) {
         return;
     }
 
     qint64 now = QDateTime::currentMSecsSinceEpoch();
-    QString targetKey = bundleId + "|||" + windowTitle;
+    QString targetKey = bundleId + "|||" + windowTitle + "|||" + documentPath;
 
     {
         QMutexLocker locker(&m_mutex);
@@ -427,8 +429,11 @@ void SensorManager::onAppActivated(const QString &appName, const QString &bundle
     }
 
     // 后台并发执行探针，完全零阻塞主线程
-    QThreadPool::globalInstance()->start([this, appName, bundleId, windowTitle, now]() {
+    QThreadPool::globalInstance()->start([this, appName, bundleId, windowTitle, documentPath, now]() {
         QString actualTitle = windowTitle;
+        if (actualTitle.isEmpty() && !documentPath.isEmpty()) {
+            actualTitle = QFileInfo(documentPath).fileName();
+        }
 #ifdef __APPLE__
         if (actualTitle.isEmpty()) {
             QProcess p;
@@ -471,6 +476,9 @@ void SensorManager::onAppActivated(const QString &appName, const QString &bundle
         newContext.semanticActivity = result["semantic_activity"].toString();
         newContext.detail = result["detail"].toString();
         newContext.activeFile = result["active_file"].toString();
+        if (newContext.activeFile.isEmpty() && !documentPath.isEmpty()) {
+            newContext.activeFile = documentPath;
+        }
         newContext.url = result["url"].toString();
         newContext.workspace = result["workspace"].toString();
         newContext.focusLevel = result["focus_level"].toString("normal");
@@ -478,6 +486,10 @@ void SensorManager::onAppActivated(const QString &appName, const QString &bundle
 
         {
             QMutexLocker locker(&m_mutex);
+            // 保留已有的 OCR 摘要（若处于同 app 且未过期）
+            if (m_currentContext.appName == appName && !m_currentContext.contentSummary.isEmpty()) {
+                newContext.contentSummary = m_currentContext.contentSummary;
+            }
             // 如果之前在一个高专注度工作应用，暂存为上一个工作环境
             if (m_currentContext.focusLevel == "high" && m_currentContext.appName != appName) {
                 m_previousWorkContext = m_currentContext;
@@ -500,8 +512,24 @@ void SensorManager::onAppActivated(const QString &appName, const QString &bundle
         std::cout << "[SensorManager] 实时应用语义捕获: [" 
                   << appName.toStdString() << "] " 
                   << newContext.semanticActivity.toStdString() 
-                  << " (" << newContext.detail.toStdString() << ")" << std::endl;
+                  << " (" << newContext.detail.toStdString() << ")"
+                  << (newContext.activeFile.isEmpty() ? "" : (" 文件: " + newContext.activeFile.toStdString()))
+                  << std::endl;
     });
+}
+
+void SensorManager::updateOcrSummary(const QString &appName, const QString &bundleId, const QString &contentSummary)
+{
+    QMutexLocker locker(&m_mutex);
+    if (m_currentContext.appName == appName || m_currentContext.bundleId == bundleId) {
+        m_currentContext.contentSummary = contentSummary;
+        if (!m_activityHistory.isEmpty()) {
+            QJsonObject hist = m_activityHistory.first();
+            hist["content_summary"] = contentSummary;
+            m_activityHistory[0] = hist;
+        }
+        std::cout << "[SensorManager] 原生 Vision OCR 摘要已更新: " << contentSummary.left(80).toStdString() << "..." << std::endl;
+    }
 }
 
 QJsonObject SensorManager::currentContext() const

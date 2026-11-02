@@ -441,11 +441,13 @@ bool ReactionEngine::evaluateReaction(const PetEvent &event, PetActionCommand &o
                 outCommand.type = PetActionType::Idle;
             }
 
-            // 选取台词：优先取 payload 中的 reply/text/song_name，否则取规则预设台词（带概率控制）
+            // 选取台词：优先取 payload 中的 reply/text/summary/song_name，否则取规则预设台词（带概率控制）
             if (event.payload.contains("reply") && !event.payload["reply"].toString().isEmpty()) {
                 outCommand.speechText = event.payload["reply"].toString();
             } else if (event.payload.contains("text") && !event.payload["text"].toString().isEmpty()) {
                 outCommand.speechText = event.payload["text"].toString();
+            } else if (event.payload.contains("summary") && !event.payload["summary"].toString().isEmpty()) {
+                outCommand.speechText = event.payload["summary"].toString();
             } else if (event.type == "music.playing" && event.payload.contains("song_name") && !event.payload["song_name"].toString().isEmpty()) {
                 QString sname = event.payload["song_name"].toString().trimmed();
                 QString artist = event.payload["artist"].toString().trimmed();
@@ -487,6 +489,7 @@ bool ReactionEngine::evaluateReaction(const PetEvent &event, PetActionCommand &o
                 outCommand.emote = PetEmoteType::SleepZzz;
             } else if (event.type == "system.memory_pressure") {
                 outCommand.emote = PetEmoteType::DizzySwirl;
+                outCommand.durationMs = 12000;
             }
 
             if (event.type.startsWith("agent.task.")) {

@@ -20,6 +20,10 @@ struct UserProfile {
     QString preferredLangs = "C++, Qt"; // 常用语言与工具
     QString musicTaste = "华语流行, 轻音乐"; // 音乐喜好
     QString workHabits = "经常高强度专注, 偶尔熬夜"; // 作息习惯
+    QString favoriteFood = "";          // 饮食口味与忌口
+    QString birthday = "";              // 生日与星座
+    QString currentProject = "";        // 当前攻坚项目
+    QString hobbies = "";               // 闲暇爱好
     QString notes = "";                // 附加备忘
 };
 

@@ -1,5 +1,7 @@
 #include "InitiativeTrigger.hpp"
 #include "AgentService.hpp"
+#include "LongTermMemoryEngine.hpp"
+#include "VocabLearningEngine.hpp"
 #include <QDateTime>
 
 InitiativeTrigger *InitiativeTrigger::instance()
@@ -60,7 +62,32 @@ bool InitiativeTrigger::evaluateInitiative(PetState &state, const QJsonObject &c
     int score = 0;
     QStringList reasons;
 
-    // 0. 初次登场问候
+    // 0.05 英语背词微测验优先触发 (Vocab Learning Quiz)
+    if (VocabLearningEngine::instance()->shouldTriggerQuiz()) {
+        score += 45;
+        reasons << "vocab_quiz";
+    }
+
+    // 0. 未决事件/日程回访优先判断 (Event Follow-up)
+    auto pendingFollowups = LongTermMemoryEngine::instance()->getPendingFollowupEvents(1);
+    if (!pendingFollowups.isEmpty()) {
+        auto f = pendingFollowups.first();
+        if (now >= f.eventTime) {
+            score += 50;
+            reasons << "event_followup";
+        }
+    }
+
+    // 0.1 好奇心主动探索 (Curiosity Inquiry)
+    if (LongTermMemoryEngine::instance()->canTriggerCuriosityInquiry(now)) {
+        auto gap = LongTermMemoryEngine::instance()->getNextCuriosityGap();
+        if (!gap.fieldKey.isEmpty()) {
+            score += 35;
+            reasons << "curiosity_inquiry";
+        }
+    }
+
+    // 0.2 初次登场问候
     if (state.lastTalkTime == 0) {
         score += 35;
         reasons << "startup_greeting";
@@ -125,8 +152,11 @@ bool InitiativeTrigger::evaluateInitiative(PetState &state, const QJsonObject &c
     // 7. 调试排错陪伴 (Debugging Follow-up)
     QString actDetail = semanticCtx["detail"].toString().toLower();
     QString actSemantic = semanticCtx["semantic_activity"].toString().toLower();
+    QString actContent = semanticCtx["content_summary"].toString().toLower();
     if (actDetail.contains("error") || actDetail.contains("crash") || actDetail.contains("bug") ||
-        actSemantic.contains("排查") || actSemantic.contains("调试") || actSemantic.contains("解决")) {
+        actSemantic.contains("排查") || actSemantic.contains("调试") || actSemantic.contains("解决") ||
+        actContent.contains("error") || actContent.contains("exception") || actContent.contains("failed") ||
+        actContent.contains("报错") || actContent.contains("warning")) {
         score += 30;
         reasons << "debugging_followup";
     }
@@ -158,6 +188,17 @@ bool InitiativeTrigger::evaluateInitiative(PetState &state, const QJsonObject &c
     if (!AgentService::instance()->memoryHistory().isEmpty()) {
         score += 15;
         reasons << "recent_chat_resonance";
+    }
+
+    // 10. 热门时事热梗 / 趣味段子 / 历史记忆深聊轮换
+    static int s_banterCycle = 0;
+    int cycle = (++s_banterCycle) % 3;
+    if (cycle == 0) {
+        score += 25;
+        reasons << "hot_trending_meme";
+    } else if (cycle == 1) {
+        score += 25;
+        reasons << "memory_topic_followup";
     }
 
     // 10. 用户当前实时操作热度 (鼠标/键盘活跃)

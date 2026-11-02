@@ -3,6 +3,7 @@
 // 
 
 #include "TimerManager.hpp"
+#include "LongTermMemoryEngine.hpp"
 #include <QUuid>
 #include <QDebug>
 #include <iostream>
@@ -352,6 +353,16 @@ void TimerManager::checkTimers() {
             std::cout << "[定时器触发] 任务到期触发: " << timer.title.toStdString() << std::endl;
             if (onTimerTriggered) {
                 onTimerTriggered(timer);
+            }
+
+            // 单次任务触发后，自动登记未决跟进关切事件 (例如 2 小时后回访进度)
+            if (timer.repeat == TimerRepeat::Once) {
+                qint64 followupTime = nowMs + 2 * 3600 * 1000;
+                LongTermMemoryEngine::instance()->addFollowupEvent(
+                    timer.title,
+                    QString("定时提醒「%1」于 %2 触发完成").arg(timer.title, QDateTime::fromMSecsSinceEpoch(nowMs).toString("MM-dd HH:mm")),
+                    followupTime
+                );
             }
         }
     }

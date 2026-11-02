@@ -143,6 +143,9 @@ public:
     void handleAgentStatus(AgentStatusEvent const& event, std::function<void(bool success, QString const& message)> callback = nullptr);
     AgentStatusEvent lastAgentStatus() const { return m_lastStatus; }
 
+    // 本地多 Agent 会话日志抽取增强 (自动解析 反重力/Antigravity, Codex, Cursor 的本地 Transcript 获得真实任务内容)
+    AgentStatusEvent enrichAgentStatusWithLocalTranscript(const AgentStatusEvent &event);
+
     void clearMemory();
     QJsonArray const& memoryHistory() const { return m_history; }
     void sendChatCompletion(QJsonArray const& messages, std::function<void(bool success, QString const& result)> callback, bool isUserFacing = false);

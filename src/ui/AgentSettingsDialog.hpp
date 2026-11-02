@@ -81,12 +81,29 @@ private:
     QLabel *m_testStatusLabel;
 
     // 🎭 人格适配器 (Persona) 与 外观显示
+    QLineEdit *m_petCustomNameEdit;
     QComboBox *m_personaCombo;
     QLabel *m_personaDescLabel;
     QTextEdit *m_customPromptEdit;
     QCheckBox *m_showHeadStatusOrbCheck;
+    QSlider *m_bubbleOpacitySlider;
+    QLabel *m_bubbleOpacityLabel;
     QComboBox *m_banterFreqCombo;
     QCheckBox *m_contextualCareCheck;
+
+    // 🎓 英语背词学习设置 (Vocab Learning)
+    QCheckBox *m_vocabEnabledCheck;
+    QCheckBox *m_vocabUpgradeExamCheck;
+    QCheckBox *m_vocabProgrammingCheck;
+    QCheckBox *m_vocabOcrSniperCheck;
+    QSpinBox *m_vocabDailyTargetSpin;
+    QSlider *m_vocabNewWordRatioSlider;
+    QLabel *m_vocabRatioLabel;
+    QSpinBox *m_vocabIntervalSpin;
+    QLabel *m_vocabStatsSummaryLabel;
+    QPushButton *m_vocabImportJsonBtn;
+    QPushButton *m_vocabImportTxtBtn;
+    QPushButton *m_vocabTriggerSampleQuizBtn;
 
     // 🧬 繁殖模式与克隆
     QCheckBox *m_breedingEnabledCheck;
@@ -124,8 +141,18 @@ private:
     QLineEdit *m_ownerTechEdit;
     QLineEdit *m_ownerMusicEdit;
     QLineEdit *m_ownerHabitEdit;
+    QLineEdit *m_ownerFoodEdit;
+    QLineEdit *m_ownerBirthdayEdit;
+    QLineEdit *m_ownerProjectEdit;
+    QLineEdit *m_ownerHobbyEdit;
     QTextEdit *m_ownerNotesEdit;
     QPushButton *m_saveOwnerProfileBtn;
+
+    // 📋 未决回访关切清单 (Pending Follow-up Events)
+    QListWidget *m_followupListWidget;
+    QPushButton *m_resolveFollowupBtn;
+    QPushButton *m_dismissFollowupBtn;
+    QLabel *m_followupStatsLabel;
 
     QLineEdit *m_memSearchEdit;
     QPushButton *m_memSearchBtn;

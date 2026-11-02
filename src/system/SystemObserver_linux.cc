@@ -76,13 +76,50 @@ QJsonObject SystemObserver::currentSemanticActivity() const {
     return QJsonObject();
 }
 
+QString SystemObserver::currentActiveDocumentPath() const {
+    return m_activeDocumentPath;
+}
+
+QString SystemObserver::currentActiveContentSummary() const {
+    return m_activeContentSummary;
+}
+
+void SystemObserver::updateContentSummary(const QString &contentSummary) {
+    m_activeContentSummary = contentSummary;
+}
+
+SystemResourceStats SystemObserver::getSystemResourceStats() {
+    SystemResourceStats stats;
+    struct sysinfo si;
+    if (sysinfo(&si) == 0 && si.totalram > 0) {
+        stats.memTotalGb = static_cast<double>(si.totalram * si.mem_unit) / (1024.0 * 1024.0 * 1024.0);
+        uint64_t used = (si.totalram - si.freeram) * si.mem_unit;
+        stats.memUsedGb = static_cast<double>(used) / (1024.0 * 1024.0 * 1024.0);
+        stats.memPercent = (static_cast<double>(si.totalram - si.freeram) / static_cast<double>(si.totalram)) * 100.0;
+        stats.cpuPercent = static_cast<double>(si.loads[0]) / 65536.0 * 10.0;
+    }
+    struct statvfs stat;
+    if (statvfs("/", &stat) == 0) {
+        uint64_t totalDiskBytes = (uint64_t)stat.f_blocks * stat.f_frsize;
+        uint64_t freeDiskBytes = (uint64_t)stat.f_bavail * stat.f_frsize;
+        stats.diskTotalGb = static_cast<double>(totalDiskBytes) / (1024.0 * 1024.0 * 1024.0);
+        stats.diskFreeGb = static_cast<double>(freeDiskBytes) / (1024.0 * 1024.0 * 1024.0);
+        if (totalDiskBytes > 0) {
+            uint64_t usedDiskBytes = totalDiskBytes - freeDiskBytes;
+            stats.diskPercent = (static_cast<double>(usedDiskBytes) / static_cast<double>(totalDiskBytes)) * 100.0;
+        }
+    }
+    return stats;
+}
+
 int SystemObserver::continuousWorkMinutes() const {
     return 0;
 }
 
-void SystemObserver::recordAppActivation(const QString &appName, const QString &bundleId, const QString &windowTitle) {
+void SystemObserver::recordAppActivation(const QString &appName, const QString &bundleId, const QString &windowTitle, const QString &documentPath) {
     m_activeAppName = appName;
     m_activeBundleId = bundleId;
     m_activeWindowTitle = windowTitle;
+    m_activeDocumentPath = documentPath;
 }
 

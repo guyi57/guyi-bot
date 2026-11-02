@@ -1,0 +1,1407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>guyi-bot 视觉压缩工坊 | Squoosh 交互式调参</title>
+  <style>
+    :root {
+      --bg-primary: #090d16;
+      --bg-secondary: #131c2e;
+      --bg-card: rgba(26, 38, 62, 0.7);
+      --border-color: rgba(255, 255, 255, 0.1);
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --accent-glow: rgba(99, 102, 241, 0.35);
+      --success: #10b981;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --slider-line: #38bdf8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-main);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* 顶部导航 */
+    header {
+      height: 52px;
+      background: rgba(15, 23, 42, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      z-index: 10;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: 0.5px;
+    }
+    .brand span.tag {
+      font-size: 11px;
+      background: rgba(99, 102, 241, 0.2);
+      color: #818cf8;
+      padding: 2px 7px;
+      border-radius: 10px;
+      border: 1px solid rgba(99, 102, 241, 0.4);
+    }
+    .header-info {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 12.5px;
+      color: var(--text-muted);
+    }
+    .pill {
+      background: rgba(255, 255, 255, 0.06);
+      padding: 4px 10px;
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+      font-size: 11.5px;
+    }
+
+    /* 主布局 */
+    .app-main {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* 左侧：A/B 对比预览区 */
+    .preview-container {
+      flex: 1;
+      position: relative;
+      background: #060910;
+      background-image: 
+        linear-gradient(45deg, #101524 25%, transparent 25%), 
+        linear-gradient(-45deg, #101524 25%, transparent 25%), 
+        linear-gradient(45deg, transparent 75%, #101524 75%), 
+        linear-gradient(-45deg, transparent 75%, #101524 75%);
+      background-size: 20px 20px;
+      background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* 空状态拖拽上传区 */
+    .empty-dropzone {
+      width: 520px;
+      padding: 40px 30px;
+      background: var(--bg-card);
+      backdrop-filter: blur(16px);
+      border: 2px dashed rgba(99, 102, 241, 0.4);
+      border-radius: 16px;
+      text-align: center;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+      transition: all 0.25s ease;
+      cursor: pointer;
+    }
+    .empty-dropzone.dragover {
+      border-color: #818cf8;
+      background: rgba(99, 102, 241, 0.15);
+      transform: scale(1.02);
+    }
+    .drop-icon { font-size: 48px; margin-bottom: 14px; display: block; }
+    .drop-title { font-size: 18px; font-weight: 600; margin-bottom: 8px; }
+    .drop-sub { font-size: 13px; color: var(--text-muted); margin-bottom: 24px; line-height: 1.5; }
+    .drop-btns { display: flex; gap: 12px; justify-content: center; }
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border-color);
+      color: #fff;
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 500;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s;
+    }
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.15);
+      border-color: rgba(255, 255, 255, 0.3);
+    }
+
+    /* 图像视图与 A/B 滑块 */
+    .viewer-wrap {
+      width: 100%;
+      height: 100%;
+      position: relative;
+      overflow: hidden;
+      display: none;
+    }
+    .canvas-layer {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+      max-width: 90%;
+      max-height: 90%;
+      object-fit: contain;
+    }
+    .canvas-before {
+      clip-path: inset(0 calc(100% - var(--split, 50%)) 0 0);
+      z-index: 2;
+    }
+    .canvas-after {
+      z-index: 1;
+    }
+
+    /* 中线拖动手柄 */
+    .split-divider {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      left: var(--split, 50%);
+      width: 2px;
+      background: #38bdf8;
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.8);
+      cursor: ew-resize;
+      z-index: 10;
+      display: none;
+    }
+    .split-handle {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 36px;
+      height: 36px;
+      background: #0f172a;
+      border: 2px solid #38bdf8;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.6);
+      color: #38bdf8;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    /* 左右角标指示 */
+    .badge-indicator {
+      position: absolute;
+      bottom: 20px;
+      padding: 6px 14px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      backdrop-filter: blur(8px);
+      z-index: 8;
+      display: none;
+    }
+    .badge-orig {
+      left: 20px;
+      background: rgba(15, 23, 42, 0.75);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #cbd5e1;
+    }
+    .badge-comp {
+      right: 380px;
+      background: rgba(16, 185, 129, 0.2);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: #34d399;
+    }
+
+    /* 顶部多图切换控制器 */
+    .carousel-bar {
+      position: absolute;
+      top: 15px;
+      left: 20px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid var(--border-color);
+      border-radius: 20px;
+      padding: 4px 12px;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      z-index: 8;
+    }
+    .carousel-btn {
+      background: none;
+      border: none;
+      color: #fff;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 2px 6px;
+    }
+    .carousel-btn:hover { color: #818cf8; }
+
+    /* Squoosh 风格悬浮导出下载按钮 */
+    .fab-download-btn {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      z-index: 40;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 9px 16px;
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 30px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 16px rgba(79, 70, 229, 0.45);
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .fab-download-btn:hover {
+      transform: translateY(-2px) scale(1.03);
+      box-shadow: 0 6px 22px rgba(79, 70, 229, 0.65);
+      background: linear-gradient(135deg, #4f46e5, #4338ca);
+    }
+
+    /* 右侧控制面板 */
+    .sidebar-panel {
+      width: 360px;
+      background: var(--bg-secondary);
+      border-left: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      z-index: 10;
+      box-shadow: -10px 0 30px rgba(0, 0, 0, 0.3);
+    }
+    .panel-scroll {
+      flex: 1;
+      padding: 20px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .panel-section-title {
+      font-size: 12.5px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #94a3b8;
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* 格式选择按钮组 */
+    .format-pills {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+    }
+    .format-btn {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #cbd5e1;
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s;
+    }
+    .format-btn:hover { background: rgba(255, 255, 255, 0.1); }
+    .format-btn.active {
+      background: var(--accent);
+      border-color: #818cf8;
+      color: #fff;
+      box-shadow: 0 0 12px var(--accent-glow);
+    }
+
+    /* 预设策略卡片 */
+    .preset-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .preset-card {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 8px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .preset-card:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .preset-card.active {
+      border-color: #38bdf8;
+      background: rgba(56, 189, 248, 0.1);
+    }
+    .preset-name { font-size: 12px; font-weight: 600; }
+    .preset-desc { font-size: 11px; color: var(--text-muted); }
+
+    /* 滑块与输入 */
+    .control-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 12px;
+      margin-bottom: 6px;
+    }
+    .range-slider {
+      width: 100%;
+      height: 6px;
+      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.15);
+      outline: none;
+      -webkit-appearance: none;
+      cursor: pointer;
+    }
+    .range-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #38bdf8;
+      cursor: pointer;
+      box-shadow: 0 0 8px #38bdf8;
+    }
+
+    /* 尺寸缩放 */
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12.5px;
+    }
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 36px;
+      height: 20px;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider-toggle {
+      position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+      background-color: rgba(255, 255, 255, 0.2);
+      border-radius: 20px;
+      transition: .3s;
+    }
+    .slider-toggle:before {
+      position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px;
+      background-color: white; border-radius: 50%; transition: .3s;
+    }
+    input:checked + .slider-toggle { background-color: var(--accent); }
+    input:checked + .slider-toggle:before { transform: translateX(16px); }
+
+    /* 保存策略（用户专门定制的 3 个选项） */
+    .save-mode-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .save-option {
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 10px 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      transition: all 0.2s;
+    }
+    .save-option:hover { background: rgba(255, 255, 255, 0.08); }
+    .save-option.active {
+      border-color: #818cf8;
+      background: rgba(99, 102, 241, 0.12);
+    }
+    .save-option input[type="radio"] { margin-top: 2px; }
+    .save-option-text { flex: 1; }
+    .save-option-title { font-size: 12.5px; font-weight: 600; }
+    .save-option-subtitle { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+    .custom-dir-box {
+      margin-top: 8px;
+      display: none;
+      gap: 6px;
+    }
+    .input-text {
+      flex: 1;
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 6px 10px;
+      color: #fff;
+      font-size: 11.5px;
+      outline: none;
+    }
+    .input-text:focus { border-color: var(--accent); }
+
+    /* 底部执行按钮栏 */
+    .panel-footer {
+      padding: 16px 20px;
+      background: rgba(15, 23, 42, 0.95);
+      border-top: 1px solid var(--border-color);
+    }
+    .btn-primary {
+      width: 100%;
+      background: linear-gradient(135deg, #6366f1, #4f46e5);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 12px;
+      font-size: 13.5px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 4px 20px var(--accent-glow);
+      transition: all 0.2s;
+    }
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 25px rgba(99, 102, 241, 0.5);
+    }
+    .btn-primary:active { transform: translateY(0); }
+    .btn-primary:disabled {
+      background: #334155;
+      color: #64748b;
+      cursor: not-allowed;
+      box-shadow: none;
+      transform: none;
+    }
+
+    /* 压缩进度模态遮罩 */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(5, 8, 16, 0.85);
+      backdrop-filter: blur(12px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal-card {
+      width: 440px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 24px;
+      text-align: center;
+      box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7);
+    }
+    .progress-bar-wrap {
+      width: 100%;
+      height: 8px;
+      background: rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 18px 0;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #38bdf8, #6366f1);
+      border-radius: 4px;
+      transition: width 0.3s;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 顶部导航 -->
+  <header>
+    <div class="brand">
+      <span>🐸 guyi-bot</span>
+      <span style="color: var(--text-muted); font-weight: normal;">|</span>
+      <span>视觉压制工坊</span>
+      <span class="tag">libvips + sharp 驱动</span>
+    </div>
+    <div class="header-info">
+      <div id="statusPill" class="pill">就绪 (等待添加图片)</div>
+      <button class="btn-secondary" onclick="openFilePicker('file')">📄 选文件</button>
+      <button class="btn-secondary" onclick="openFilePicker('folder')">📂 选文件夹</button>
+    </div>
+  </header>
+
+  <!-- 主布局 -->
+  <div class="app-main">
+
+    <!-- 预览与 A/B 对比中心 -->
+    <div class="preview-container" id="dropArea">
+
+      <!-- 空白待机状态 -->
+      <div class="empty-dropzone" id="emptyState">
+        <span class="drop-icon">🖼️</span>
+        <div class="drop-title">拖入图片或整个文件夹</div>
+        <div class="drop-sub">
+          支持 JPG、PNG、WebP、AVIF、TIFF<br>
+          左右拖动中线，实时 100% 像素级对比如同 Squoosh
+        </div>
+        <div class="drop-btns">
+          <button class="btn-secondary" onclick="openFilePicker('folder')">📂 选择本地文件夹</button>
+          <button class="btn-secondary" onclick="openFilePicker('file')">📄 选取单张图片</button>
+        </div>
+        <input type="file" id="htmlFileInput" style="display:none;" multiple accept="image/*">
+        <input type="file" id="htmlFolderInput" style="display:none;" webkitdirectory>
+      </div>
+
+      <!-- 图片渲染视窗 -->
+      <div class="viewer-wrap" id="viewerWrap">
+        <!-- 原始图层 (左) -->
+        <img id="imgBefore" class="canvas-layer canvas-before" alt="Original">
+        <!-- 压缩后预览图层 (右) -->
+        <img id="imgAfter" class="canvas-layer canvas-after" alt="Compressed">
+
+        <!-- 中间对比滑块 -->
+        <div class="split-divider" id="splitDivider">
+          <div class="split-handle">◀ ▶</div>
+        </div>
+
+        <!-- 角标 -->
+        <div class="badge-indicator badge-orig" id="origBadge">原图: --</div>
+        <div class="badge-indicator badge-comp" id="compBadge">压缩预估: --</div>
+
+        <!-- 多图切换胶囊 -->
+        <div class="carousel-bar" id="carouselBar">
+          <button class="carousel-btn" onclick="switchImage(-1)">◀</button>
+          <span id="carouselText">1 / 1</span>
+          <button class="carousel-btn" onclick="switchImage(1)">▶</button>
+        </div>
+
+        <!-- Squoosh 悬浮下载当前单图按钮 -->
+        <button class="fab-download-btn" id="singleDownloadBtn" title="下载当前处理后的单张图片" onclick="downloadCurrentImage()">
+          <span>⬇️ 下载当前图</span>
+        </button>
+      </div>
+
+    </div>
+
+    <!-- 右侧参数面板 -->
+    <div class="sidebar-panel">
+      <div class="panel-scroll">
+
+        <!-- 0. 智能抠图工坊 (AI Background Removal) -->
+        <div style="background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.25); border-radius: 10px; padding: 12px;">
+          <div class="panel-section-title" style="color: #a5b4fc; margin-bottom: 6px;">
+            <span>🪄 智能一键抠图 (去背景)</span>
+          </div>
+          <div style="font-size: 11px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.4;">
+            自动剔除人物、宠物、二次元立绘或实物背景，右侧实时显示透明图并可中线拖动滑块像素级对质。
+          </div>
+          <div style="display: flex; gap: 6px;">
+            <button class="btn-secondary" id="aiCutoutBtn" style="flex: 1; padding: 8px 6px; background: rgba(99, 102, 241, 0.2); border-color: #818cf8; color: #fff; font-weight: 600;" onclick="doCutout('ai')">
+              <span>🪄 AI 智能抠图</span>
+            </button>
+            <button class="btn-secondary" id="colorCutoutBtn" style="flex: 1; padding: 8px 6px;" onclick="doCutout('color')">
+              <span>🎨 纯色/白底去底</span>
+            </button>
+          </div>
+          <div id="cutoutNotice" style="display: none; margin-top: 10px; padding: 8px; border-radius: 6px; background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.3); font-size: 11.5px; color: #34d399; text-align: center;">
+            <div id="cutoutNoticeText">✨ 抠图完成！拖动滑块对比边缘细节</div>
+            <div style="display: flex; gap: 6px; margin-top: 6px;">
+              <button class="btn-secondary" style="flex: 1; padding: 4px; background: #059669; border-color: #10b981; color: #fff;" onclick="applyCutoutResult()">✅ 应用此抠图</button>
+              <button class="btn-secondary" style="flex: 1; padding: 4px;" onclick="cancelCutoutResult()">↩️ 恢复原图</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 1. 目标格式 -->
+        <div>
+          <div class="panel-section-title">🎯 目标输出格式</div>
+          <div class="format-pills">
+            <button class="format-btn active" data-format="webp" onclick="setFormat('webp')">WebP (推荐)</button>
+            <button class="format-btn" data-format="avif" onclick="setFormat('avif')">AVIF (极小)</button>
+            <button class="format-btn" data-format="jpeg" onclick="setFormat('jpeg')">JPEG</button>
+            <button class="format-btn" data-format="png" onclick="setFormat('png')">PNG</button>
+            <button class="format-btn" data-format="original" onclick="setFormat('original')">保持原格式</button>
+          </div>
+        </div>
+
+        <!-- 2. 预设策略 -->
+        <div>
+          <div class="panel-section-title">🎚️ 压缩策略</div>
+          <div class="preset-group">
+            <div class="preset-card active" id="presetVisual" onclick="setPreset('visual')">
+              <div>
+                <div class="preset-name">⭐ 视觉无损 (推荐)</div>
+                <div class="preset-desc">品质 82，肉眼无差异，体积减少 60-80%</div>
+              </div>
+            </div>
+            <div class="preset-card" id="presetLossless" onclick="setPreset('lossless')">
+              <div>
+                <div class="preset-name">🔒 绝对真无损</div>
+                <div class="preset-desc">Bit-exact 像素不变，剔除 EXIF/ICC 瘦身</div>
+              </div>
+            </div>
+            <div class="preset-card" id="presetTiny" onclick="setPreset('tiny')">
+              <div>
+                <div class="preset-name">📉 极限瘦身</div>
+                <div class="preset-desc">品质 65，适合网络配图与缩略图</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. 品质滑块 -->
+        <div id="qualitySection">
+          <div class="control-row">
+            <span>品质 (Quality)</span>
+            <strong id="qualityValue">82</strong>
+          </div>
+          <input type="range" class="range-slider" id="qualitySlider" min="1" max="100" value="82" oninput="onQualityChange(this.value)">
+        </div>
+
+        <!-- 4. 尺寸与分辨率调节 (Resize) -->
+        <div>
+          <div class="switch-row">
+            <div class="panel-section-title" style="margin-bottom:0;">📐 尺寸调整 (Resize)</div>
+            <label class="switch">
+              <input type="checkbox" id="resizeToggle" onchange="toggleResize(this.checked)">
+              <span class="slider-toggle"></span>
+            </label>
+          </div>
+          <div id="dimBadge" style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">原始尺寸: -- × -- px</div>
+
+          <div id="resizeBox" style="display:none; margin-top:10px;">
+            <!-- 预设等比百分比 -->
+            <div style="display:flex; gap:6px; margin-bottom:8px;">
+              <button class="btn-secondary" style="flex:1; padding:4px;" onclick="applyPercentPreset(100)">100%</button>
+              <button class="btn-secondary" style="flex:1; padding:4px;" onclick="applyPercentPreset(75)">75%</button>
+              <button class="btn-secondary" style="flex:1; padding:4px;" onclick="applyPercentPreset(50)">50%</button>
+              <button class="btn-secondary" style="flex:1; padding:4px;" onclick="applyPercentPreset(25)">25%</button>
+            </div>
+
+            <!-- 宽、高与锁定比率手柄 -->
+            <div style="display:flex; align-items:center; gap:8px;">
+              <div style="flex:1;">
+                <div style="font-size:11px; color:var(--text-muted); margin-bottom:3px;">宽度 (Width)</div>
+                <input type="number" id="resizeWidthInput" class="input-text" style="width:100%;" placeholder="宽 px" oninput="onWidthChange(this.value)">
+              </div>
+
+              <button id="lockAspectBtn" class="btn-secondary" style="padding:6px 8px; margin-top:16px; border-radius:6px; background:rgba(99,102,241,0.2); border-color:#818cf8;" onclick="toggleLockAspect()" title="锁定保持等宽高比">
+                <span id="lockAspectIcon">🔒</span>
+              </button>
+
+              <div style="flex:1;">
+                <div style="font-size:11px; color:var(--text-muted); margin-bottom:3px;">高度 (Height)</div>
+                <input type="number" id="resizeHeightInput" class="input-text" style="width:100%;" placeholder="高 px" oninput="onHeightChange(this.value)">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5. 保存策略 (重点定制功能) -->
+        <div>
+          <div class="panel-section-title">💾 输出与保存策略</div>
+          <div class="save-mode-group">
+            <label class="save-option" id="saveOpt1" onclick="setSaveMode(1)">
+              <input type="radio" name="saveMode" value="1">
+              <div class="save-option-text">
+                <div class="save-option-title">⚡ 1. 直接替换原文件</div>
+                <div class="save-option-subtitle">高效率：原地覆盖或同名升级为 WebP</div>
+              </div>
+            </label>
+            <label class="save-option active" id="saveOpt2" onclick="setSaveMode(2)">
+              <input type="radio" name="saveMode" value="2" checked>
+              <div class="save-option-text">
+                <div class="save-option-title">📄 2. 生成副本 (推荐)</div>
+                <div class="save-option-subtitle">安全：同目录下生成 .min 副本，原图保留</div>
+              </div>
+            </label>
+            <label class="save-option" id="saveOpt3" onclick="setSaveMode(3)">
+              <input type="radio" name="saveMode" value="3">
+              <div class="save-option-text">
+                <div class="save-option-title">📂 3. 另存为指定文件夹</div>
+                <div class="save-option-subtitle">整洁：所有处理后的文件归档至新目录</div>
+              </div>
+            </label>
+          </div>
+          <div class="custom-dir-box" id="customDirBox">
+            <input type="text" id="customDirInput" class="input-text" placeholder="输入或选取输出目标目录绝对路径">
+            <button class="btn-secondary" onclick="pickCustomFolder()">选择...</button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- 底部执行栏 -->
+      <div class="panel-footer">
+        <button class="btn-primary" id="startBtn" onclick="startBatchCompress()" disabled>
+          <span>🚀 启动批量压缩</span>
+          <span id="btnCountPill" style="opacity:0.8; font-size:12px;">(0 张图片)</span>
+        </button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 进度/反馈模态弹窗 -->
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal-card">
+      <div id="modalIcon" style="font-size:40px; margin-bottom:12px;">⚡</div>
+      <h3 id="modalTitle" style="font-size:17px; margin-bottom:8px;">正在压缩中...</h3>
+      <div id="modalSub" style="font-size:12.5px; color:var(--text-muted);">libvips 多核心并发全力处理中</div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" id="progressFill"></div>
+      </div>
+      <div id="modalStats" style="font-size:13px; font-weight:600; color:#34d399; margin-top:10px;"></div>
+      <button class="btn-secondary" id="modalCloseBtn" style="margin-top:16px; display:none;" onclick="closeModal()">关闭</button>
+    </div>
+  </div>
+
+  <script>
+    // 状态机
+    let state = {
+      loadedFiles: [], // [{ name, path, size, fileObj }]
+      currentIndex: 0,
+      targetPath: null, // 如果是整个目录
+      format: 'webp',
+      preset: 'visual',
+      quality: 82,
+      lossless: false,
+      resizeEnabled: false,
+      resizeWidth: 1920,
+      saveMode: 2,
+      customOutputDir: ''
+    };
+
+    // 初始化检查 URL 参数
+    window.addEventListener('DOMContentLoaded', () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const initPath = urlParams.get('path');
+      if (initPath) {
+        loadFromLocalPath(initPath);
+      }
+      setupSplitSlider();
+      setupDragDrop();
+    });
+
+    // 格式化大小
+    function formatBytes(bytes) {
+      if (!bytes || bytes <= 0) return '0 B';
+      const k = 1024;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return (bytes / Math.pow(k, i)).toFixed(2) + ' ' + sizes[i];
+    }
+
+    // 拖拽支持
+    function setupDragDrop() {
+      const dropArea = document.getElementById('dropArea');
+      ['dragenter', 'dragover'].forEach(e => {
+        dropArea.addEventListener(e, (ev) => {
+          ev.preventDefault();
+          document.getElementById('emptyState').classList.add('dragover');
+        });
+      });
+      ['dragleave', 'drop'].forEach(e => {
+        dropArea.addEventListener(e, (ev) => {
+          ev.preventDefault();
+          document.getElementById('emptyState').classList.remove('dragover');
+        });
+      });
+      dropArea.addEventListener('drop', async (ev) => {
+        ev.preventDefault();
+        const items = ev.dataTransfer.items;
+        if (items) {
+          const files = [];
+          for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (item.kind === 'file') {
+              const file = item.getAsFile();
+              if (file && file.type.startsWith('image/')) {
+                files.push({ name: file.name, size: file.size, fileObj: file });
+              }
+            }
+          }
+          if (files.length > 0) {
+            handleLoadedFiles(files);
+          }
+        }
+      });
+    }
+
+    // 文件选择器触发
+    function openFilePicker(type) {
+      if (type === 'folder') {
+        // 请求 Qt 开启原生 macOS 文件夹选取窗口
+        fetch('/guyi/api/v1/compress/browse_folder', { method: 'POST' })
+          .then(res => res.json())
+          .then(data => {
+            if (data.path) {
+              loadFromLocalPath(data.path);
+            }
+          }).catch(() => {
+            document.getElementById('htmlFolderInput').click();
+          });
+      } else {
+        fetch('/guyi/api/v1/compress/browse_file', { method: 'POST' })
+          .then(res => res.json())
+          .then(data => {
+            if (data.path) {
+              loadFromLocalPath(data.path);
+            }
+          }).catch(() => {
+            document.getElementById('htmlFileInput').click();
+          });
+      }
+    }
+
+    document.getElementById('htmlFileInput').addEventListener('change', (e) => {
+      const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/')).map(f => ({
+        name: f.name, size: f.size, fileObj: f
+      }));
+      if (files.length > 0) handleLoadedFiles(files);
+    });
+
+    document.getElementById('htmlFolderInput').addEventListener('change', (e) => {
+      const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/')).map(f => ({
+        name: f.name, size: f.size, fileObj: f
+      }));
+      if (files.length > 0) handleLoadedFiles(files);
+    });
+
+    function pickCustomFolder() {
+      fetch('/guyi/api/v1/compress/browse_folder', { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+          if (data.path) {
+            state.customOutputDir = data.path;
+            document.getElementById('customDirInput').value = data.path;
+          }
+        });
+    }
+
+    // 从桌宠本地路径加载
+    async function loadFromLocalPath(path) {
+      try {
+        const res = await fetch('/guyi/api/v1/compress/scan?path=' + encodeURIComponent(path));
+        const data = await res.json();
+        if (data.files && data.files.length > 0) {
+          state.targetPath = path;
+          state.loadedFiles = data.files.map(f => ({
+            name: f.name,
+            path: f.path,
+            size: f.size,
+            url: '/guyi/api/v1/compress/read_image?path=' + encodeURIComponent(f.path)
+          }));
+          displayViewer();
+        }
+      } catch (err) {
+        console.error('Scan error:', err);
+      }
+    }
+
+    function handleLoadedFiles(files) {
+      state.targetPath = null;
+      state.loadedFiles = files.map(f => ({
+        ...f,
+        url: URL.createObjectURL(f.fileObj)
+      }));
+      displayViewer();
+    }
+
+    function displayViewer() {
+      if (state.loadedFiles.length === 0) return;
+      document.getElementById('emptyState').style.display = 'none';
+      document.getElementById('viewerWrap').style.display = 'block';
+      document.getElementById('splitDivider').style.display = 'block';
+      document.getElementById('origBadge').style.display = 'block';
+      document.getElementById('compBadge').style.display = 'block';
+
+      if (state.loadedFiles.length > 1) {
+        document.getElementById('carouselBar').style.display = 'flex';
+      }
+
+      state.currentIndex = 0;
+      updateCarouselText();
+      renderCurrentImage();
+      updateStartButton();
+    }
+
+    function switchImage(delta) {
+      if (state.loadedFiles.length <= 1) return;
+      state.currentIndex = (state.currentIndex + delta + state.loadedFiles.length) % state.loadedFiles.length;
+      updateCarouselText();
+      renderCurrentImage();
+    }
+
+    function updateCarouselText() {
+      document.getElementById('carouselText').innerText = 
+        `${state.currentIndex + 1} / ${state.loadedFiles.length} (${state.loadedFiles[state.currentIndex].name})`;
+      document.getElementById('statusPill').innerText = `已选 ${state.loadedFiles.length} 张图片`;
+    }
+
+    let currentCutoutDataUrl = null;
+    let currentCutoutTempPath = null;
+
+    async function doCutout(mode) {
+      if (!state.loadedFiles || state.loadedFiles.length === 0) {
+        alert('请先添加需要抠图的图片！');
+        return;
+      }
+      const cur = state.loadedFiles[state.currentIndex];
+      const btn = document.getElementById(mode === 'ai' ? 'aiCutoutBtn' : 'colorCutoutBtn');
+      const oldHtml = btn.innerHTML;
+      btn.innerHTML = '<span>⏳ 正在抠图...</span>';
+      btn.disabled = true;
+
+      try {
+        const inputPath = cur.effectivePath || cur.path;
+        if (inputPath) {
+          const res = await fetch('/guyi/api/v1/compress/cutout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filePath: inputPath, type: mode, tolerance: 35 })
+          });
+          const data = await res.json();
+          if (data.success && data.dataUrl) {
+            currentCutoutDataUrl = data.dataUrl;
+            currentCutoutTempPath = data.tempPath || null;
+            document.getElementById('imgAfter').src = data.dataUrl;
+            document.getElementById('cutoutNotice').style.display = 'block';
+            document.getElementById('cutoutNoticeText').innerText = 
+              `✨ 抠图完成 (${data.method === 'apple_vision_ai' ? 'Apple 神经引擎 AI' : '智能去底'})！拖动滑块对比边缘`;
+            document.getElementById('compBadge').innerText = `抠图图层: ${formatBytes(data.size || 0)}`;
+            if (state.format === 'jpeg') {
+              setFormat('webp'); // 自动切换至支持透明背景的格式
+            }
+            return;
+          } else {
+            alert(data.error || '未能在画面中提取到有效前景主体');
+          }
+        } else {
+          // 纯浏览器 Canvas 边角颜色透明化
+          clientCanvasCutout(cur);
+        }
+      } catch (err) {
+        alert('抠图失败: ' + err.message);
+      } finally {
+        btn.innerHTML = oldHtml;
+        btn.disabled = false;
+      }
+    }
+
+    function clientCanvasCutout(cur) {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const d = imgData.data;
+        const r0 = d[0], g0 = d[1], b0 = d[2];
+        const tolSq = 40 * 40 * 3;
+        for (let i = 0; i < d.length; i += 4) {
+          const distSq = (d[i] - r0)**2 + (d[i+1] - g0)**2 + (d[i+2] - b0)**2;
+          if (distSq < tolSq) {
+            d[i+3] = 0;
+          }
+        }
+        ctx.putImageData(imgData, 0, 0);
+        const dataUrl = canvas.toDataURL('image/png');
+        currentCutoutDataUrl = dataUrl;
+        currentCutoutTempPath = null;
+        document.getElementById('imgAfter').src = dataUrl;
+        document.getElementById('cutoutNotice').style.display = 'block';
+        document.getElementById('cutoutNoticeText').innerText = '✨ 纯色去底完成！拖动滑块对比边缘';
+      };
+      img.src = (cur.isCutout && cur.cutoutDataUrl) ? cur.cutoutDataUrl : cur.url;
+    }
+
+    function applyCutoutResult() {
+      if (!currentCutoutDataUrl) return;
+      const cur = state.loadedFiles[state.currentIndex];
+      cur.isCutout = true;
+      cur.effectivePath = currentCutoutTempPath || cur.effectivePath || cur.path;
+      cur.cutoutDataUrl = currentCutoutDataUrl;
+      document.getElementById('imgBefore').src = currentCutoutDataUrl;
+      document.getElementById('cutoutNoticeText').innerText = '🎉 已应用抠图！现可调节压缩格式/质量并在右侧对比效果';
+      updatePreview();
+    }
+
+    function cancelCutoutResult() {
+      currentCutoutDataUrl = null;
+      currentCutoutTempPath = null;
+      const cur = state.loadedFiles[state.currentIndex];
+      if (cur) {
+        cur.isCutout = false;
+        cur.effectivePath = null;
+        cur.cutoutDataUrl = null;
+      }
+      document.getElementById('cutoutNotice').style.display = 'none';
+      renderCurrentImage();
+    }
+
+    function downloadCurrentImage() {
+      const afterImg = document.getElementById('imgAfter');
+      if (!afterImg || !afterImg.src || afterImg.src.endsWith('none') || afterImg.src === window.location.href) {
+        alert('暂无处理后的图片可供下载');
+        return;
+      }
+      const cur = state.loadedFiles[state.currentIndex];
+      let baseName = cur ? cur.name.replace(/\.[^/.]+$/, '') : 'image';
+      let ext = state.format === 'original' ? (cur ? cur.name.split('.').pop() : 'png') : state.format;
+      if (cur && cur.isCutout) baseName += '_cutout';
+      const downloadName = `${baseName}_min.${ext}`;
+
+      const a = document.createElement('a');
+      a.href = afterImg.src;
+      a.download = downloadName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    let origWidth = 0;
+    let origHeight = 0;
+    let lockAspectRatio = true;
+    let previewDebounceTimer = null;
+
+    function toggleLockAspect() {
+      lockAspectRatio = !lockAspectRatio;
+      document.getElementById('lockAspectIcon').innerText = lockAspectRatio ? '🔒' : '🔓';
+      document.getElementById('lockAspectBtn').style.background = lockAspectRatio ? 'rgba(99,102,241,0.2)' : 'rgba(255,255,255,0.08)';
+      document.getElementById('lockAspectBtn').style.borderColor = lockAspectRatio ? '#818cf8' : 'var(--border-color)';
+    }
+
+    function toggleResize(enabled) {
+      state.resizeEnabled = enabled;
+      document.getElementById('resizeBox').style.display = enabled ? 'block' : 'none';
+      if (enabled && origWidth > 0 && !document.getElementById('resizeWidthInput').value) {
+        document.getElementById('resizeWidthInput').value = origWidth;
+        document.getElementById('resizeHeightInput').value = origHeight;
+        state.resizeWidth = origWidth;
+        state.resizeHeight = origHeight;
+      }
+      updatePreview();
+    }
+
+    function applyPercentPreset(pct) {
+      if (origWidth <= 0) return;
+      const w = Math.max(1, Math.round(origWidth * (pct / 100)));
+      const h = Math.max(1, Math.round(origHeight * (pct / 100)));
+      document.getElementById('resizeWidthInput').value = w;
+      document.getElementById('resizeHeightInput').value = h;
+      state.resizeWidth = w;
+      state.resizeHeight = h;
+      updatePreview();
+    }
+
+    function onWidthChange(val) {
+      const w = Number(val) || 0;
+      state.resizeWidth = w;
+      if (lockAspectRatio && origWidth > 0 && w > 0) {
+        const h = Math.max(1, Math.round((w / origWidth) * origHeight));
+        document.getElementById('resizeHeightInput').value = h;
+        state.resizeHeight = h;
+      }
+      updatePreview();
+    }
+
+    function onHeightChange(val) {
+      const h = Number(val) || 0;
+      state.resizeHeight = h;
+      if (lockAspectRatio && origHeight > 0 && h > 0) {
+        const w = Math.max(1, Math.round((h / origHeight) * origWidth));
+        document.getElementById('resizeWidthInput').value = w;
+        state.resizeWidth = w;
+      }
+      updatePreview();
+    }
+
+    function setOriginalDimensions(w, h) {
+      origWidth = w;
+      origHeight = h;
+      document.getElementById('dimBadge').innerText = `原始尺寸: ${w} × ${h} px`;
+      if (!state.resizeWidth || state.resizeWidth === 0) {
+        document.getElementById('resizeWidthInput').value = w;
+        document.getElementById('resizeHeightInput').value = h;
+        state.resizeWidth = w;
+        state.resizeHeight = h;
+      }
+    }
+
+    function renderCurrentImage() {
+      const cur = state.loadedFiles[state.currentIndex];
+      const imgBefore = document.getElementById('imgBefore');
+      imgBefore.onload = () => {
+        if (imgBefore.naturalWidth && imgBefore.naturalHeight) {
+          setOriginalDimensions(imgBefore.naturalWidth, imgBefore.naturalHeight);
+        }
+      };
+      imgBefore.src = (cur.isCutout && cur.cutoutDataUrl) ? cur.cutoutDataUrl : cur.url;
+
+      document.getElementById('origBadge').innerText = (cur.isCutout ? '底图(抠图): ' : '原图: ') + formatBytes(cur.size);
+
+      if (cur.isCutout) {
+        document.getElementById('cutoutNotice').style.display = 'block';
+        document.getElementById('cutoutNoticeText').innerText = '🎉 抠图已作为当前底图生效，可在右侧对比压缩效果';
+      } else {
+        document.getElementById('cutoutNotice').style.display = 'none';
+      }
+
+      updatePreview();
+    }
+
+    function updatePreview() {
+      if (!state.loadedFiles || state.loadedFiles.length === 0) return;
+      clearTimeout(previewDebounceTimer);
+      document.getElementById('compBadge').innerText = '编码计算中...';
+      previewDebounceTimer = setTimeout(runExactPreview, 120);
+    }
+
+    async function runExactPreview() {
+      const cur = state.loadedFiles[state.currentIndex];
+      if (!cur) return;
+
+      const targetFilePath = cur.effectivePath || cur.path;
+      if (targetFilePath) {
+        try {
+          const payload = {
+            filePath: targetFilePath,
+            format: state.format,
+            quality: state.quality,
+            lossless: state.lossless,
+            resizeWidth: state.resizeEnabled ? (Number(state.resizeWidth) || 0) : 0,
+            resizeHeight: state.resizeEnabled ? (Number(state.resizeHeight) || 0) : 0
+          };
+          const res = await fetch('/guyi/api/v1/compress/preview_one', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const data = await res.json();
+          if (data.success) {
+            document.getElementById('imgAfter').src = data.dataUrl;
+            document.getElementById('compBadge').innerText = 
+              `实际大小: ${formatBytes(data.compressedSize)} (↓ ${data.savedPercent}%)`;
+            if (data.originalWidth && data.originalHeight) {
+              setOriginalDimensions(data.originalWidth, data.originalHeight);
+            }
+            return;
+          }
+        } catch (e) {
+          console.warn('Real preview error, using canvas fallback:', e);
+        }
+      }
+
+      generateCanvasExactPreview(cur);
+    }
+
+    function generateCanvasExactPreview(cur) {
+      const img = new Image();
+      img.onload = () => {
+        setOriginalDimensions(img.naturalWidth, img.naturalHeight);
+        const canvas = document.createElement('canvas');
+        let targetW = img.naturalWidth;
+        let targetH = img.naturalHeight;
+        if (state.resizeEnabled && state.resizeWidth > 0 && state.resizeHeight > 0) {
+          targetW = state.resizeWidth;
+          targetH = state.resizeHeight;
+        }
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, targetW, targetH);
+
+        let mime = 'image/webp';
+        if (state.format === 'jpeg') mime = 'image/jpeg';
+        else if (state.format === 'png') mime = 'image/png';
+
+        const q = state.lossless ? 1.0 : (state.quality / 100);
+        canvas.toBlob(blob => {
+          if (!blob) return;
+          const realSize = blob.size;
+          const savedBytes = Math.max(0, cur.size - realSize);
+          const savedPct = cur.size > 0 ? ((savedBytes / cur.size) * 100).toFixed(1) : 0;
+          document.getElementById('imgAfter').src = URL.createObjectURL(blob);
+          document.getElementById('compBadge').innerText = 
+            `实际大小: ${formatBytes(realSize)} (↓ ${savedPct}%)`;
+        }, mime, q);
+      };
+      img.src = cur.url;
+    }
+
+    // Squoosh 中线滑块拖拽交互
+    function setupSplitSlider() {
+      const divider = document.getElementById('splitDivider');
+      const container = document.getElementById('viewerWrap');
+      let isDragging = false;
+
+      function updateSplit(clientX) {
+        const rect = container.getBoundingClientRect();
+        let pct = ((clientX - rect.left) / rect.width) * 100;
+        pct = Math.max(5, Math.min(95, pct));
+        document.documentElement.style.setProperty('--split', pct + '%');
+      }
+
+      divider.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        e.preventDefault();
+      });
+
+      window.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        updateSplit(e.clientX);
+      });
+
+      window.addEventListener('mouseup', () => {
+        isDragging = false;
+      });
+    }
+
+    // 参数面板设置函数
+    function setFormat(fmt) {
+      state.format = fmt;
+      document.querySelectorAll('.format-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.getAttribute('data-format') === fmt);
+      });
+      updatePreview();
+    }
+
+    function setPreset(p) {
+      state.preset = p;
+      ['Visual', 'Lossless', 'Tiny'].forEach(name => {
+        document.getElementById('preset' + name).classList.toggle('active', name.toLowerCase() === p);
+      });
+
+      const qSlider = document.getElementById('qualitySlider');
+      const qVal = document.getElementById('qualityValue');
+      const qSection = document.getElementById('qualitySection');
+
+      if (p === 'lossless') {
+        state.lossless = true;
+        qSection.style.opacity = '0.5';
+        qSlider.disabled = true;
+      } else {
+        state.lossless = false;
+        qSection.style.opacity = '1';
+        qSlider.disabled = false;
+        if (p === 'visual') {
+          state.quality = 82;
+        } else if (p === 'tiny') {
+          state.quality = 65;
+        }
+        qSlider.value = state.quality;
+        qVal.innerText = state.quality;
+      }
+      updatePreview();
+    }
+
+    function onQualityChange(val) {
+      state.quality = Number(val);
+      document.getElementById('qualityValue').innerText = val;
+      updatePreview();
+    }
+
+    // 保存策略切换（1. 直接替换 2. 副本 3. 另存为指定文件夹）
+    function setSaveMode(mode) {
+      state.saveMode = mode;
+      [1, 2, 3].forEach(m => {
+        const el = document.getElementById('saveOpt' + m);
+        el.classList.toggle('active', m === mode);
+        el.querySelector('input').checked = (m === mode);
+      });
+      document.getElementById('customDirBox').style.display = (mode === 3) ? 'flex' : 'none';
+    }
+
+    function updateStartButton() {
+      const btn = document.getElementById('startBtn');
+      const count = state.loadedFiles.length;
+      btn.disabled = count === 0;
+      document.getElementById('btnCountPill').innerText = `(${count} 张图片)`;
+    }
+
+    // 提交任务执行
+    async function startBatchCompress() {
+      if (state.loadedFiles.length === 0) return;
+
+      const overlay = document.getElementById('modalOverlay');
+      overlay.style.display = 'flex';
+      document.getElementById('modalTitle').innerText = '正在批量压缩中...';
+      document.getElementById('modalSub').innerText = `正在调度 libvips 高性能流式引擎处理 ${state.loadedFiles.length} 张图片`;
+      document.getElementById('progressFill').style.width = '30%';
+      document.getElementById('modalStats').innerText = '';
+      document.getElementById('modalCloseBtn').style.display = 'none';
+
+      const anyCutout = state.loadedFiles.some(f => f.isCutout);
+      const payload = {
+        targetPath: (!anyCutout && state.targetPath) ? state.targetPath : null,
+        files: state.loadedFiles.map(f => ({
+          path: f.effectivePath || f.path,
+          originalPath: f.path
+        })).filter(f => Boolean(f.path)),
+        format: state.format,
+        preset: state.preset,
+        quality: state.quality,
+        lossless: state.lossless,
+        resizeWidth: state.resizeEnabled ? (Number(document.getElementById('resizeWidthInput').value) || 0) : 0,
+        resizeHeight: state.resizeEnabled ? (Number(document.getElementById('resizeHeightInput').value) || 0) : 0,
+        saveMode: state.saveMode,
+        customOutputDir: document.getElementById('customDirInput').value.trim()
+      };
+
+      try {
+        document.getElementById('progressFill').style.width = '70%';
+        const res = await fetch('/guyi/api/v1/compress/execute', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+
+        document.getElementById('progressFill').style.width = '100%';
+        if (result.success) {
+          document.getElementById('modalIcon').innerText = '🎉';
+          document.getElementById('modalTitle').innerText = '批量压缩大获全胜！';
+          document.getElementById('modalSub').innerText = 
+            `共处理 ${result.processedCount} 张图片，已按要求（${
+              state.saveMode === 1 ? '直接替换' : (state.saveMode === 2 ? '生成副本' : '存至目标目录')
+            }）完成！`;
+          document.getElementById('modalStats').innerText = 
+            `总计瘦身: ${result.savedBytesFormatted} (节省 ${result.savedPercent}%)`;
+          document.getElementById('modalCloseBtn').style.display = 'inline-block';
+        } else {
+          document.getElementById('modalIcon').innerText = '⚠️';
+          document.getElementById('modalTitle').innerText = '处理出现提示';
+          document.getElementById('modalSub').innerText = result.error || '部分文件未能处理';
+          document.getElementById('modalCloseBtn').style.display = 'inline-block';
+        }
+      } catch (err) {
+        document.getElementById('modalIcon').innerText = '❌';
+        document.getElementById('modalTitle').innerText = '请求失败';
+        document.getElementById('modalSub').innerText = err.message;
+        document.getElementById('modalCloseBtn').style.display = 'inline-block';
+      }
+    }
+
+    function closeModal() {
+      document.getElementById('modalOverlay').style.display = 'none';
+    }
+  </script>
+</body>
+</html>

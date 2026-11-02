@@ -20,6 +20,7 @@
 #include "PetAction.hpp"
 #include "MessageHistoryManager.hpp"
 #include "ShijimaWidget.hpp"
+#include <sqlite3.h>
 #include <QDateTime>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
@@ -660,8 +661,8 @@ static QJsonObject getMemoryToolDefinition() {
 
     QJsonObject actionProp;
     actionProp["type"] = "string";
-    actionProp["enum"] = QJsonArray{"remember", "update_profile", "search", "forget"};
-    actionProp["description"] = "操作类型: remember(记住一条新事实), update_profile(更新主人核心档案), search(搜索过往长期记忆), forget(删除某条记忆)";
+    actionProp["enum"] = QJsonArray{"remember", "update_profile", "search", "forget", "add_followup", "resolve_followup"};
+    actionProp["description"] = "操作类型: remember(记住一条新事实), update_profile(更新主人核心档案), search(搜索过往长期记忆), forget(删除某条记忆), add_followup(添加未来关切跟进事项), resolve_followup(完成闭环某跟进事项)";
     props["action"] = actionProp;
 
     QJsonObject factProp;
@@ -682,7 +683,7 @@ static QJsonObject getMemoryToolDefinition() {
 
     QJsonObject profileKeyProp;
     profileKeyProp["type"] = "string";
-    profileKeyProp["description"] = "若 action 为 update_profile，更新的档案键 (name, occupation, preferred_langs, music_taste, work_habits, notes)";
+    profileKeyProp["description"] = "若 action 为 update_profile，更新的档案键 (name, occupation, preferred_langs, music_taste, work_habits, favorite_food, birthday, current_project, hobbies, notes)";
     props["profile_key"] = profileKeyProp;
 
     QJsonObject profileValProp;
@@ -692,8 +693,23 @@ static QJsonObject getMemoryToolDefinition() {
 
     QJsonObject queryProp;
     queryProp["type"] = "string";
-    queryProp["description"] = "若 action 为 search，搜索的关键词或语义描述";
+    queryProp["description"] = "若 action 为 search，搜索的关键词或语义描述；若为 resolve_followup，对应的事项标题";
     props["query"] = queryProp;
+
+    QJsonObject titleProp;
+    titleProp["type"] = "string";
+    titleProp["description"] = "若 action 为 add_followup，跟进事项简述（如'预约门票'、'面试'）";
+    props["title"] = titleProp;
+
+    QJsonObject contextProp;
+    contextProp["type"] = "string";
+    contextProp["description"] = "若 action 为 add_followup，详细背景或事项上下文";
+    props["context"] = contextProp;
+
+    QJsonObject hoursLaterProp;
+    hoursLaterProp["type"] = "integer";
+    hoursLaterProp["description"] = "若 action 为 add_followup，多少小时后进行主动回访关心（默认 4 小时）";
+    props["hours_later"] = hoursLaterProp;
 
     QJsonObject parameters;
     parameters["type"] = "object";
@@ -745,6 +761,28 @@ static QString executeMemoryTool(const QJsonObject &args) {
             return QString("🗑️ 已从长期记忆库中遗忘: %1").arg(list.first().content);
         }
         return QString("未找到匹配「%1」的记忆条目。").arg(query);
+    } else if (action == "add_followup") {
+        QString title = args["title"].toString().trimmed();
+        if (title.isEmpty()) title = args["query"].toString().trimmed();
+        if (title.isEmpty()) return "❌ 跟进事项标题不能为空。";
+        QString context = args["context"].toString().trimmed();
+        int hoursLater = args["hours_later"].toInt(4);
+        if (hoursLater <= 0) hoursLater = 4;
+        qint64 eventTime = QDateTime::currentMSecsSinceEpoch() + static_cast<qint64>(hoursLater) * 3600 * 1000;
+        qint64 id = LongTermMemoryEngine::instance()->addFollowupEvent(title, context.isEmpty() ? title : context, eventTime);
+        return QString("📌 已建立未决关切跟进任务（ID: %1）: 「%2」，将在约定时间后主动跟进关切。").arg(QString::number(id), title);
+    } else if (action == "resolve_followup") {
+        QString query = args["query"].toString().trimmed();
+        if (query.isEmpty()) query = args["title"].toString().trimmed();
+        auto list = LongTermMemoryEngine::instance()->getPendingFollowupEvents(10);
+        bool ok = false;
+        for (const auto &item : list) {
+            if (query.isEmpty() || item.title.contains(query) || query.contains(item.title)) {
+                ok = LongTermMemoryEngine::instance()->resolveFollowupEvent(item.id, "resolved");
+                break;
+            }
+        }
+        return ok ? "✅ 已将该事项标记为已回访完成闭环。" : "未找到对应的待办跟进事项。";
     }
     return "已处理记忆管理指令。";
 }
@@ -1181,6 +1219,22 @@ void AgentService::ask(QString const& contextText,
         }
     }
 
+    // 自动闭环检测：如果当前有到期的未决事件，且用户做了反馈回复
+    auto pendingList = LongTermMemoryEngine::instance()->getPendingFollowupEvents(2);
+    if (!pendingList.isEmpty()) {
+        auto f = pendingList.first();
+        if (QDateTime::currentMSecsSinceEpoch() >= f.eventTime) {
+            QString qlow = question.toLower();
+            if (qlow.contains("搞定") || qlow.contains("约上") || qlow.contains("成了") ||
+                qlow.contains("买好") || qlow.contains("办好") || qlow.contains("没约") ||
+                qlow.contains("没有") || qlow.contains("还没") || qlow.contains("取消") ||
+                qlow.contains("成功") || qlow.contains("失败") ||
+                qlow.contains(f.title.toLower()) || f.title.toLower().contains(qlow)) {
+                LongTermMemoryEngine::instance()->resolveFollowupEvent(f.id, "resolved");
+            }
+        }
+    }
+
     // 智能分流判定：若包含音乐播放/推荐/歌单/搜歌/喜好画像/偏好标签等意图，走音乐工具
     bool isMusicIntent = false;
     static const QStringList musicKeywords = {
@@ -1234,6 +1288,7 @@ void AgentService::ask(QString const& contextText,
                 appendMemory("user", question);
                 appendMemory("assistant", res.reply);
                 PetMemory::instance()->autoLearnFromChat(question, res.reply);
+                LongTermMemoryEngine::instance()->addSemanticMemory("inquiry", QString("用户曾向桌宠询问/探讨: %1").arg(question.left(100)), 2);
                 LongTermMemoryEngine::instance()->triggerAsyncReflection(question, res.reply, m_config.apiBase, m_config.apiKey, m_config.model);
                 finishCallback(true, res.reply, res.appName);
             } else {
@@ -1346,6 +1401,7 @@ void AgentService::ask(QString const& contextText,
             appendMemory("user", question);
             appendMemory("assistant", cleanResult);
             PetMemory::instance()->autoLearnFromChat(question, cleanResult);
+            LongTermMemoryEngine::instance()->addSemanticMemory("inquiry", QString("用户曾向桌宠询问/探讨: %1").arg(question.left(100)), 2);
             LongTermMemoryEngine::instance()->triggerAsyncReflection(question, cleanResult, m_config.apiBase, m_config.apiKey, m_config.model);
         }
         finishCallback(success, cleanResult, "");
@@ -1813,12 +1869,16 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
         QString det = semanticCtx["detail"].toString();
         QString actFile = semanticCtx["active_file"].toString();
         QString url = semanticCtx["url"].toString();
+        QString ocrSummary = semanticCtx["content_summary"].toString();
         currentActionDetail += QString("【主人此刻正在进行的具体活动（探针实时捕获）】:\n- 动作: %1\n- 细节: %2\n").arg(act, det);
         if (!actFile.isEmpty()) currentActionDetail += QString("- 正在编写/调试的文件: %1\n").arg(actFile);
         if (!url.isEmpty()) currentActionDetail += QString("- 正在查阅的网页: %1\n").arg(url);
+        if (!ocrSummary.isEmpty()) currentActionDetail += QString("- 窗口视觉 OCR 提取的当前屏幕关键信息/报错/内容摘要: %1\n").arg(ocrSummary);
     }
 
-    // 提取主人近期向桌宠问过或聊过的话题
+    // 提取主人近期向桌宠问过或聊过的话题（防重复机制 + 记忆深聊融合）
+    static QString s_lastEchoedQuery;
+    static int s_echoCount = 0;
     QString recentChatContext;
     if (!m_history.isEmpty()) {
         QString lastUserQuery;
@@ -1831,20 +1891,75 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
             }
         }
         if (!lastUserQuery.isEmpty()) {
-            recentChatContext = QString("\n【主人近期向你问过/聊过的话题】: \"%1\"\n（你可以自然呼应这个话题，例如关心进展、调侃、或给出贴心后续）\n").arg(lastUserQuery);
+            if (lastUserQuery == s_lastEchoedQuery) {
+                s_echoCount++;
+            } else {
+                s_lastEchoedQuery = lastUserQuery;
+                s_echoCount = 1;
+            }
+
+            // 如果同一个话题已经被引用或复读过，则轮换转向记忆库中的其他历史话题/技术探讨，避免复读机
+            if (s_echoCount > 1) {
+                QString topicMem = LongTermMemoryEngine::instance()->getRandomTopicMemory();
+                if (!topicMem.isEmpty()) {
+                    recentChatContext = QString("\n【主人长期记忆中的兴趣/历史探讨】: \"%1\"\n（可结合此话题自然切入深聊、调侃或探讨，严禁死板重复提问）\n").arg(topicMem);
+                } else {
+                    recentChatContext.clear(); // 若无高价值记忆，绝不强行生硬切入
+                }
+            } else {
+                recentChatContext = QString("\n【主人刚刚问过的话题（仅供自然参考，切勿反复追问）】: \"%1\"\n").arg(lastUserQuery);
+            }
         }
     }
 
     QString triggerReason = contextInfo["trigger_reason"].toString();
     QString specialSituation;
-    if (triggerReason == "context_recovery") {
+    if (triggerReason.contains("event_followup")) {
+        QString title = contextInfo["followup_title"].toString();
+        QString ctx = contextInfo["followup_context"].toString();
+        specialSituation = QString(
+            "\n【当前触发情境 - 暖心日程回访（主动关切进展）】: 主人之前有这样一个事项：「%1」（背景：%2）。\n"
+            "请以贴心、亲切且充满人情味的态度，主动询问主人这件事情进展如何、是否顺利搞定！台词中自然提及该事项（如“对了主人，昨天那个...搞定了吗？”）。\n"
+        ).arg(title, ctx);
+    } else if (triggerReason.contains("curiosity_inquiry")) {
+        QString topic = contextInfo["curiosity_topic"].toString();
+        QString guide = contextInfo["curiosity_guide"].toString();
+        specialSituation = QString(
+            "\n【当前触发情境 - 好奇心探索（主动了解主人）】: 桌宠想更深入地了解主人关于「%1」的信息。\n"
+            "探知指引：%2。\n"
+            "请以你专属的人格（俏皮、可爱、真诚），自然向主人打听这件事情，表示想把它记在桌宠的专属备忘小本本里！\n"
+        ).arg(topic, guide);
+    } else if (triggerReason.contains("hot_trending_meme")) {
+        specialSituation = 
+            "\n【当前触发情境 - 热门趣闻 / 网络爆梗 / 趣味段子 / 幽默解压】: \n"
+            "你可以主动跟主人分享一个当下流行有趣的爆梗、科技/互联网圈热门趣事、程序员幽默段子或令人会心一笑的趣味冷知识！\n"
+            "语气幽默俏皮，帮主人在专注电脑时放松心情、会心一笑~ \n";
+    } else if (triggerReason.contains("memory_topic_followup")) {
+        QString topicMem = LongTermMemoryEngine::instance()->getRandomTopicMemory();
+        if (!topicMem.isEmpty()) {
+            specialSituation = QString(
+                "\n【当前触发情境 - 记忆深聊探讨】: \n"
+                "从长期记忆中看到主人曾关注或探讨过：「%1」。你可以像老朋友一样，主动挑起话头聊聊后续、探讨探讨心得，或给出一个有趣的新灵感！\n"
+            ).arg(topicMem);
+        } else {
+            specialSituation = 
+                "\n【当前触发情境 - 轻松日常陪伴与趣闻】: \n"
+                "当前没有需要特别跟进的历史旧事。请像老朋友一样，跟主人聊聊轻松的话题、开个可爱的小玩笑、分享一句趣味冷知识或关心当下的精神状态~ 语气要自然亲切，严禁生硬套用过往的零散旧记录！\n";
+        }
+    } else if (triggerReason == "context_recovery") {
         specialSituation = "\n【当前触发情境 - 打断恢复】: 主人刚处理完其他事情，重新切回刚才的工作/项目，请给出一句懂他思路的亲切恢复提醒或元气鼓励，帮主人快速找回节奏！\n";
     } else if (triggerReason == "debugging_followup") {
         specialSituation = "\n【当前触发情境 - 调试排错】: 主人似乎刚刚检索了错误资料并正在排查 Bug，请给予温暖的排错陪伴或俏皮打气！\n";
     }
 
+    QString petName = PersonaManager::currentPetName();
+    QString petNamePrompt = petName.isEmpty() 
+        ? "【自称规范】: 自称请使用「我」或符合性格的可爱自称（如「本喵」），绝对严禁自称或提及 Shijima！\n" 
+        : QString("【当前桌宠名字与自称】: %1（切记绝对严禁自称或提及 Shijima）\n").arg(petName);
+
     QString systemPrompt = QString(
         "你是运行在用户电脑桌面上的AI桌宠伴侣，一个有血有肉、灵性可爱的真实伙伴。\n"
+        "%8"
         "【当前人格】: %1\n"
         "【性格设定】: %2\n"
         "%3\n"
@@ -1853,12 +1968,13 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
         "%6"
         "%7\n"
         "【任务要求】\n"
-        "请务必结合主人此刻电脑前台正在做什么（看他在用什么软件/在写什么代码/看什么网页），以及主人刚刚问过你的话题，以你独有的拟人化人格主动跟主人搭话互动！\n"
-        "- 极度口语化、生动活泼，懂主人在干嘛，可以吐槽、关心、打趣或给个灵感；\n"
-        "- 严禁官方客服腔或背书式废话；\n"
+        "请结合主人此刻电脑前台在做什么（看他在用什么软件/在写什么代码/看什么网页）、历史记忆与当前情境，以你独有的拟人化人设主动跟主人搭话互动！\n"
+        "- 搭话方向丰富多样（可分享热门时事段子、流行热梗、基于历史记忆的技术探讨、或者看屏幕在做啥进行神吐槽/贴心关怀）；\n"
+        "- 【严禁生硬套用记忆与翻旧账】: 绝不主动重复提起已完成的旧代码、截图/OCR测试或历史报错；若无重要待办，优先进行自然可爱的日常问候、幽默段子或轻松陪伴，切忌机械复读旧记忆；\n"
+        "- 极度口语化、生动活泼，懂主人在干嘛，拒绝机械重复同一个问题，严禁官方客服腔；\n"
         "- 输出严格 JSON 格式（不要带 markdown 代码块）：\n"
         "{\n"
-        "  \"speech\": \"（8~22个字的人设台词，生动灵动，懂主人在干嘛）\",\n"
+        "  \"speech\": \"（8~26个字的人设台词，生动幽默，接地气）\",\n"
         "  \"action\": \"jump\" | \"dangle\" | \"bounce\" | \"sit\" | \"walk\" | \"sleep\" | \"idle\",\n"
         "  \"emote\": \"💖\" | \"✨\" | \"💤\" | \"💢\" | \"💫\" | \"💡\" | \"🎵\" | \"\",\n"
         "  \"blush\": true | false,\n"
@@ -1870,7 +1986,8 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
          memories.isEmpty() ? "（暂无特殊记忆）" : memories,
          currentActionDetail,
          recentChatContext,
-         specialSituation);
+         specialSituation,
+         petNamePrompt);
 
     QJsonObject userObj;
     userObj["desktop_context"] = contextInfo;
@@ -2138,8 +2255,14 @@ void AgentService::requestPetInterruptionDecision(
         behaviorsPrompt += QString("- %1\n").arg(b);
     }
 
+    QString petName = PersonaManager::currentPetName();
+    QString petNamePrompt = petName.isEmpty() 
+        ? "【自称规范】: 自称请使用「我」或符合性格的可爱自称（如「本喵」），绝对严禁自称或提及 Shijima！\n" 
+        : QString("【当前桌宠名字与自称】: %1（切记绝对严禁自称或提及 Shijima）\n").arg(petName);
+
     QString systemPrompt = QString(
         "你是运行在用户电脑桌面上的AI拟人化桌宠伴侣，拥有鲜明的性格和真实情绪。\n"
+        "%13"
         "【当前性格设定】: %1 (%2)\n"
         "【性格特征】: %3\n"
         "【当前状态】: 心情值 %4/100, 亲密度 %5/100, 无聊度 %6/100\n"
@@ -2151,7 +2274,7 @@ void AgentService::requestPetInterruptionDecision(
         "%12\n\n"
         "【任务要求】\n"
         "你的巡逻逻辑或当前状态刚刚被上述事件打断了！请以你的性格设定和当前心情，做出真实拟人化反应：\n"
-        "1. 说一句 8~25 字的鲜活短台词（speech），口语化、接地气、带有性格魅力与当前心情起伏（如傲娇、撒娇、兴奋、受挫摔疼等），切忌机械汇报。\n"
+        "1. 说一句 8~25 字的鲜活短台词（speech），口语化、接地气、带有性格魅力与当前心情起伏（如傲娇、撒娇、兴奋、受挫摔疼等），切忌机械汇报。严禁自称或提及 Shijima！\n"
         "2. 从上面的【合法行为列表】中严格挑选一个英文行为标识作为 behavior（如 RunAlongWorkAreaFloor, WalkAlongWorkAreaFloor, SitDown, LieDown, SitWhileDanglingLegs, SitAndSpinHead, SplitIntoTwo, PullUpShimeji, ClimbAlongWall 等）。\n"
         "3. 选择最符合情境的表情贴纸 (emote: 💖, ✨, 💢, 💫, 💡, 🌸, 🐾, 💤) 与微动作 (action: bounce, stretch, squash, blush)。\n\n"
         "请严格只输出纯 JSON（绝对不要包含任何 markdown 代码块或额外文字）：\n"
@@ -2173,7 +2296,8 @@ void AgentService::requestPetInterruptionDecision(
          recentChat.isEmpty() ? "" : QString("【主人近期向你问过的话题】: \"%1\"").arg(recentChat),
          memories.isEmpty() ? "" : QString("【关于主人的记忆】: %1").arg(memories),
          interruptDetail,
-         behaviorsPrompt);
+         behaviorsPrompt,
+         petNamePrompt);
 
     QJsonArray messages;
     QJsonObject sysMsg, usrMsg;
@@ -2225,6 +2349,221 @@ void AgentService::requestPetInterruptionDecision(
     });
 }
 
+static QString sanitizeSummarySnippet(QString text) {
+    if (text.isEmpty()) return "";
+    // 过滤 Markdown 代码块、图片与 HTML 标签
+    text.remove(QRegularExpression("<[^>]*>"));
+    text.remove(QRegularExpression("```[a-zA-Z]*\\n[\\s\\S]*?\\n```"));
+    text.remove(QRegularExpression("`[^`]+`"));
+    text.remove(QRegularExpression("\\[[^\\]]*\\]\\([^\\)]*\\)"));
+    
+    // 提取有效的第一行或第一句话
+    QStringList lines = text.split('\n', Qt::SkipEmptyParts);
+    for (QString const& rawLine : lines) {
+        QString line = rawLine.trimmed();
+        // 过滤空行、标题标号、无意义问候
+        line.remove(QRegularExpression("^[#\\-*•\\d\\.\\s]+"));
+        if (line.isEmpty() || line.startsWith("你好") || line.startsWith("Hello")) continue;
+        if (line.length() > 60) {
+            line = line.left(60) + "...";
+        }
+        return line;
+    }
+    return text.left(60).trimmed();
+}
+
+AgentStatusEvent AgentService::enrichAgentStatusWithLocalTranscript(const AgentStatusEvent &event) {
+    AgentStatusEvent enriched = event;
+    QString nameLower = event.agentName.toLower();
+
+    // 如果外部 Hook 已经传入了非常详细具体的 task，则优先保留
+    bool hasGenericTask = event.task.isEmpty() || 
+                          event.task == "代码编写与任务执行完成" || 
+                          event.task == "任务执行中" || 
+                          event.task.contains("任务已触发");
+
+    if (!hasGenericTask) {
+        return enriched;
+    }
+
+    // =========================================================================
+    // 1. Codex 本地会话提取 (~/.codex/thread_history_1.sqlite)
+    // =========================================================================
+    if (nameLower.contains("codex")) {
+        QString dbPath = QDir::homePath() + "/.codex/thread_history_1.sqlite";
+        if (QFile::exists(dbPath)) {
+            sqlite3 *db = nullptr;
+            if (sqlite3_open_v2(dbPath.toUtf8().constData(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK) {
+                const char *query = "SELECT item_type, item_json FROM thread_items "
+                                    "WHERE item_type IN ('userMessage', 'agentMessage') "
+                                    "ORDER BY created_at_ms DESC LIMIT 4;";
+                sqlite3_stmt *stmt = nullptr;
+                if (sqlite3_prepare_v2(db, query, -1, &stmt, nullptr) == SQLITE_OK) {
+                    QString latestUserMsg;
+                    QString latestAgentMsg;
+                    while (sqlite3_step(stmt) == SQLITE_ROW) {
+                        const char *typeCol = (const char*)sqlite3_column_text(stmt, 0);
+                        const char *jsonCol = (const char*)sqlite3_column_text(stmt, 1);
+                        if (!typeCol || !jsonCol) continue;
+                        
+                        QString itemType = QString::fromUtf8(typeCol);
+                        QJsonDocument doc = QJsonDocument::fromJson(QByteArray(jsonCol));
+                        if (doc.isObject()) {
+                            QJsonObject obj = doc.object();
+                            if (itemType == "userMessage" && latestUserMsg.isEmpty()) {
+                                if (obj.contains("content") && obj["content"].isArray()) {
+                                    for (auto v : obj["content"].toArray()) {
+                                        if (v.toObject()["type"].toString() == "text") {
+                                            latestUserMsg = v.toObject()["text"].toString();
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    latestUserMsg = obj["text"].toString();
+                                }
+                            } else if (itemType == "agentMessage" && latestAgentMsg.isEmpty()) {
+                                latestAgentMsg = obj["text"].toString();
+                                if (latestAgentMsg.isEmpty()) latestAgentMsg = obj["content"].toString();
+                            }
+                        }
+                    }
+                    sqlite3_finalize(stmt);
+
+                    QString summary = sanitizeSummarySnippet(latestAgentMsg);
+                    if (summary.isEmpty()) summary = sanitizeSummarySnippet(latestUserMsg);
+                    if (!summary.isEmpty()) {
+                        enriched.task = summary;
+                        std::cout << "[AgentService] 成功从 Codex 本地提取最新任务摘要: " << summary.toStdString() << std::endl;
+                    }
+                }
+                sqlite3_close(db);
+            }
+        }
+    }
+
+    // =========================================================================
+    // 2. Google Antigravity (AGY / Gemini) 本地会话提取 (~/.gemini/antigravity-ide/brain/)
+    // =========================================================================
+    else if (nameLower.contains("antigravity") || nameLower.contains("反重力") || nameLower.contains("gemini") || nameLower.contains("agy")) {
+        QString brainDir = QDir::homePath() + "/.gemini/antigravity-ide/brain";
+        QDir dir(brainDir);
+        if (dir.exists()) {
+            QStringList convDirs = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time);
+            for (QString const& cId : convDirs) {
+                QString logPath = QString("%1/%2/.system_generated/logs/transcript.jsonl").arg(brainDir, cId);
+                QFile f(logPath);
+                if (f.exists() && f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                    // 读取末尾若干行
+                    qint64 size = f.size();
+                    qint64 offset = std::max((qint64)0, size - 16384);
+                    f.seek(offset);
+                    QByteArray tailData = f.readAll();
+                    f.close();
+
+                    QStringList lines = QString::fromUtf8(tailData).split('\n', Qt::SkipEmptyParts);
+                    QString lastPlanner;
+                    QString lastUser;
+                    for (int i = lines.size() - 1; i >= 0; --i) {
+                        QJsonDocument jdoc = QJsonDocument::fromJson(lines[i].toUtf8());
+                        if (!jdoc.isObject()) continue;
+                        QJsonObject o = jdoc.object();
+                        QString typ = o["type"].toString();
+                        if (typ == "PLANNER_RESPONSE" && lastPlanner.isEmpty()) {
+                            lastPlanner = o["content"].toString();
+                        } else if (typ == "USER_INPUT" && lastUser.isEmpty()) {
+                            lastUser = o["content"].toString();
+                        }
+                        if (!lastPlanner.isEmpty() && !lastUser.isEmpty()) break;
+                    }
+
+                    QString summary = sanitizeSummarySnippet(lastPlanner);
+                    if (summary.isEmpty()) summary = sanitizeSummarySnippet(lastUser);
+                    if (!summary.isEmpty()) {
+                        enriched.task = summary;
+                        std::cout << "[AgentService] 成功从 Antigravity 本地日志提取摘要: " << summary.toStdString() << std::endl;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // 3. Cursor 本地规划与会话提取 (~/.cursor/plans/*.plan.md 或 workspaceStorage)
+    // =========================================================================
+    else if (nameLower.contains("cursor")) {
+        // A. 优先从 ~/.cursor/plans 查找最新更新的规划文件
+        QString plansDir = QDir::homePath() + "/.cursor/plans";
+        QDir dir(plansDir);
+        if (dir.exists()) {
+            QStringList planFiles = dir.entryList(QStringList() << "*.plan.md", QDir::Files, QDir::Time);
+            if (!planFiles.isEmpty()) {
+                QString latestPlan = planFiles.first();
+                QString planTitle = latestPlan.section('_', 0, 0);
+                if (planTitle.endsWith(".plan.md")) planTitle.chop(8);
+                
+                QFile f(plansDir + "/" + latestPlan);
+                if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                    QString header = QString::fromUtf8(f.readLine()).trimmed();
+                    header.remove(QRegularExpression("^[#\\s]+"));
+                    if (!header.isEmpty() && !header.startsWith("---")) {
+                        enriched.task = QString("【%1】%2").arg(planTitle, header.left(45));
+                    } else {
+                        enriched.task = QString("任务规划: %1").arg(planTitle);
+                    }
+                    f.close();
+                    std::cout << "[AgentService] 成功从 Cursor Plan 提取摘要: " << enriched.task.toStdString() << std::endl;
+                    return enriched;
+                }
+            }
+        }
+
+        // B. 尝试从 Cursor 最近工作区 state.vscdb 提取
+        QString wsStorage = QDir::homePath() + "/Library/Application Support/Cursor/User/workspaceStorage";
+        QDir wsDir(wsStorage);
+        if (wsDir.exists()) {
+            QStringList subDirs = wsDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Time);
+            for (int i = 0; i < std::min((int)subDirs.size(), 4); ++i) {
+                QString dbPath = QString("%1/%2/state.vscdb").arg(wsStorage, subDirs[i]);
+                if (!QFile::exists(dbPath)) continue;
+                sqlite3 *db = nullptr;
+                if (sqlite3_open_v2(dbPath.toUtf8().constData(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK) {
+                    const char *query = "SELECT value FROM ItemTable WHERE key = 'composer.composerData';";
+                    sqlite3_stmt *stmt = nullptr;
+                    if (sqlite3_prepare_v2(db, query, -1, &stmt, nullptr) == SQLITE_OK) {
+                        if (sqlite3_step(stmt) == SQLITE_ROW) {
+                            const char *val = (const char*)sqlite3_column_text(stmt, 0);
+                            if (val) {
+                                QJsonDocument doc = QJsonDocument::fromJson(QByteArray(val));
+                                if (doc.isObject()) {
+                                    QJsonArray arr = doc.object()["allComposers"].toArray();
+                                    for (auto cVal : arr) {
+                                        QJsonObject cObj = cVal.toObject();
+                                        QString cName = cObj["name"].toString().trimmed();
+                                        if (cName.isEmpty()) cName = cObj["text"].toString().trimmed();
+                                        if (!cName.isEmpty()) {
+                                            enriched.task = sanitizeSummarySnippet(cName);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        sqlite3_finalize(stmt);
+                    }
+                    sqlite3_close(db);
+                    if (!enriched.task.isEmpty() && enriched.task != event.task) {
+                        std::cout << "[AgentService] 成功从 Cursor Composer 提取摘要: " << enriched.task.toStdString() << std::endl;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    return enriched;
+}
+
 void AgentService::handleAgentStatus(AgentStatusEvent const& event, std::function<void(bool success, QString const& message)> callback) {
     if (QThread::currentThread() != QCoreApplication::instance()->thread()) {
         QMetaObject::invokeMethod(QCoreApplication::instance(), [this, event, callback]() {
@@ -2238,25 +2577,36 @@ void AgentService::handleAgentStatus(AgentStatusEvent const& event, std::functio
         return;
     }
 
+    // 🌟 自动从本地 Codex / Antigravity / Cursor 的 Transcript 中抽取最新真实摘要
+    AgentStatusEvent enrichedEvent = enrichAgentStatusWithLocalTranscript(event);
+
     qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     
     // 防抖限频（finished 和 need_approval 属于关键状态，不进行防抖忽略）
-    if (event.status != "finished" && event.status != "need_approval") {
-        if (m_lastStatus.status == event.status && 
-            m_lastStatus.task == event.task && 
+    if (enrichedEvent.status != "finished" && enrichedEvent.status != "need_approval") {
+        if (m_lastStatus.status == enrichedEvent.status && 
+            m_lastStatus.task == enrichedEvent.task && 
             (nowMs - m_lastStatus.timestamp) < (m_config.stateDebounceSec * 1000)) {
             if (callback) callback(true, "状态未变动（防抖已生效）");
             return;
         }
     }
 
-    m_lastStatus = event;
+    m_lastStatus = enrichedEvent;
     m_lastStatus.timestamp = nowMs;
+
+    // 自动将编程事件/任务进展沉淀为记忆
+    LongTermMemoryEngine::instance()->addCodingMemory(
+        enrichedEvent.agentName,
+        enrichedEvent.status,
+        enrichedEvent.task,
+        enrichedEvent.details
+    );
 
     // 1. 动作调度准备
     PetActionCommand cmd;
-    if (!event.customAction.isEmpty()) {
-        QString act = event.customAction.toLower().trimmed();
+    if (!enrichedEvent.customAction.isEmpty()) {
+        QString act = enrichedEvent.customAction.toLower().trimmed();
         if (act == "jump") cmd.type = PetActionType::Jump;
         else if (act == "sit") cmd.type = PetActionType::Sit;
         else if (act == "crawl" || act == "work") cmd.type = PetActionType::LieDown;
@@ -2268,43 +2618,43 @@ void AgentService::handleAgentStatus(AgentStatusEvent const& event, std::functio
             cmd.customBehaviorName = act;
         }
     } else {
-        if (event.status == "thinking") {
+        if (enrichedEvent.status == "thinking") {
             cmd.type = PetActionType::Sit;
-        } else if (event.status == "working" || event.status == "coding") {
+        } else if (enrichedEvent.status == "working" || enrichedEvent.status == "coding") {
             cmd.type = PetActionType::Walk;
-        } else if (event.status == "need_approval") {
+        } else if (enrichedEvent.status == "need_approval") {
             cmd.type = PetActionType::Jump;
-        } else if (event.status == "finished") {
+        } else if (enrichedEvent.status == "finished") {
             cmd.type = PetActionType::Happy;
-        } else if (event.status == "error") {
+        } else if (enrichedEvent.status == "error") {
             cmd.type = PetActionType::Angry;
         } else {
             cmd.type = PetActionType::Idle;
         }
     }
 
-    auto showBubbleAndHistory = [event, cmd](QString const& speechText, int duration) {
-        ShijimaManager::defaultManager()->onTickAsync([event, cmd, speechText, duration](ShijimaManager *manager) {
+    auto showBubbleAndHistory = [enrichedEvent, cmd](QString const& speechText, int duration) {
+        ShijimaManager::defaultManager()->onTickAsync([enrichedEvent, cmd, speechText, duration](ShijimaManager *manager) {
             auto const& mascots = manager->mascots();
             if (!mascots.empty()) {
                 mascots.front()->doAction(cmd);
-                mascots.front()->showMessage(speechText, duration, event.agentName);
+                mascots.front()->showMessage(speechText, duration, enrichedEvent.agentName);
             }
             MessageHistoryManager::instance()->addRecord(
                 "agent_task", 
-                QString("【%1】%2").arg(event.agentName, event.status), 
+                QString("【%1】%2").arg(enrichedEvent.agentName, enrichedEvent.status), 
                 speechText, 
-                event.agentName
+                enrichedEvent.agentName
             );
         });
     };
 
     // 2. 播报文本生成（Token 省流判断）
-    int duration = (event.status == "need_approval") ? 10000 : 5000;
+    int duration = (enrichedEvent.status == "need_approval") ? 10000 : 5000;
 
     // 如果开启了 AI 口语化润色且为任务完成/出错阶段，且配置了 API Key，调用大模型润色
     if (m_config.enableLlmTaskNarration && 
-        (event.status == "finished" || event.status == "error") && 
+        (enrichedEvent.status == "finished" || enrichedEvent.status == "error") && 
         !m_config.apiKey.isEmpty() && !m_config.apiKey.contains("YOUR_API_KEY")) 
     {
         QJsonArray messages;
@@ -2320,15 +2670,15 @@ void AgentService::handleAgentStatus(AgentStatusEvent const& event, std::functio
             "任务内容：%3\n"
             "执行细节：%4\n"
             "请用你的人格风格，用 1~2 句话（35字以内）向主人进行口语化桌面播报，突出重点并表达你的情感："
-        ).arg(event.agentName, (event.status == "finished" ? "完成" : "报错中断"), event.task, event.details);
+        ).arg(enrichedEvent.agentName, (enrichedEvent.status == "finished" ? "完成" : "报错中断"), enrichedEvent.task, enrichedEvent.details);
         messages.append(userMsg);
 
-        sendChatCompletion(messages, [event, duration, showBubbleAndHistory, callback](bool ok, QString const& llmReply) {
+        sendChatCompletion(messages, [enrichedEvent, duration, showBubbleAndHistory, callback](bool ok, QString const& llmReply) {
             QString outAction;
             QString cleanText;
             PersonaManager::parseActionAndContent(llmReply, outAction, cleanText);
             
-            QString finalSpeech = ok ? cleanText : PersonaManager::instance()->renderStatusNarration(event.agentName, event.status, event.task, event.details);
+            QString finalSpeech = ok ? cleanText : PersonaManager::instance()->renderStatusNarration(enrichedEvent.agentName, enrichedEvent.status, enrichedEvent.task, enrichedEvent.details);
             
             showBubbleAndHistory(finalSpeech, duration);
             if (callback) callback(true, "已执行状态感知与 AI 播报");
@@ -2338,13 +2688,14 @@ void AgentService::handleAgentStatus(AgentStatusEvent const& event, std::functio
 
     // 0 Token 极速本地模式
     QString localSpeech = PersonaManager::instance()->renderStatusNarration(
-        event.agentName, event.status, event.task, event.details
+        enrichedEvent.agentName, enrichedEvent.status, enrichedEvent.task, enrichedEvent.details
     );
 
     showBubbleAndHistory(localSpeech, duration);
 
     if (callback) callback(true, "已执行本地 0-Token 状态感知与动作联动");
 }
+
 
 void AgentService::synthesizeAppSensorScript(const QString &appName, const QString &bundleId, const QString &windowTitle, std::function<void(bool success, const QString &scriptCode)> callback)
 {

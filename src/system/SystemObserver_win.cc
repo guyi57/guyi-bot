@@ -190,20 +190,33 @@ QString SystemObserver::currentActiveBundleId() const {
     return m_activeBundleId;
 }
 
+QString SystemObserver::currentActiveDocumentPath() const {
+    return m_activeDocumentPath;
+}
+
+QString SystemObserver::currentActiveContentSummary() const {
+    return m_activeContentSummary;
+}
+
+void SystemObserver::updateContentSummary(const QString &contentSummary) {
+    m_activeContentSummary = contentSummary;
+}
+
 #include "SensorManager.hpp"
 
 QJsonObject SystemObserver::currentSemanticActivity() const {
     return SensorManager::instance()->currentContext();
 }
 
-void SystemObserver::recordAppActivation(const QString &appName, const QString &bundleId, const QString &windowTitle) {
+void SystemObserver::recordAppActivation(const QString &appName, const QString &bundleId, const QString &windowTitle, const QString &documentPath) {
     qint64 now = QDateTime::currentMSecsSinceEpoch();
     m_activeAppName = appName;
     m_activeBundleId = bundleId;
     m_activeWindowTitle = windowTitle;
+    m_activeDocumentPath = documentPath;
     m_appStartTime = now;
 
-    SensorManager::instance()->onAppActivated(appName, bundleId, windowTitle);
+    SensorManager::instance()->onAppActivated(appName, bundleId, windowTitle, documentPath);
 
     bool isWorkApp = appName.contains("Code", Qt::CaseInsensitive) ||
                      appName.contains("devenv", Qt::CaseInsensitive) ||
@@ -230,4 +243,26 @@ int SystemObserver::continuousWorkMinutes() const {
     if (m_workSessionStartTime == 0) return 0;
     qint64 diffMs = QDateTime::currentMSecsSinceEpoch() - m_workSessionStartTime;
     return static_cast<int>(diffMs / 60000);
+}
+
+SystemResourceStats SystemObserver::getSystemResourceStats() {
+    SystemResourceStats stats;
+#ifdef Q_OS_WIN
+    MEMORYSTATUSEX memInfo;
+    memInfo.dwLength = sizeof(MEMORYSTATUSEX);
+    if (GlobalMemoryStatusEx(&memInfo)) {
+        stats.memTotalGb = static_cast<double>(memInfo.ullTotalPhys) / (1024.0 * 1024.0 * 1024.0);
+        stats.memUsedGb = static_cast<double>(memInfo.ullTotalPhys - memInfo.ullAvailPhys) / (1024.0 * 1024.0 * 1024.0);
+        stats.memPercent = static_cast<double>(memInfo.dwMemoryLoad);
+    }
+    ULARGE_INTEGER freeBytesAvailable, totalNumberOfBytes, totalNumberOfFreeBytes;
+    if (GetDiskFreeSpaceExA("C:\\", &freeBytesAvailable, &totalNumberOfBytes, &totalNumberOfFreeBytes)) {
+        stats.diskTotalGb = static_cast<double>(totalNumberOfBytes.QuadPart) / (1024.0 * 1024.0 * 1024.0);
+        stats.diskFreeGb = static_cast<double>(totalNumberOfFreeBytes.QuadPart) / (1024.0 * 1024.0 * 1024.0);
+        if (totalNumberOfBytes.QuadPart > 0) {
+            stats.diskPercent = (static_cast<double>(totalNumberOfBytes.QuadPart - totalNumberOfFreeBytes.QuadPart) / totalNumberOfBytes.QuadPart) * 100.0;
+        }
+    }
+#endif
+    return stats;
 }

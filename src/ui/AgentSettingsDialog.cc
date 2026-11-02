@@ -14,6 +14,9 @@
 #include "UpdateDialog.hpp"
 #include "LongTermMemoryEngine.hpp"
 #include "SensorManager.hpp"
+#include "BehaviorEngine.hpp"
+#include "VocabLearningEngine.hpp"
+#include <QFileDialog>
 #include <QInputDialog>
 #include <QFormLayout>
 #include <QMessageBox>
@@ -37,85 +40,114 @@ AgentSettingsDialog::~AgentSettingsDialog()
 AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     : QDialog(parent)
 {
-    setWindowTitle("⚙️ 智能助理、角色人格与编程感知配置");
+    setObjectName("AgentSettingsDialog");
+    setWindowTitle("⚙️ 智能助理、角色人格与长期记忆认知配置");
     setWindowFlags(Qt::Dialog | Qt::WindowStaysOnTopHint | Qt::WindowCloseButtonHint);
-    setMinimumWidth(620);
-    setMinimumHeight(560);
+    resize(860, 720);
+    setMinimumWidth(780);
+    setMinimumHeight(620);
+
+    setStyleSheet(
+        "QDialog#AgentSettingsDialog { background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', sans-serif; }"
+        "QTabWidget::pane { border: 1px solid #e2e8f0; border-radius: 10px; background: #ffffff; padding: 6px; } "
+        "QTabBar::tab { background: #f1f5f9; border: 1px solid #e2e8f0; border-bottom: none; border-top-left-radius: 8px; border-top-right-radius: 8px; padding: 9px 14px; font-weight: 500; font-size: 13px; color: #64748b; margin-right: 3px; } "
+        "QTabBar::tab:selected { background: #ffffff; color: #2563eb; font-weight: bold; border-color: #e2e8f0; border-bottom: 2px solid #2563eb; } "
+        "QTabBar::tab:hover:!selected { background: #f8fafc; color: #3b82f6; }"
+        "QGroupBox { font-weight: bold; font-size: 13px; color: #0f172a; border: 1px solid #e2e8f0; border-radius: 10px; margin-top: 14px; padding: 20px 14px 14px 14px; background: #ffffff; } "
+        "QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 14px; padding: 2px 10px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; color: #334155; font-size: 12px; font-weight: bold; } "
+        "QLineEdit, QComboBox, QSpinBox { min-height: 32px; padding: 4px 10px; border: 1px solid #cbd5e1; border-radius: 6px; background: #ffffff; color: #1e293b; font-size: 13px; selection-background-color: #3b82f6; } "
+        "QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QTextEdit:focus { border: 1.5px solid #3b82f6; background: #ffffff; } "
+        "QLineEdit::placeholder, QTextEdit::placeholder { color: #94a3b8; font-size: 12px; } "
+        "QTextEdit { border: 1px solid #cbd5e1; border-radius: 6px; background: #ffffff; color: #1e293b; font-size: 13px; padding: 6px 10px; } "
+        "QListWidget { border: 1px solid #e2e8f0; border-radius: 8px; background: #ffffff; padding: 4px; font-size: 12px; color: #1e293b; outline: none; } "
+        "QListWidget::item { padding: 6px 8px; border-radius: 4px; margin: 1px 0px; } "
+        "QListWidget::item:hover { background: #f1f5f9; } "
+        "QListWidget::item:selected { background: #e0f2fe; color: #0369a1; font-weight: 500; } "
+        "QScrollBar:vertical { border: none; background: transparent; width: 6px; margin: 0px; } "
+        "QScrollBar::handle:vertical { background: #cbd5e1; min-height: 24px; border-radius: 3px; } "
+        "QScrollBar::handle:vertical:hover { background: #94a3b8; } "
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; } "
+        "QCheckBox { font-size: 13px; color: #334155; spacing: 8px; }"
+    );
 
     auto mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(16, 16, 16, 16);
     mainLayout->setSpacing(12);
 
     auto tabWidget = new QTabWidget(this);
-    tabWidget->setStyleSheet(
-        "QTabWidget::pane { border: 1px solid #dcdfe6; border-radius: 8px; background: #ffffff; padding: 8px; } "
-        "QTabBar::tab { background: #f4f4f5; border: 1px solid #dcdfe6; border-bottom: none; border-top-left-radius: 6px; border-top-right-radius: 6px; padding: 7px 14px; font-weight: 500; color: #606266; margin-right: 2px; } "
-        "QTabBar::tab:selected { background: #ffffff; color: #409eff; font-weight: bold; border-color: #dcdfe6; } "
-        "QTabBar::tab:hover { background: #ecf5ff; color: #409eff; }"
-    );
 
     // =========================================================================
     // 🎭 TAB 1: 角色人格设定 (Persona Adapter)
     // =========================================================================
     auto personaPage = new QWidget(tabWidget);
-    auto personaLayout = new QVBoxLayout(personaPage);
-    personaLayout->setSpacing(12);
+    auto personaScroll = new QScrollArea(personaPage);
+    personaScroll->setWidgetResizable(true);
+    personaScroll->setFrameShape(QFrame::NoFrame);
+    personaScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    personaScroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
 
-    auto personaGroup = new QGroupBox("🎭 桌宠人格适配器", personaPage);
-    personaGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto personaContainer = new QWidget();
+    auto personaLayout = new QVBoxLayout(personaContainer);
+    personaLayout->setContentsMargins(4, 4, 12, 12);
+    personaLayout->setSpacing(14);
+
+    auto personaGroup = new QGroupBox("🎭 桌宠人格适配器", personaContainer);
     auto personaForm = new QFormLayout(personaGroup);
-    personaForm->setSpacing(10);
+    personaForm->setSpacing(12);
     personaForm->setLabelAlignment(Qt::AlignRight);
+
+    m_petCustomNameEdit = new QLineEdit(personaGroup);
+    m_petCustomNameEdit->setPlaceholderText("桌宠昵称/名字（如：海绵宝宝、派大星等，为空则自动识别皮肤名）");
+    personaForm->addRow("桌宠名字/自称:", m_petCustomNameEdit);
 
     m_personaCombo = new QComboBox(personaGroup);
     for (const auto &p : PersonaManager::instance()->allPersonas()) {
         m_personaCombo->addItem(p.name, p.id);
     }
-    m_personaCombo->setStyleSheet("padding: 5px; border-radius: 4px; border: 1px solid #dcdfe6; font-size: 13px;");
     personaForm->addRow("当前人格角色:", m_personaCombo);
 
     m_personaDescLabel = new QLabel(personaGroup);
-    m_personaDescLabel->setStyleSheet("color: #606266; font-size: 12px; background: #fdf6ec; padding: 8px; border-radius: 6px; border: 1px solid #faecd8;");
+    m_personaDescLabel->setStyleSheet("color: #475569; font-size: 12px; background: #f8fafc; padding: 10px 12px; border-radius: 6px; border: 1px solid #e2e8f0;");
     m_personaDescLabel->setWordWrap(true);
     personaForm->addRow("性格特征:", m_personaDescLabel);
 
     m_customPromptEdit = new QTextEdit(personaGroup);
     m_customPromptEdit->setPlaceholderText("在此输入自定义 System Prompt 人设，定义你的桌宠性格、说话口吻与偏好...");
-    m_customPromptEdit->setStyleSheet("border: 1px solid #dcdfe6; border-radius: 6px; padding: 6px; font-family: monospace; font-size: 12px;");
-    m_customPromptEdit->setMinimumHeight(90);
+    m_customPromptEdit->setMinimumHeight(110);
     personaForm->addRow("人设提示词:", m_customPromptEdit);
 
     auto personaTip = new QLabel("✨ 提示：模型回复开头附带 [action:jump]、[action:celebrate]、[action:sit] 等指令时，桌宠会自动执行对应动作动画！", personaGroup);
-    personaTip->setStyleSheet("font-size: 11px; color: #909399;");
+    personaTip->setStyleSheet("font-size: 12px; color: #94a3b8;");
     personaTip->setWordWrap(true);
     personaLayout->addWidget(personaGroup);
 
     // 自主搭讪与桌面关怀
-    auto banterGroup = new QGroupBox("💬 灵动拟人化与桌面关怀 (Contextual Banter)", personaPage);
-    banterGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto banterGroup = new QGroupBox("💬 灵动拟人化与桌面关怀 (Contextual Banter)", personaContainer);
     auto banterLayout = new QVBoxLayout(banterGroup);
-    banterLayout->setSpacing(8);
+    banterLayout->setSpacing(10);
 
     auto freqRow = new QHBoxLayout();
     auto freqLabel = new QLabel("自主搭讪频率:", banterGroup);
-    freqLabel->setStyleSheet("font-size: 13px; color: #303133;");
+    freqLabel->setStyleSheet("font-size: 13px; color: #334155; font-weight: 500;");
     m_banterFreqCombo = new QComboBox(banterGroup);
     m_banterFreqCombo->addItem("关闭 (不主动搭讪)", 0);
     m_banterFreqCombo->addItem("偶尔搭讪 (约 30 分钟一次)", 1);
     m_banterFreqCombo->addItem("适度陪伴 (约 15 分钟一次，推荐)", 2);
     m_banterFreqCombo->addItem("活跃互动 (约 8 分钟一次)", 3);
-    m_banterFreqCombo->setStyleSheet("padding: 4px 8px; font-size: 13px;");
     freqRow->addWidget(freqLabel);
     freqRow->addWidget(m_banterFreqCombo, 1);
     banterLayout->addLayout(freqRow);
 
     m_contextualCareCheck = new QCheckBox("启用前台应用感知与健康关怀 (写代码>45m揉肩/喝水提醒、深夜作息关怀、摸鱼抓包)", banterGroup);
-    m_contextualCareCheck->setStyleSheet("font-size: 12px; color: #475569;");
     banterLayout->addWidget(m_contextualCareCheck);
 
     personaLayout->addWidget(banterGroup);
-
     personaLayout->addStretch();
+
+    personaScroll->setWidget(personaContainer);
+    auto personaMainBox = new QVBoxLayout(personaPage);
+    personaMainBox->setContentsMargins(0, 0, 0, 0);
+    personaMainBox->addWidget(personaScroll);
     tabWidget->addTab(personaPage, "🎭 角色人格");
 
     // =========================================================================
@@ -286,34 +318,40 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     // 🤖 TAB 3: 编程助手状态感知 (Coding Agent Hook & Token Saver)
     // =========================================================================
     auto hookPage = new QWidget(tabWidget);
-    auto hookLayout = new QVBoxLayout(hookPage);
-    hookLayout->setSpacing(12);
+    auto hookScroll = new QScrollArea(hookPage);
+    hookScroll->setWidgetResizable(true);
+    hookScroll->setFrameShape(QFrame::NoFrame);
+    hookScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    hookScroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
 
-    auto hookGroup = new QGroupBox("🤖 Coding Agent 状态感知与动作联动", hookPage);
-    hookGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto hookContainer = new QWidget();
+    auto hookLayout = new QVBoxLayout(hookContainer);
+    hookLayout->setContentsMargins(4, 4, 12, 12);
+    hookLayout->setSpacing(14);
+
+    auto hookGroup = new QGroupBox("🤖 Coding Agent 状态感知与动作联动", hookContainer);
     auto hookForm = new QFormLayout(hookGroup);
-    hookForm->setSpacing(10);
+    hookForm->setSpacing(12);
     hookForm->setLabelAlignment(Qt::AlignRight);
 
     m_enableStateHookCheck = new QCheckBox("启用 Coding Agent 状态感知 (监听 Cursor / Claude Code / Git Hook 状态)", hookGroup);
-    m_enableStateHookCheck->setStyleSheet("font-weight: 500; font-size: 13px; color: #303133;");
+    m_enableStateHookCheck->setStyleSheet("font-weight: 500; font-size: 13px; color: #1e293b;");
     hookForm->addRow("", m_enableStateHookCheck);
 
     m_enableLlmNarrationCheck = new QCheckBox("启用 AI 智能口语化润色 (⚠️ 开启后完成任务时将调用大模型消耗 Token；关闭则使用 0-Token 纯本地极速播报)", hookGroup);
-    m_enableLlmNarrationCheck->setStyleSheet("font-size: 12px; color: #606266;");
+    m_enableLlmNarrationCheck->setStyleSheet("font-size: 12px; color: #64748b;");
     hookForm->addRow("", m_enableLlmNarrationCheck);
 
     m_stateDebounceSpin = new QSpinBox(hookGroup);
     m_stateDebounceSpin->setRange(0, 30);
     m_stateDebounceSpin->setValue(2);
     m_stateDebounceSpin->setSuffix(" 秒");
-    m_stateDebounceSpin->setStyleSheet("padding: 4px; border-radius: 4px; border: 1px solid #dcdfe6;");
     hookForm->addRow("状态防抖间隔:", m_stateDebounceSpin);
 
     auto apiDocLabel = new QLabel(
         "💡 <b>Webhook API 接入指南</b>：<br>"
         "通过向 <code>http://127.0.0.1:32456/api/agent/status</code> 发送 POST 请求即可驱动桌宠联动：<br>"
-        "<pre style='background: #f4f4f5; padding: 6px; border-radius: 4px; font-size: 11px; margin-top: 4px;'>"
+        "<pre style='background: #f8fafc; border: 1px solid #e2e8f0; padding: 8px 10px; border-radius: 6px; font-size: 11px; margin-top: 6px; color: #334155;'>"
         "curl -X POST http://127.0.0.1:32456/api/agent/status \\\n"
         "  -H 'Content-Type: application/json' \\\n"
         "  -d '{\"agent_name\": \"Claude Code\", \"status\": \"working\", \"task\": \"重构数据库模块\"}'"
@@ -321,74 +359,104 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
         "支持状态: <code>thinking</code> (思考), <code>working</code> (写代码), <code>need_approval</code> (求审批), <code>finished</code> (完成庆祝), <code>error</code> (报错)",
         hookGroup
     );
-    apiDocLabel->setStyleSheet("color: #606266; font-size: 11px; line-height: 1.4;");
+    apiDocLabel->setStyleSheet("color: #64748b; font-size: 12px; line-height: 1.5;");
     apiDocLabel->setWordWrap(true);
     hookForm->addRow("", apiDocLabel);
 
     hookLayout->addWidget(hookGroup);
     hookLayout->addStretch();
+
+    hookScroll->setWidget(hookContainer);
+    auto hookMainBox = new QVBoxLayout(hookPage);
+    hookMainBox->setContentsMargins(0, 0, 0, 0);
+    hookMainBox->addWidget(hookScroll);
     tabWidget->addTab(hookPage, "🤖 编程感知 (Hook)");
 
     // =========================================================================
     // ⌨️ TAB 4: 全局快捷键与记忆 (Hotkeys & Memory)
     // =========================================================================
     auto hkPage = new QWidget(tabWidget);
-    auto hkLayout = new QVBoxLayout(hkPage);
-    hkLayout->setSpacing(12);
+    auto hkScroll = new QScrollArea(hkPage);
+    hkScroll->setWidgetResizable(true);
+    hkScroll->setFrameShape(QFrame::NoFrame);
+    hkScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    hkScroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
 
-    auto hkGroup = new QGroupBox("⌨️ 全局快捷键", hkPage);
-    hkGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
-    auto hkForm = new QFormLayout(hkGroup);
-    hkForm->setSpacing(8);
-    hkForm->setLabelAlignment(Qt::AlignRight);
+    auto hkContainer = new QWidget();
+    auto hkLayout = new QVBoxLayout(hkContainer);
+    hkLayout->setContentsMargins(4, 4, 12, 12);
+    hkLayout->setSpacing(14);
 
-    m_hotkeyTranslateEdit = new QLineEdit(hkGroup);
+    auto hkGroupCore = new QGroupBox("✨ 划词交互与历史快捷键", hkContainer);
+    auto hkFormCore = new QFormLayout(hkGroupCore);
+    hkFormCore->setSpacing(10);
+    hkFormCore->setLabelAlignment(Qt::AlignRight);
+
+    m_hotkeyTranslateEdit = new QLineEdit(hkGroupCore);
     m_hotkeyTranslateEdit->setPlaceholderText("例如: Option+T");
-    m_hotkeyTranslateEdit->setStyleSheet("padding: 5px; border-radius: 4px; border: 1px solid #dcdfe6; font-weight: bold;");
-    hkForm->addRow("划词翻译快捷键:", m_hotkeyTranslateEdit);
+    hkFormCore->addRow("划词翻译快捷键:", m_hotkeyTranslateEdit);
 
-    m_hotkeyAskEdit = new QLineEdit(hkGroup);
+    m_hotkeyAskEdit = new QLineEdit(hkGroupCore);
     m_hotkeyAskEdit->setPlaceholderText("例如: Option+Q");
-    m_hotkeyAskEdit->setStyleSheet("padding: 5px; border-radius: 4px; border: 1px solid #dcdfe6; font-weight: bold;");
-    hkForm->addRow("划词提问快捷键:", m_hotkeyAskEdit);
+    hkFormCore->addRow("划词提问快捷键:", m_hotkeyAskEdit);
 
-    m_hotkeyHistoryEdit = new QLineEdit(hkGroup);
+    m_hotkeyHistoryEdit = new QLineEdit(hkGroupCore);
     m_hotkeyHistoryEdit->setPlaceholderText("例如: Option+H 或 Alt+H");
-    m_hotkeyHistoryEdit->setStyleSheet("padding: 5px; border-radius: 4px; border: 1px solid #dcdfe6; font-weight: bold;");
-    hkForm->addRow("📜 历史任务快捷键:", m_hotkeyHistoryEdit);
+    hkFormCore->addRow("📜 历史任务快捷键:", m_hotkeyHistoryEdit);
 
-    m_hotkeyMusicToggleEdit = new QLineEdit(hkGroup);
+    hkLayout->addWidget(hkGroupCore);
+
+    auto hkGroupMusic = new QGroupBox("🎵 桌面音乐播放全局快捷控制", hkContainer);
+    auto hkFormMusic = new QFormLayout(hkGroupMusic);
+    hkFormMusic->setSpacing(10);
+    hkFormMusic->setLabelAlignment(Qt::AlignRight);
+
+    m_hotkeyMusicToggleEdit = new QLineEdit(hkGroupMusic);
     m_hotkeyMusicToggleEdit->setPlaceholderText("例如: Option+M");
-    m_hotkeyMusicToggleEdit->setStyleSheet("padding: 5px; border-radius: 4px; border: 1px solid #dcdfe6; font-weight: bold;");
-    hkForm->addRow("🎵 音乐打开/隐藏:", m_hotkeyMusicToggleEdit);
+    hkFormMusic->addRow("打开/隐藏播放器:", m_hotkeyMusicToggleEdit);
 
-    m_hotkeyMusicPlayPauseEdit = new QLineEdit(hkGroup);
+    m_hotkeyMusicPlayPauseEdit = new QLineEdit(hkGroupMusic);
     m_hotkeyMusicPlayPauseEdit->setPlaceholderText("例如: Option+Space");
-    m_hotkeyMusicPlayPauseEdit->setStyleSheet("padding: 5px; border-radius: 4px; border: 1px solid #dcdfe6; font-weight: bold;");
-    hkForm->addRow("🎵 音乐播放/暂停:", m_hotkeyMusicPlayPauseEdit);
+    hkFormMusic->addRow("播放/暂停切换:", m_hotkeyMusicPlayPauseEdit);
 
-    m_hotkeyMusicNextEdit = new QLineEdit(hkGroup);
+    m_hotkeyMusicNextEdit = new QLineEdit(hkGroupMusic);
     m_hotkeyMusicNextEdit->setPlaceholderText("例如: Option+Right");
-    m_hotkeyMusicNextEdit->setStyleSheet("padding: 5px; border-radius: 4px; border: 1px solid #dcdfe6; font-weight: bold;");
-    hkForm->addRow("🎵 音乐下一首:", m_hotkeyMusicNextEdit);
+    hkFormMusic->addRow("下一首曲目:", m_hotkeyMusicNextEdit);
 
-    m_hotkeyMusicPrevEdit = new QLineEdit(hkGroup);
+    m_hotkeyMusicPrevEdit = new QLineEdit(hkGroupMusic);
     m_hotkeyMusicPrevEdit->setPlaceholderText("例如: Option+Left");
-    m_hotkeyMusicPrevEdit->setStyleSheet("padding: 5px; border-radius: 4px; border: 1px solid #dcdfe6; font-weight: bold;");
-    hkForm->addRow("🎵 音乐上一首:", m_hotkeyMusicPrevEdit);
+    hkFormMusic->addRow("上一首曲目:", m_hotkeyMusicPrevEdit);
 
-    m_hotkeyMusicFavEdit = new QLineEdit(hkGroup);
+    m_hotkeyMusicFavEdit = new QLineEdit(hkGroupMusic);
     m_hotkeyMusicFavEdit->setPlaceholderText("例如: Option+L");
-    m_hotkeyMusicFavEdit->setStyleSheet("padding: 5px; border-radius: 4px; border: 1px solid #dcdfe6; font-weight: bold;");
-    hkForm->addRow("🎵 音乐收藏/取消:", m_hotkeyMusicFavEdit);
+    hkFormMusic->addRow("收藏/取消曲目:", m_hotkeyMusicFavEdit);
 
-    m_clearMemoryBtn = new QPushButton("🧹 清空历史对话记忆", hkGroup);
-    m_clearMemoryBtn->setStyleSheet("padding: 5px 12px; color: #e6a23c; border: 1px solid #f3d19e; border-radius: 4px; background: #fdf6ec; font-weight: 500;");
+    hkLayout->addWidget(hkGroupMusic);
+
+    auto hkGroupMem = new QGroupBox("🧹 历史会话上下文维护", hkContainer);
+    auto hkFormMem = new QHBoxLayout(hkGroupMem);
+    hkFormMem->setContentsMargins(14, 16, 14, 14);
+    auto memTipLbl = new QLabel("清空当前活跃对话的记忆缓存（不影响长期事实数据库与主人核心画像）。", hkGroupMem);
+    memTipLbl->setStyleSheet("color: #64748b; font-size: 12px;");
+    memTipLbl->setWordWrap(true);
+    hkFormMem->addWidget(memTipLbl, 1);
+
+    m_clearMemoryBtn = new QPushButton("🧹 清空历史对话记忆", hkGroupMem);
+    m_clearMemoryBtn->setStyleSheet(
+        "QPushButton { padding: 6px 14px; color: #b45309; border: 1px solid #fde68a; border-radius: 6px; background: #fef3c7; font-weight: 500; font-size: 12px; min-height: 20px; } "
+        "QPushButton:hover { background: #fde68a; color: #92400e; } "
+        "QPushButton:pressed { background: #fcd34d; }"
+    );
     m_clearMemoryBtn->setCursor(Qt::PointingHandCursor);
-    hkForm->addRow("", m_clearMemoryBtn);
+    hkFormMem->addWidget(m_clearMemoryBtn);
 
-    hkLayout->addWidget(hkGroup);
+    hkLayout->addWidget(hkGroupMem);
     hkLayout->addStretch();
+
+    hkScroll->setWidget(hkContainer);
+    auto hkMainBox = new QVBoxLayout(hkPage);
+    hkMainBox->setContentsMargins(0, 0, 0, 0);
+    hkMainBox->addWidget(hkScroll);
     tabWidget->addTab(hkPage, "⌨️ 快捷键");
 
     // =========================================================================
@@ -467,94 +535,157 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     // 🧠 TAB: 长期记忆与画像 (Long-Term Memory & Profile)
     // =========================================================================
     auto memoryPage = new QWidget(tabWidget);
-    auto memoryLayout = new QVBoxLayout(memoryPage);
-    memoryLayout->setSpacing(10);
+    auto memoryScroll = new QScrollArea(memoryPage);
+    memoryScroll->setWidgetResizable(true);
+    memoryScroll->setFrameShape(QFrame::NoFrame);
+    memoryScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    memoryScroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
+
+    auto memoryContainer = new QWidget();
+    auto memoryLayout = new QVBoxLayout(memoryContainer);
+    memoryLayout->setContentsMargins(4, 4, 12, 12);
+    memoryLayout->setSpacing(16);
 
     // 1. 主人全局核心画像 (Core Profile)
-    auto profileGroup = new QGroupBox("👤 主人全局核心画像 (L1 Core Profile)", memoryPage);
-    profileGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
-    auto profileForm = new QFormLayout(profileGroup);
-    profileForm->setSpacing(6);
-    profileForm->setLabelAlignment(Qt::AlignRight);
+    auto profileGroup = new QGroupBox("👤 主人全局核心画像 (L1 Core Profile)", memoryContainer);
+    auto profileGrid = new QGridLayout(profileGroup);
+    profileGrid->setSpacing(12);
+    profileGrid->setContentsMargins(14, 20, 14, 14);
+
+    auto addProfileField = [&](int row, int col, int colSpan, const QString &labelText, QWidget *editor) {
+        auto box = new QVBoxLayout();
+        box->setSpacing(4);
+        box->setContentsMargins(0, 0, 0, 0);
+        auto lbl = new QLabel(labelText, profileGroup);
+        lbl->setStyleSheet("font-size: 12px; font-weight: 600; color: #475569;");
+        box->addWidget(lbl);
+        box->addWidget(editor);
+        profileGrid->addLayout(box, row, col, 1, colSpan);
+    };
 
     m_ownerNameEdit = new QLineEdit(profileGroup);
     m_ownerNameEdit->setPlaceholderText("例如: 古逸 / 主人");
-    profileForm->addRow("称呼/姓名:", m_ownerNameEdit);
+    addProfileField(0, 0, 1, "👤 称呼 / 姓名:", m_ownerNameEdit);
 
     m_ownerOccEdit = new QLineEdit(profileGroup);
     m_ownerOccEdit->setPlaceholderText("例如: 资深桌面开发工程师 / 架构师");
-    profileForm->addRow("职业身份:", m_ownerOccEdit);
+    addProfileField(0, 1, 1, "💼 职业身份:", m_ownerOccEdit);
+
+    m_ownerBirthdayEdit = new QLineEdit(profileGroup);
+    m_ownerBirthdayEdit->setPlaceholderText("例如: 10月24日 / 天蝎座");
+    addProfileField(1, 0, 1, "🎂 生日与星座:", m_ownerBirthdayEdit);
+
+    m_ownerFoodEdit = new QLineEdit(profileGroup);
+    m_ownerFoodEdit->setPlaceholderText("例如: 喜欢川菜火锅, 不吃香菜, 少糖");
+    addProfileField(1, 1, 1, "🍲 饮食喜好 / 忌口:", m_ownerFoodEdit);
 
     m_ownerTechEdit = new QLineEdit(profileGroup);
     m_ownerTechEdit->setPlaceholderText("例如: C++, Qt, Python, Rust, Linux, macOS");
-    profileForm->addRow("常用技术栈:", m_ownerTechEdit);
+    addProfileField(2, 0, 1, "💻 常用技术栈:", m_ownerTechEdit);
+
+    m_ownerProjectEdit = new QLineEdit(profileGroup);
+    m_ownerProjectEdit->setPlaceholderText("例如: xuanfu 智能桌宠伴侣");
+    addProfileField(2, 1, 1, "🚀 当前攻坚项目:", m_ownerProjectEdit);
 
     m_ownerMusicEdit = new QLineEdit(profileGroup);
     m_ownerMusicEdit->setPlaceholderText("例如: 华语流行, 摇滚, 轻音乐, 周杰伦");
-    profileForm->addRow("音乐偏好:", m_ownerMusicEdit);
+    addProfileField(3, 0, 1, "🎵 音乐品味偏好:", m_ownerMusicEdit);
+
+    m_ownerHobbyEdit = new QLineEdit(profileGroup);
+    m_ownerHobbyEdit->setPlaceholderText("例如: 打游戏, 看动漫, 跑步, 摄影");
+    addProfileField(3, 1, 1, "🎮 闲暇生活爱好:", m_ownerHobbyEdit);
 
     m_ownerHabitEdit = new QLineEdit(profileGroup);
-    m_ownerHabitEdit->setPlaceholderText("例如: 经常高强度专注, 偶尔凌晨写代码");
-    profileForm->addRow("作息与习惯:", m_ownerHabitEdit);
+    m_ownerHabitEdit->setPlaceholderText("例如: 经常高强度专注, 偶尔凌晨写代码, 习惯用快捷键");
+    addProfileField(4, 0, 2, "⏰ 作息习惯与专注风格:", m_ownerHabitEdit);
 
     m_ownerNotesEdit = new QTextEdit(profileGroup);
-    m_ownerNotesEdit->setPlaceholderText("例如: 正在开发 xuanfu 桌宠项目，喜好极简高效的代码风格...");
-    m_ownerNotesEdit->setFixedHeight(45);
-    profileForm->addRow("附加长期备忘:", m_ownerNotesEdit);
+    m_ownerNotesEdit->setPlaceholderText("例如: 喜好极简高效的代码风格，平时喜欢喝冰美式，讨厌被打断思路...");
+    m_ownerNotesEdit->setMinimumHeight(65);
+    m_ownerNotesEdit->setMaximumHeight(85);
+    addProfileField(5, 0, 2, "📝 附加长期备忘与补充说明:", m_ownerNotesEdit);
 
-    auto profileBtnLayout = new QHBoxLayout();
-    profileBtnLayout->addStretch();
+    auto profileFooterLayout = new QHBoxLayout();
+    auto profileTip = new QLabel("💡 提示：桌宠在闲暇主动探询盲区或日常对话中，也会自动分析并将了解到的信息更新填入此画像。", profileGroup);
+    profileTip->setStyleSheet("font-size: 11px; color: #94a3b8;");
+    profileTip->setWordWrap(true);
+    profileFooterLayout->addWidget(profileTip, 1);
+
     m_saveOwnerProfileBtn = new QPushButton("💾 保存主人核心档案", profileGroup);
-    m_saveOwnerProfileBtn->setStyleSheet("padding: 4px 14px; border-radius: 4px; border: none; background: #67c23a; color: white; font-weight: bold; font-size: 12px;");
+    m_saveOwnerProfileBtn->setStyleSheet(
+        "QPushButton { padding: 8px 18px; border-radius: 6px; border: none; background: #10b981; color: white; font-weight: bold; font-size: 12px; min-height: 20px; } "
+        "QPushButton:hover { background: #059669; } "
+        "QPushButton:pressed { background: #047857; }"
+    );
     m_saveOwnerProfileBtn->setCursor(Qt::PointingHandCursor);
-    profileBtnLayout->addWidget(m_saveOwnerProfileBtn);
-    profileForm->addRow("", profileBtnLayout);
+    profileFooterLayout->addWidget(m_saveOwnerProfileBtn);
+    profileGrid->addLayout(profileFooterLayout, 6, 0, 1, 2);
 
     memoryLayout->addWidget(profileGroup);
 
     // 2. 长程语义事实库 (Semantic Memories)
-    auto memGroup = new QGroupBox("🧠 语义事实记忆库 (L3 Semantic Memories)", memoryPage);
-    memGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto memGroup = new QGroupBox("🧠 语义事实记忆库 (L3 Semantic Memories - 向量+BM25混合检索)", memoryContainer);
     auto memGroupLayout = new QVBoxLayout(memGroup);
-    memGroupLayout->setSpacing(6);
+    memGroupLayout->setSpacing(8);
+    memGroupLayout->setContentsMargins(14, 20, 14, 14);
 
     auto searchRow = new QHBoxLayout();
+    searchRow->setSpacing(8);
     m_memSearchEdit = new QLineEdit(memGroup);
-    m_memSearchEdit->setPlaceholderText("🔍 输入关键词或语义描述进行检索...");
+    m_memSearchEdit->setPlaceholderText("🔍 输入关键词或语义描述进行混合检索 (BM25 + 向量相似度)...");
+
     m_memSearchBtn = new QPushButton("搜索", memGroup);
-    m_memSearchBtn->setStyleSheet("padding: 4px 12px; border-radius: 4px; border: 1px solid #dcdfe6; background: #f4f4f5; font-size: 12px;");
+    m_memSearchBtn->setStyleSheet(
+        "QPushButton { padding: 6px 16px; border-radius: 6px; border: none; background: #2563eb; color: white; font-weight: 500; font-size: 12px; min-height: 20px; } "
+        "QPushButton:hover { background: #1d4ed8; } "
+        "QPushButton:pressed { background: #1e40af; }"
+    );
     m_memSearchBtn->setCursor(Qt::PointingHandCursor);
 
-    m_memRefreshBtn = new QPushButton("刷新", memGroup);
-    m_memRefreshBtn->setStyleSheet("padding: 4px 12px; border-radius: 4px; border: 1px solid #dcdfe6; background: #f4f4f5; font-size: 12px;");
+    m_memRefreshBtn = new QPushButton("刷新全部", memGroup);
+    m_memRefreshBtn->setStyleSheet(
+        "QPushButton { padding: 6px 14px; border-radius: 6px; border: 1px solid #cbd5e1; background: #f8fafc; color: #475569; font-size: 12px; min-height: 20px; } "
+        "QPushButton:hover { background: #f1f5f9; color: #1e293b; } "
+        "QPushButton:pressed { background: #e2e8f0; }"
+    );
     m_memRefreshBtn->setCursor(Qt::PointingHandCursor);
 
-    searchRow->addWidget(m_memSearchEdit);
+    searchRow->addWidget(m_memSearchEdit, 1);
     searchRow->addWidget(m_memSearchBtn);
     searchRow->addWidget(m_memRefreshBtn);
     memGroupLayout->addLayout(searchRow);
 
     m_memListWidget = new QListWidget(memGroup);
-    m_memListWidget->setStyleSheet("border: 1px solid #e4e7ed; border-radius: 6px; background: #ffffff; padding: 4px; font-size: 12px;");
-    m_memListWidget->setFixedHeight(120);
+    m_memListWidget->setMinimumHeight(140);
     memGroupLayout->addWidget(m_memListWidget);
 
     auto memActionsRow = new QHBoxLayout();
     m_memStatsLabel = new QLabel("正在读取记忆统计...", memGroup);
-    m_memStatsLabel->setStyleSheet("color: #909399; font-size: 11px;");
+    m_memStatsLabel->setStyleSheet("color: #64748b; font-size: 12px; font-weight: 500;");
     memActionsRow->addWidget(m_memStatsLabel);
     memActionsRow->addStretch();
 
     m_memAddBtn = new QPushButton("➕ 记一条", memGroup);
-    m_memAddBtn->setStyleSheet("padding: 3px 9px; border-radius: 4px; border: 1px solid #dcdfe6; background: #f4f4f5; font-size: 12px;");
+    m_memAddBtn->setStyleSheet(
+        "QPushButton { padding: 5px 12px; border-radius: 6px; border: 1px solid #a7f3d0; background: #ecfdf5; color: #059669; font-weight: 500; font-size: 12px; min-height: 18px; } "
+        "QPushButton:hover { background: #d1fae5; } "
+        "QPushButton:pressed { background: #a7f3d0; }"
+    );
     m_memAddBtn->setCursor(Qt::PointingHandCursor);
 
     m_memDelBtn = new QPushButton("🗑️ 删除选中", memGroup);
-    m_memDelBtn->setStyleSheet("padding: 3px 9px; border-radius: 4px; border: 1px solid #f56c6c; background: #fef0f0; color: #f56c6c; font-size: 12px;");
+    m_memDelBtn->setStyleSheet(
+        "QPushButton { padding: 5px 12px; border-radius: 6px; border: 1px solid #fecaca; background: #fef2f2; color: #dc2626; font-weight: 500; font-size: 12px; min-height: 18px; } "
+        "QPushButton:hover { background: #fee2e2; } "
+        "QPushButton:pressed { background: #fecaca; }"
+    );
     m_memDelBtn->setCursor(Qt::PointingHandCursor);
 
     m_memClearAllBtn = new QPushButton("⚠️ 清空全部", memGroup);
-    m_memClearAllBtn->setStyleSheet("padding: 3px 9px; border-radius: 4px; border: 1px solid #dcdfe6; background: #f4f4f5; color: #909399; font-size: 12px;");
+    m_memClearAllBtn->setStyleSheet(
+        "QPushButton { padding: 5px 10px; border-radius: 6px; border: 1px solid #e2e8f0; background: #f8fafc; color: #94a3b8; font-size: 12px; min-height: 18px; } "
+        "QPushButton:hover { background: #fee2e2; color: #dc2626; border-color: #fecaca; }"
+    );
     m_memClearAllBtn->setCursor(Qt::PointingHandCursor);
 
     memActionsRow->addWidget(m_memAddBtn);
@@ -564,34 +695,79 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
 
     memoryLayout->addWidget(memGroup);
 
+    // 2.5 未决关切与事件回访清单 (Pending Follow-up Events)
+    auto followupGroup = new QGroupBox("📋 未决关切与回访清单 (Follow-up Loop)", memoryContainer);
+    auto followupLayout = new QVBoxLayout(followupGroup);
+    followupLayout->setSpacing(8);
+    followupLayout->setContentsMargins(14, 20, 14, 14);
+
+    m_followupListWidget = new QListWidget(followupGroup);
+    m_followupListWidget->setMinimumHeight(110);
+    followupLayout->addWidget(m_followupListWidget);
+
+    auto followupActionsRow = new QHBoxLayout();
+    m_followupStatsLabel = new QLabel("未决关切回访读取中...", followupGroup);
+    m_followupStatsLabel->setStyleSheet("color: #64748b; font-size: 12px; font-weight: 500;");
+    followupActionsRow->addWidget(m_followupStatsLabel);
+    followupActionsRow->addStretch();
+
+    m_resolveFollowupBtn = new QPushButton("✅ 标记已解决", followupGroup);
+    m_resolveFollowupBtn->setStyleSheet(
+        "QPushButton { padding: 5px 14px; border-radius: 6px; border: 1px solid #a7f3d0; background: #ecfdf5; color: #059669; font-weight: bold; font-size: 12px; min-height: 18px; } "
+        "QPushButton:hover { background: #d1fae5; } "
+        "QPushButton:pressed { background: #a7f3d0; }"
+    );
+    m_resolveFollowupBtn->setCursor(Qt::PointingHandCursor);
+
+    m_dismissFollowupBtn = new QPushButton("✖️ 忽略", followupGroup);
+    m_dismissFollowupBtn->setStyleSheet(
+        "QPushButton { padding: 5px 12px; border-radius: 6px; border: 1px solid #cbd5e1; background: #f8fafc; color: #64748b; font-size: 12px; min-height: 18px; } "
+        "QPushButton:hover { background: #f1f5f9; color: #1e293b; } "
+        "QPushButton:pressed { background: #e2e8f0; }"
+    );
+    m_dismissFollowupBtn->setCursor(Qt::PointingHandCursor);
+
+    followupActionsRow->addWidget(m_resolveFollowupBtn);
+    followupActionsRow->addWidget(m_dismissFollowupBtn);
+    followupLayout->addLayout(followupActionsRow);
+
+    memoryLayout->addWidget(followupGroup);
+
     // 3. 实时应用感知与自进化探针足迹 (Live App Sensing & Probes)
-    auto sensorGroup = new QGroupBox("📡 实时应用感知与自进化探针 (App Sensing & Probes)", memoryPage);
-    sensorGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto sensorGroup = new QGroupBox("📡 实时应用感知与自进化探针 (App Sensing & Probes)", memoryContainer);
     auto sensorLayout = new QVBoxLayout(sensorGroup);
-    sensorLayout->setSpacing(6);
+    sensorLayout->setSpacing(8);
+    sensorLayout->setContentsMargins(14, 20, 14, 14);
 
     m_sensorCurrentStatusLabel = new QLabel(sensorGroup);
-    m_sensorCurrentStatusLabel->setStyleSheet("font-size: 12px; color: #409eff; background: #ecf5ff; padding: 6px 10px; border-radius: 6px; border: 1px solid #d9ecff;");
+    m_sensorCurrentStatusLabel->setStyleSheet("font-size: 12px; color: #1d4ed8; background: #eff6ff; padding: 8px 12px; border-radius: 6px; border: 1px solid #bfdbfe; font-weight: 500;");
     m_sensorCurrentStatusLabel->setWordWrap(true);
     sensorLayout->addWidget(m_sensorCurrentStatusLabel);
 
     m_sensorActivityList = new QListWidget(sensorGroup);
-    m_sensorActivityList->setStyleSheet("border: 1px solid #e4e7ed; border-radius: 6px; background: #ffffff; padding: 4px; font-size: 12px;");
-    m_sensorActivityList->setFixedHeight(110);
+    m_sensorActivityList->setMinimumHeight(110);
     sensorLayout->addWidget(m_sensorActivityList);
 
     auto sensorActionRow = new QHBoxLayout();
     m_sensorStatsLabel = new QLabel(sensorGroup);
-    m_sensorStatsLabel->setStyleSheet("color: #909399; font-size: 11px;");
+    m_sensorStatsLabel->setStyleSheet("color: #64748b; font-size: 12px; font-weight: 500;");
     sensorActionRow->addWidget(m_sensorStatsLabel);
     sensorActionRow->addStretch();
 
     m_sensorRefreshBtn = new QPushButton("🔄 刷新感知", sensorGroup);
-    m_sensorRefreshBtn->setStyleSheet("padding: 3px 9px; border-radius: 4px; border: 1px solid #dcdfe6; background: #f4f4f5; font-size: 12px;");
+    m_sensorRefreshBtn->setStyleSheet(
+        "QPushButton { padding: 5px 12px; border-radius: 6px; border: 1px solid #cbd5e1; background: #f8fafc; color: #475569; font-size: 12px; min-height: 18px; } "
+        "QPushButton:hover { background: #f1f5f9; color: #1e293b; } "
+        "QPushButton:pressed { background: #e2e8f0; }"
+    );
     m_sensorRefreshBtn->setCursor(Qt::PointingHandCursor);
 
     m_sensorOpenFolderBtn = new QPushButton("📂 打开探针库", sensorGroup);
-    m_sensorOpenFolderBtn->setStyleSheet("padding: 3px 9px; border-radius: 4px; border: 1px solid #dcdfe6; background: #f4f4f5; font-size: 12px;");
+    m_sensorOpenFolderBtn->setStyleSheet(
+        "QPushButton { padding: 5px 12px; border-radius: 6px; border: 1px solid #cbd5e1; background: #f8fafc; color: #475569; font-size: 12px; min-height: 18px; } "
+        "QPushButton:hover { background: #f1f5f9; color: #1e293b; } "
+        "QPushButton:pressed { background: #e2e8f0; }"
+    );
     m_sensorOpenFolderBtn->setCursor(Qt::PointingHandCursor);
 
     sensorActionRow->addWidget(m_sensorRefreshBtn);
@@ -600,33 +776,208 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
 
     memoryLayout->addWidget(sensorGroup);
 
+    memoryScroll->setWidget(memoryContainer);
+    auto memoryMainBox = new QVBoxLayout(memoryPage);
+    memoryMainBox->setContentsMargins(0, 0, 0, 0);
+    memoryMainBox->addWidget(memoryScroll);
     tabWidget->addTab(memoryPage, "🧠 长期记忆");
+
+    // =========================================================================
+    // 🎓 TAB: 英语伴学与艾宾浩斯复习 (Vocab Spaced Repetition Learning)
+    // =========================================================================
+    auto vocabPage = new QWidget(tabWidget);
+    auto vocabScroll = new QScrollArea(vocabPage);
+    vocabScroll->setWidgetResizable(true);
+    vocabScroll->setFrameShape(QFrame::NoFrame);
+    vocabScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    auto vocabContainer = new QWidget();
+    auto vocabLayout = new QVBoxLayout(vocabContainer);
+    vocabLayout->setContentsMargins(4, 4, 12, 12);
+    vocabLayout->setSpacing(14);
+
+    // 1. 伴学总控与场景实战
+    auto vocabGeneralGroup = new QGroupBox("🎓 桌面英语伴学与场景实战", vocabContainer);
+    auto vocabGeneralLayout = new QVBoxLayout(vocabGeneralGroup);
+    vocabGeneralLayout->setSpacing(10);
+
+    m_vocabEnabledCheck = new QCheckBox("启用桌宠英语学习伴学 (Spaced Repetition 艾宾浩斯抗遗忘记忆法)", vocabGeneralGroup);
+    m_vocabEnabledCheck->setStyleSheet("font-weight: bold; color: #1e293b; font-size: 13.5px;");
+    vocabGeneralLayout->addWidget(m_vocabEnabledCheck);
+
+    m_vocabOcrSniperCheck = new QCheckBox("👀 开启屏幕 OCR 智能生词捕获 (在 IDE 代码编辑器或浏览器遇到生词时，桌宠自动识别并纳入词库)", vocabGeneralGroup);
+    vocabGeneralLayout->addWidget(m_vocabOcrSniperCheck);
+
+    auto ocrTip = new QLabel("💡 场景实战化：桌宠在屏幕上伴学时，不仅会抽查词汇，还会默默帮你把屏幕上出现的技术生词存入复习库。按下快捷键 Option+T 也可一键收藏查词！", vocabGeneralGroup);
+    ocrTip->setStyleSheet("font-size: 12px; color: #64748b;");
+    ocrTip->setWordWrap(true);
+    vocabGeneralLayout->addWidget(ocrTip);
+    vocabLayout->addWidget(vocabGeneralGroup);
+
+    // 2. 词库范围与教材考纲
+    auto vocabScopeGroup = new QGroupBox("📚 重点记忆词库范围 (开箱即用，无需到处找词单)", vocabContainer);
+    auto vocabScopeLayout = new QVBoxLayout(vocabScopeGroup);
+    vocabScopeLayout->setSpacing(10);
+
+    m_vocabUpgradeExamCheck = new QCheckBox("📘 专升本英语核心词汇 (2500 词大纲高频核心考点，涵盖四级真题与必背短语)", vocabScopeGroup);
+    vocabScopeLayout->addWidget(m_vocabUpgradeExamCheck);
+
+    m_vocabProgrammingCheck = new QCheckBox("💻 计算机与编程常用英语 (架构、网络协议、并发、运行时报错、数据库与工程术语)", vocabScopeGroup);
+    vocabScopeLayout->addWidget(m_vocabProgrammingCheck);
+    vocabLayout->addWidget(vocabScopeGroup);
+
+    // 3. 记忆目标与复习比例配置 (艾宾浩斯抗遗忘)
+    auto vocabConfigGroup = new QGroupBox("🧠 记忆规划与科学抽查配比 (艾宾浩斯间隔记忆法)", vocabContainer);
+    auto vocabConfigForm = new QFormLayout(vocabConfigGroup);
+    vocabConfigForm->setSpacing(12);
+    vocabConfigForm->setLabelAlignment(Qt::AlignRight);
+
+    m_vocabDailyTargetSpin = new QSpinBox(vocabConfigGroup);
+    m_vocabDailyTargetSpin->setRange(3, 100);
+    m_vocabDailyTargetSpin->setValue(15);
+    m_vocabDailyTargetSpin->setSuffix(" 词/天");
+    vocabConfigForm->addRow("每日背词目标:", m_vocabDailyTargetSpin);
+
+    auto ratioBox = new QWidget(vocabConfigGroup);
+    auto ratioLayout = new QVBoxLayout(ratioBox);
+    ratioLayout->setContentsMargins(0, 0, 0, 0);
+    ratioLayout->setSpacing(4);
+
+    m_vocabNewWordRatioSlider = new QSlider(Qt::Horizontal, ratioBox);
+    m_vocabNewWordRatioSlider->setRange(10, 60);
+    m_vocabNewWordRatioSlider->setValue(25);
+    m_vocabNewWordRatioSlider->setTickPosition(QSlider::TicksBelow);
+    m_vocabNewWordRatioSlider->setTickInterval(10);
+
+    m_vocabRatioLabel = new QLabel("当前策略: 25% 少量新词 + 75% 掌握巩固词 (艾宾浩斯抗遗忘)", ratioBox);
+    m_vocabRatioLabel->setStyleSheet("font-size: 12px; color: #2563eb; font-weight: 500;");
+
+    connect(m_vocabNewWordRatioSlider, &QSlider::valueChanged, this, [this](int val) {
+        m_vocabRatioLabel->setText(QString("当前策略: %1% 少量新词 + %2% 掌握巩固词 (艾宾浩斯抗遗忘)").arg(val).arg(100 - val));
+    });
+
+    ratioLayout->addWidget(m_vocabNewWordRatioSlider);
+    ratioLayout->addWidget(m_vocabRatioLabel);
+    vocabConfigForm->addRow("抽查配比调节:", ratioBox);
+
+    m_vocabIntervalSpin = new QSpinBox(vocabConfigGroup);
+    m_vocabIntervalSpin->setRange(3, 120);
+    m_vocabIntervalSpin->setValue(12);
+    m_vocabIntervalSpin->setSuffix(" 分钟");
+    vocabConfigForm->addRow("抽查提问间隔:", m_vocabIntervalSpin);
+
+    vocabLayout->addWidget(vocabConfigGroup);
+
+    // 4. 词库统计与操作
+    auto vocabStatsGroup = new QGroupBox("📊 学习进度战报与词库操作", vocabContainer);
+    auto vocabStatsLayout = new QVBoxLayout(vocabStatsGroup);
+    vocabStatsLayout->setSpacing(10);
+
+    m_vocabStatsSummaryLabel = new QLabel(vocabStatsGroup);
+    m_vocabStatsSummaryLabel->setStyleSheet("font-size: 12.5px; line-height: 1.6; color: #1e293b; background: #f8fafc; padding: 12px 14px; border-radius: 8px; border: 1px solid #e2e8f0;");
+    vocabStatsLayout->addWidget(m_vocabStatsSummaryLabel);
+
+    auto vocabBtnRow = new QHBoxLayout();
+    m_vocabImportJsonBtn = new QPushButton("📂 导入外部 JSON 词库", vocabStatsGroup);
+    m_vocabImportJsonBtn->setStyleSheet("padding: 5px 10px; font-size: 12px;");
+    m_vocabImportJsonBtn->setCursor(Qt::PointingHandCursor);
+
+    m_vocabImportTxtBtn = new QPushButton("📄 导入 TXT 单词表", vocabStatsGroup);
+    m_vocabImportTxtBtn->setStyleSheet("padding: 5px 10px; font-size: 12px;");
+    m_vocabImportTxtBtn->setCursor(Qt::PointingHandCursor);
+
+    m_vocabTriggerSampleQuizBtn = new QPushButton("🎯 立即生成一道气泡测验", vocabStatsGroup);
+    m_vocabTriggerSampleQuizBtn->setStyleSheet("padding: 5px 10px; font-size: 12px; font-weight: bold; background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; border-radius: 4px;");
+    m_vocabTriggerSampleQuizBtn->setCursor(Qt::PointingHandCursor);
+
+    vocabBtnRow->addWidget(m_vocabImportJsonBtn);
+    vocabBtnRow->addWidget(m_vocabImportTxtBtn);
+    vocabBtnRow->addWidget(m_vocabTriggerSampleQuizBtn);
+    vocabStatsLayout->addLayout(vocabBtnRow);
+
+    connect(m_vocabImportJsonBtn, &QPushButton::clicked, this, [this]() {
+        QString path = QFileDialog::getOpenFileName(this, "选择 JSON 词库文件", "", "JSON Files (*.json)");
+        if (!path.isEmpty()) {
+            int count = VocabLearningEngine::instance()->importFromJsonFile(path);
+            QMessageBox::information(this, "导入成功", QString("成功从该文件导入 %1 个新单词！").arg(count));
+            refreshValues();
+        }
+    });
+
+    connect(m_vocabImportTxtBtn, &QPushButton::clicked, this, [this]() {
+        QString path = QFileDialog::getOpenFileName(this, "选择 TXT 单词表文件 (每行一个单词)", "", "Text Files (*.txt)");
+        if (!path.isEmpty()) {
+            int count = VocabLearningEngine::instance()->importFromTextFile(path);
+            QMessageBox::information(this, "导入成功", QString("成功从该文件导入 %1 个新单词！").arg(count));
+            refreshValues();
+        }
+    });
+
+    connect(m_vocabTriggerSampleQuizBtn, &QPushButton::clicked, this, [this]() {
+        auto quiz = VocabLearningEngine::instance()->generateNextQuiz();
+        if (quiz.card.id > 0 && !quiz.promptText.isEmpty()) {
+            PetActionCommand cmd;
+            cmd.type = PetActionType::Talk;
+            cmd.speechText = quiz.promptText;
+            cmd.durationMs = 25000;
+            cmd.moveToCenter = false;
+            cmd.emote = PetEmoteType::ThinkingBulb;
+            BehaviorEngine::instance()->executeAction(cmd);
+            QMessageBox::information(this, "已触发测验", "桌宠已在桌面上弹出了背词气泡，你可以直接点击气泡里的选项作答！");
+        } else {
+            QMessageBox::warning(this, "提示", "暂无可测验词汇，请检查词库是否已启用或已添加单词。");
+        }
+    });
+
+    vocabLayout->addWidget(vocabStatsGroup);
+    vocabLayout->addStretch();
+
+    vocabScroll->setWidget(vocabContainer);
+    auto vocabMainBox = new QVBoxLayout(vocabPage);
+    vocabMainBox->setContentsMargins(0, 0, 0, 0);
+    vocabMainBox->addWidget(vocabScroll);
+    tabWidget->addTab(vocabPage, "🎓 英语伴学");
 
     // =========================================================================
     // ⚙️ TAB: 系统与更新 (System, Updates & Appearance)
     // =========================================================================
     auto sysPage = new QWidget(tabWidget);
-    auto sysLayout = new QVBoxLayout(sysPage);
-    sysLayout->setSpacing(12);
+    auto sysScroll = new QScrollArea(sysPage);
+    sysScroll->setWidgetResizable(true);
+    sysScroll->setFrameShape(QFrame::NoFrame);
+    sysScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    sysScroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
+
+    auto sysContainer = new QWidget();
+    auto sysLayout = new QVBoxLayout(sysContainer);
+    sysLayout->setContentsMargins(4, 4, 12, 12);
+    sysLayout->setSpacing(14);
 
     // 1. 软件版本与在线更新
-    auto updateGroup = new QGroupBox("🔄 软件版本与在线更新", sysPage);
-    updateGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto updateGroup = new QGroupBox("🔄 软件版本与在线更新", sysContainer);
     auto updateForm = new QFormLayout(updateGroup);
     updateForm->setSpacing(10);
     updateForm->setLabelAlignment(Qt::AlignRight);
 
     auto verLabel = new QLabel(QString("v%1 (官方最新稳定构建)").arg(UpdateManager::instance()->currentVersion()), updateGroup);
-    verLabel->setStyleSheet("font-weight: bold; color: #409eff; font-size: 13px;");
+    verLabel->setStyleSheet("font-weight: bold; color: #2563eb; font-size: 13px;");
     updateForm->addRow("当前软件版本:", verLabel);
 
     auto updateBtnRow = new QHBoxLayout();
     m_checkUpdateBtn = new QPushButton("🔄 立即检查更新...", updateGroup);
-    m_checkUpdateBtn->setStyleSheet("padding: 5px 14px; border-radius: 4px; border: 1px solid #409eff; color: #409eff; background: #ecf5ff; font-weight: 500; font-size: 12px;");
+    m_checkUpdateBtn->setStyleSheet(
+        "QPushButton { padding: 6px 14px; border-radius: 6px; border: 1px solid #bfdbfe; color: #2563eb; background: #eff6ff; font-weight: 500; font-size: 12px; min-height: 18px; } "
+        "QPushButton:hover { background: #dbeafe; } "
+        "QPushButton:pressed { background: #bfdbfe; }"
+    );
     m_checkUpdateBtn->setCursor(Qt::PointingHandCursor);
 
     m_openReleaseUrlBtn = new QPushButton("🌐 GitHub 发布页", updateGroup);
-    m_openReleaseUrlBtn->setStyleSheet("padding: 5px 12px; border-radius: 4px; border: 1px solid #dcdfe6; color: #606266; background: #f4f4f5; font-size: 12px;");
+    m_openReleaseUrlBtn->setStyleSheet(
+        "QPushButton { padding: 6px 14px; border-radius: 6px; border: 1px solid #cbd5e1; color: #475569; background: #f8fafc; font-size: 12px; min-height: 18px; } "
+        "QPushButton:hover { background: #f1f5f9; color: #1e293b; } "
+        "QPushButton:pressed { background: #e2e8f0; }"
+    );
     m_openReleaseUrlBtn->setCursor(Qt::PointingHandCursor);
 
     updateBtnRow->addWidget(m_checkUpdateBtn);
@@ -635,92 +986,128 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     updateForm->addRow("版本更新操作:", updateBtnRow);
 
     m_updateStatusLabel = new QLabel(updateGroup);
-    m_updateStatusLabel->setStyleSheet("font-size: 12px; color: #606266;");
+    m_updateStatusLabel->setStyleSheet("font-size: 12px; color: #64748b;");
     m_updateStatusLabel->setWordWrap(true);
     m_updateStatusLabel->setText("点击上方按钮联网检查 GitHub 最新发行版。");
     updateForm->addRow("检查状态:", m_updateStatusLabel);
 
     m_autoCheckUpdateCheck = new QCheckBox("应用启动时自动在后台静默检查新版本", updateGroup);
-    m_autoCheckUpdateCheck->setStyleSheet("font-size: 12px; color: #303133;");
+    m_autoCheckUpdateCheck->setStyleSheet("font-size: 12px; color: #334155;");
     updateForm->addRow("", m_autoCheckUpdateCheck);
 
     sysLayout->addWidget(updateGroup);
 
     // 2. 桌面外观与状态显示
-    auto displayGroup = new QGroupBox("🖥️ 桌面外观与状态微盘", sysPage);
-    displayGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto displayGroup = new QGroupBox("🖥️ 桌面外观与状态微盘", sysContainer);
     auto displayForm = new QFormLayout(displayGroup);
     displayForm->setSpacing(8);
     displayForm->setLabelAlignment(Qt::AlignRight);
 
     m_showHeadStatusOrbCheck = new QCheckBox("头顶显示体力 (⚡) 与心情 (☻) 状态微盘", displayGroup);
-    m_showHeadStatusOrbCheck->setStyleSheet("font-size: 13px; font-weight: 500; color: #303133;");
+    m_showHeadStatusOrbCheck->setStyleSheet("font-size: 13px; font-weight: 500; color: #1e293b;");
     displayForm->addRow("状态微盘开关:", m_showHeadStatusOrbCheck);
 
-    auto displayTip = new QLabel("开启后将在桌宠头顶实时渲染暗夜环形微盘指示器；关闭后头顶保持清爽纯净（默认关闭）。", displayGroup);
-    displayTip->setStyleSheet("font-size: 11px; color: #909399;");
+    auto opacityRow = new QWidget(displayGroup);
+    auto opacityLayout = new QHBoxLayout(opacityRow);
+    opacityLayout->setContentsMargins(0, 0, 0, 0);
+    opacityLayout->setSpacing(8);
+
+    m_bubbleOpacitySlider = new QSlider(Qt::Horizontal, opacityRow);
+    m_bubbleOpacitySlider->setRange(40, 100);
+    m_bubbleOpacitySlider->setValue(78);
+    m_bubbleOpacitySlider->setTickPosition(QSlider::TicksBelow);
+    m_bubbleOpacitySlider->setTickInterval(10);
+
+    m_bubbleOpacityLabel = new QLabel("78% (轻薄毛玻璃)", opacityRow);
+    m_bubbleOpacityLabel->setStyleSheet("font-size: 12px; color: #2563eb; font-weight: 500; min-width: 110px;");
+
+    connect(m_bubbleOpacitySlider, &QSlider::valueChanged, this, [this](int val) {
+        m_bubbleOpacityLabel->setText(QString("%1% (%2)").arg(val).arg(val < 65 ? "超通透" : (val <= 85 ? "轻薄毛玻璃" : "清晰凝实")));
+    });
+
+    opacityLayout->addWidget(m_bubbleOpacitySlider, 1);
+    opacityLayout->addWidget(m_bubbleOpacityLabel);
+    displayForm->addRow("提示框透明度:", opacityRow);
+
+    auto displayTip = new QLabel("支持自定义气泡与提示框的半透明质感；数值越低越通透灵动，默认 78% 兼顾护眼与美感。", displayGroup);
+    displayTip->setStyleSheet("font-size: 12px; color: #94a3b8;");
     displayTip->setWordWrap(true);
     displayForm->addRow("", displayTip);
 
     sysLayout->addWidget(displayGroup);
 
     // 3. 桌宠繁殖与克隆设置
-    auto breedGroup = new QGroupBox("🧬 桌宠繁殖与克隆模式", sysPage);
-    breedGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto breedGroup = new QGroupBox("🧬 桌宠繁殖与克隆模式", sysContainer);
     auto breedForm = new QFormLayout(breedGroup);
     breedForm->setSpacing(8);
     breedForm->setLabelAlignment(Qt::AlignRight);
 
     m_breedingEnabledCheck = new QCheckBox("启用桌宠繁殖 (允许自主分裂/拉起生成同伴与克隆体)", breedGroup);
-    m_breedingEnabledCheck->setStyleSheet("font-size: 13px; font-weight: 500; color: #303133;");
+    m_breedingEnabledCheck->setStyleSheet("font-size: 13px; font-weight: 500; color: #1e293b;");
     breedForm->addRow("繁殖模式开关:", m_breedingEnabledCheck);
 
     m_breedingTypeCombo = new QComboBox(breedGroup);
     m_breedingTypeCombo->addItem("🔘 克隆同款桌宠 (仅繁殖当前相同款式)", static_cast<int>(ShijimaManager::BreedingType::SameMascot));
     m_breedingTypeCombo->addItem("🎲 随机已有样式 (从所有已安装桌宠列表中随机抽取)", static_cast<int>(ShijimaManager::BreedingType::RandomMascot));
-    m_breedingTypeCombo->setStyleSheet("padding: 4px 8px; font-size: 13px;");
     breedForm->addRow("繁殖生成样式:", m_breedingTypeCombo);
 
     auto breedTip = new QLabel("提示：繁殖模式开启后，桌宠可根据行为自主繁衍生息；主宠也会在桌面合理巡视并通过趣味动作淘汰多余克隆体。", breedGroup);
-    breedTip->setStyleSheet("font-size: 11px; color: #909399;");
+    breedTip->setStyleSheet("font-size: 12px; color: #94a3b8;");
     breedTip->setWordWrap(true);
     breedForm->addRow("", breedTip);
 
     sysLayout->addWidget(breedGroup);
 
     // 4. 本地数据与存储
-    auto dataGroup = new QGroupBox("📁 本地数据与缓存", sysPage);
-    dataGroup->setStyleSheet("QGroupBox { font-weight: bold; font-size: 13px; color: #2c3e50; border: 1px solid #e4e7ed; border-radius: 8px; margin-top: 8px; padding-top: 14px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }");
+    auto dataGroup = new QGroupBox("📁 本地数据与缓存", sysContainer);
     auto dataForm = new QFormLayout(dataGroup);
     dataForm->setSpacing(8);
     dataForm->setLabelAlignment(Qt::AlignRight);
 
     auto dbPathLabel = new QLabel(SettingsDb::instance()->dbPath(), dataGroup);
-    dbPathLabel->setStyleSheet("font-size: 11px; color: #909399; font-family: monospace;");
+    dbPathLabel->setStyleSheet("font-size: 12px; color: #64748b; font-family: monospace;");
     dbPathLabel->setWordWrap(true);
     dataForm->addRow("配置数据库:", dbPathLabel);
 
     m_openDataDirBtn = new QPushButton("📂 打开数据存储目录", dataGroup);
-    m_openDataDirBtn->setStyleSheet("padding: 5px 12px; border-radius: 4px; border: 1px solid #dcdfe6; color: #606266; background: #f4f4f5; font-size: 12px;");
+    m_openDataDirBtn->setStyleSheet(
+        "QPushButton { padding: 6px 14px; border-radius: 6px; border: 1px solid #cbd5e1; color: #475569; background: #f8fafc; font-size: 12px; min-height: 18px; } "
+        "QPushButton:hover { background: #f1f5f9; color: #1e293b; } "
+        "QPushButton:pressed { background: #e2e8f0; }"
+    );
     m_openDataDirBtn->setCursor(Qt::PointingHandCursor);
     dataForm->addRow("数据快捷方式:", m_openDataDirBtn);
 
     sysLayout->addWidget(dataGroup);
-
     sysLayout->addStretch();
+
+    sysScroll->setWidget(sysContainer);
+    auto sysMainBox = new QVBoxLayout(sysPage);
+    sysMainBox->setContentsMargins(0, 0, 0, 0);
+    sysMainBox->addWidget(sysScroll);
     tabWidget->addTab(sysPage, "⚙️ 系统与更新");
 
     mainLayout->addWidget(tabWidget);
 
-    // 底部按钮栏
+    // 底部操作栏
     auto btnLayout = new QHBoxLayout();
+    btnLayout->setContentsMargins(0, 6, 0, 0);
+    btnLayout->setSpacing(12);
     btnLayout->addStretch();
 
     m_cancelBtn = new QPushButton("取消", this);
     m_saveBtn = new QPushButton("保存并应用配置", this);
 
-    m_cancelBtn->setStyleSheet("padding: 7px 18px; border-radius: 6px; border: 1px solid #dcdfe6; background: #ffffff; color: #606266; font-weight: 500;");
-    m_saveBtn->setStyleSheet("padding: 7px 22px; border-radius: 6px; border: none; background: #409eff; color: white; font-weight: bold; font-size: 13px;");
+    m_cancelBtn->setStyleSheet(
+        "QPushButton { padding: 8px 22px; border-radius: 6px; border: 1px solid #cbd5e1; background: #ffffff; color: #475569; font-weight: 500; font-size: 13px; min-height: 20px; } "
+        "QPushButton:hover { background: #f1f5f9; color: #1e293b; border-color: #94a3b8; } "
+        "QPushButton:pressed { background: #e2e8f0; }"
+    );
+    m_saveBtn->setStyleSheet(
+        "QPushButton { padding: 8px 26px; border-radius: 6px; border: none; background: #2563eb; color: white; font-weight: bold; font-size: 13px; min-height: 20px; } "
+        "QPushButton:hover { background: #1d4ed8; } "
+        "QPushButton:pressed { background: #1e40af; }"
+    );
 
     m_cancelBtn->setCursor(Qt::PointingHandCursor);
     m_saveBtn->setCursor(Qt::PointingHandCursor);
@@ -802,6 +1189,26 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
 
     // 长期记忆信号连接
     connect(m_saveOwnerProfileBtn, &QPushButton::clicked, this, &AgentSettingsDialog::onSaveOwnerProfileClicked);
+    connect(m_resolveFollowupBtn, &QPushButton::clicked, this, [this]() {
+        auto item = m_followupListWidget->currentItem();
+        if (!item) {
+            QMessageBox::information(this, "提示", "请先在上方列表中选中需要标记已解决的关切事项。");
+            return;
+        }
+        qint64 id = item->data(Qt::UserRole).toLongLong();
+        LongTermMemoryEngine::instance()->resolveFollowupEvent(id, "resolved");
+        refreshMemoryTab();
+    });
+    connect(m_dismissFollowupBtn, &QPushButton::clicked, this, [this]() {
+        auto item = m_followupListWidget->currentItem();
+        if (!item) {
+            QMessageBox::information(this, "提示", "请先在上方列表中选中需要忽略关闭的关切事项。");
+            return;
+        }
+        qint64 id = item->data(Qt::UserRole).toLongLong();
+        LongTermMemoryEngine::instance()->dismissFollowupEvent(id);
+        refreshMemoryTab();
+    });
     connect(m_memSearchBtn, &QPushButton::clicked, this, &AgentSettingsDialog::onSearchMemoryClicked);
     connect(m_memSearchEdit, &QLineEdit::returnPressed, this, &AgentSettingsDialog::onSearchMemoryClicked);
     connect(m_memRefreshBtn, &QPushButton::clicked, this, &AgentSettingsDialog::refreshMemoryTab);
@@ -1028,6 +1435,9 @@ void AgentSettingsDialog::refreshValues() {
     m_stateDebounceSpin->setValue(cfg.stateDebounceSec);
 
     m_showHeadStatusOrbCheck->setChecked(SettingsDb::instance()->get("ui.show_head_status_orb", "false") == "true");
+    int bubbleOpacity = SettingsDb::instance()->getInt("ui.bubble_opacity", 78);
+    m_bubbleOpacitySlider->setValue(bubbleOpacity);
+    m_bubbleOpacityLabel->setText(QString("%1% (%2)").arg(bubbleOpacity).arg(bubbleOpacity < 65 ? "超通透" : (bubbleOpacity <= 85 ? "轻薄毛玻璃" : "清晰凝实")));
     m_autoCheckUpdateCheck->setChecked(SettingsDb::instance()->getBool("sys.auto_check_update", true));
     m_updateStatusLabel->setStyleSheet("font-size: 12px; color: #606266;");
     m_updateStatusLabel->setText(QString("当前运行版本: v%1 (官方最新稳定构建)").arg(UpdateManager::instance()->currentVersion()));
@@ -1042,6 +1452,33 @@ void AgentSettingsDialog::refreshValues() {
 
     m_testStatusLabel->clear();
     m_agentStatusLabel->clear();
+
+    m_petCustomNameEdit->setText(SettingsDb::instance()->get("pet.custom_name", ""));
+
+    // 刷新背词伴学配置
+    auto *vocab = VocabLearningEngine::instance();
+    m_vocabEnabledCheck->setChecked(vocab->isEnabled());
+    m_vocabUpgradeExamCheck->setChecked(vocab->isUpgradeExamEnabled());
+    m_vocabProgrammingCheck->setChecked(vocab->isProgrammingEnabled());
+    m_vocabOcrSniperCheck->setChecked(vocab->isOcrSniperEnabled());
+    m_vocabDailyTargetSpin->setValue(vocab->dailyTarget());
+    int ratioPct = static_cast<int>(std::round(vocab->newWordRatio() * 100.0));
+    m_vocabNewWordRatioSlider->setValue(ratioPct);
+    m_vocabRatioLabel->setText(QString("当前策略: %1% 少量新词 + %2% 掌握巩固词 (艾宾浩斯抗遗忘)").arg(ratioPct).arg(100 - ratioPct));
+    m_vocabIntervalSpin->setValue(vocab->quizIntervalMinutes());
+
+    auto stats = vocab->stats();
+    int completion = (vocab->dailyTarget() > 0) ? (stats.todayReviewedCount * 100 / vocab->dailyTarget()) : 0;
+    m_vocabStatsSummaryLabel->setText(QString(
+        "📊 <b>词库全景档案</b>：总词汇 <b>%1</b> 词 | 已熟记掌握 <b>%2</b> 词 | 艾宾浩斯复习中 <b>%3</b> 词 | 未背生词 <b>%4</b> 词<br>"
+        "📅 <b>今日伴学战报</b>：今日已复习 <b>%5</b> 词 / 目标 <b>%6</b> 词 (完成度 %7%)"
+    ).arg(stats.totalCount)
+     .arg(stats.masteredCount)
+     .arg(stats.learningCount)
+     .arg(stats.unlearnedCount)
+     .arg(stats.todayReviewedCount)
+     .arg(vocab->dailyTarget())
+     .arg(completion));
 
     refreshSkillsTab();
     refreshMcpTab();
@@ -1269,6 +1706,7 @@ void AgentSettingsDialog::saveAndClose() {
     // 保存外观、系统与自主搭讪设置
     bool showOrb = m_showHeadStatusOrbCheck->isChecked();
     SettingsDb::instance()->set("ui.show_head_status_orb", showOrb ? "true" : "false");
+    SettingsDb::instance()->setInt("ui.bubble_opacity", m_bubbleOpacitySlider->value());
     SettingsDb::instance()->setBool("sys.auto_check_update", m_autoCheckUpdateCheck->isChecked());
 
     // 保存繁殖模式设置
@@ -1284,6 +1722,18 @@ void AgentSettingsDialog::saveAndClose() {
     cfg.banterFrequencyLevel = m_banterFreqCombo->currentData().toInt();
     cfg.enableContextualCare = m_contextualCareCheck->isChecked();
 
+    SettingsDb::instance()->set("pet.custom_name", m_petCustomNameEdit->text().trimmed());
+
+    // 保存背词配置
+    auto *vocab = VocabLearningEngine::instance();
+    vocab->setEnabled(m_vocabEnabledCheck->isChecked());
+    vocab->setUpgradeExamEnabled(m_vocabUpgradeExamCheck->isChecked());
+    vocab->setProgrammingEnabled(m_vocabProgrammingCheck->isChecked());
+    vocab->setOcrSniperEnabled(m_vocabOcrSniperCheck->isChecked());
+    vocab->setDailyTarget(m_vocabDailyTargetSpin->value());
+    vocab->setNewWordRatio(m_vocabNewWordRatioSlider->value() / 100.0);
+    vocab->setQuizIntervalMinutes(m_vocabIntervalSpin->value());
+
     AgentService::instance()->setConfig(cfg);
     accept();
 }
@@ -1292,10 +1742,40 @@ void AgentSettingsDialog::refreshMemoryTab() {
     auto profile = LongTermMemoryEngine::instance()->coreProfile();
     m_ownerNameEdit->setText(profile.name);
     m_ownerOccEdit->setText(profile.occupation);
+    m_ownerFoodEdit->setText(profile.favoriteFood);
+    m_ownerBirthdayEdit->setText(profile.birthday);
+    m_ownerProjectEdit->setText(profile.currentProject);
+    m_ownerHobbyEdit->setText(profile.hobbies);
     m_ownerTechEdit->setText(profile.preferredLangs);
     m_ownerMusicEdit->setText(profile.musicTaste);
     m_ownerHabitEdit->setText(profile.workHabits);
     m_ownerNotesEdit->setPlainText(profile.notes);
+
+    // 刷新未决关切与回访清单
+    m_followupListWidget->blockSignals(true);
+    m_followupListWidget->clear();
+    auto followups = LongTermMemoryEngine::instance()->getAllFollowupEvents(50);
+    int pendingCount = 0;
+    for (const auto &ev : followups) {
+        if (ev.status == "pending") pendingCount++;
+        auto item = new QListWidgetItem(m_followupListWidget);
+        QString statusTag;
+        if (ev.status == "pending") {
+            statusTag = "⏳ 待回访";
+        } else if (ev.status == "resolved") {
+            statusTag = "✅ 已确认解决";
+        } else {
+            statusTag = "✖️ 已忽略";
+        }
+        QString timeStr = QDateTime::fromMSecsSinceEpoch(ev.eventTime).toString("yyyy-MM-dd HH:mm");
+        item->setText(QString("[%1] %2 (%3)").arg(statusTag, ev.title, timeStr));
+        item->setData(Qt::UserRole, ev.id);
+        item->setToolTip(QString("关切事项: %1\n背景: %2\n发生时间: %3\n状态: %4")
+            .arg(ev.title, ev.context, timeStr, ev.status));
+    }
+    m_followupListWidget->blockSignals(false);
+    m_followupStatsLabel->setText(QString("📋 未决关切事项: %1 条待问询 / 共归档 %2 条")
+        .arg(pendingCount).arg(followups.size()));
 
     m_memListWidget->blockSignals(true);
     m_memListWidget->clear();
@@ -1355,6 +1835,10 @@ void AgentSettingsDialog::onSaveOwnerProfileClicked() {
     CoreUserProfile p;
     p.name = m_ownerNameEdit->text().trimmed();
     p.occupation = m_ownerOccEdit->text().trimmed();
+    p.favoriteFood = m_ownerFoodEdit->text().trimmed();
+    p.birthday = m_ownerBirthdayEdit->text().trimmed();
+    p.currentProject = m_ownerProjectEdit->text().trimmed();
+    p.hobbies = m_ownerHobbyEdit->text().trimmed();
     p.preferredLangs = m_ownerTechEdit->text().trimmed();
     p.musicTaste = m_ownerMusicEdit->text().trimmed();
     p.workHabits = m_ownerHabitEdit->text().trimmed();

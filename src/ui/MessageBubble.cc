@@ -9,11 +9,15 @@
 #include <QProcess>
 #include <QTextDocument>
 #include <QDesktopServices>
+#include <QUrlQuery>
 #include <QRegularExpression>
 #include <QDebug>
 #include <iostream>
 #include "MessageHistoryManager.hpp"
 #include "MessageHistoryDialog.hpp"
+#include "VocabLearningEngine.hpp"
+#include "SettingsDb.hpp"
+#include <QResizeEvent>
 
 // ==========================================
 // 现代化液态毛玻璃胶囊按钮组件（高质感微光图标 + 深邃字形）
@@ -134,9 +138,27 @@ static QString renderInlineMarkdown(QString text) {
     QRegularExpression codeRe(R"(`(.*?)`)");
     text.replace(codeRe, "<code style=\"background-color:rgba(241, 245, 249, 0.9); color:#475569; padding:2px 6px; border-radius:5px; font-family:monospace; font-size:11.8px; border:1px solid rgba(226, 232, 240, 0.7);\">\\1</code>");
 
-    // 3. 超链接 (柔和苹果蓝)
-    QRegularExpression linkRe(R"(\[(.*?)\]\((.*?)\))");
-    text.replace(linkRe, "<a href=\"\\2\" style=\"color:#3b82f6; text-decoration:none; font-weight:500;\">\\1</a>");
+    // 3. 超链接与交互按钮 (支持普通超链接与 vocab:// 互动背词按钮)
+    static QRegularExpression linkRe(R"(\[(.*?)\]\((.*?)\))");
+    auto it = linkRe.globalMatch(text);
+    QString linkProcessed;
+    int lastPos = 0;
+    while (it.hasNext()) {
+        auto match = it.next();
+        linkProcessed += text.mid(lastPos, match.capturedStart() - lastPos);
+        QString label = match.captured(1);
+        QString href = match.captured(2);
+        if (href.startsWith("vocab://answer")) {
+            linkProcessed += QString("<a href=\"%1\" style=\"display:inline-block; margin:2px 3px; padding:3px 10px; background-color:#eff6ff; color:#2563eb; border:1px solid #bfdbfe; border-radius:12px; font-weight:bold; font-size:12px; text-decoration:none;\">%2</a>").arg(href, label);
+        } else if (href.startsWith("vocab://")) {
+            linkProcessed += QString("<a href=\"%1\" style=\"display:inline-block; margin:2px 3px; padding:2px 8px; background-color:#f1f5f9; color:#475569; border:1px solid #cbd5e1; border-radius:8px; font-size:11.5px; text-decoration:none;\">%2</a>").arg(href, label);
+        } else {
+            linkProcessed += QString("<a href=\"%1\" style=\"color:#3b82f6; text-decoration:none; font-weight:500;\">%2</a>").arg(href, label);
+        }
+        lastPos = match.capturedEnd();
+    }
+    linkProcessed += text.mid(lastPos);
+    text = linkProcessed;
 
     // 4. 斜体 (仅在非双星号粗体时生效)
     QRegularExpression italicRe(R"((?<!\*)\*([^\*\n]+?)\*(?!\*))");
@@ -346,9 +368,9 @@ MessageBubble::MessageBubble(QWidget *parent)
     setAttribute(Qt::WA_TranslucentBackground);
     setAttribute(Qt::WA_NoSystemBackground);
     setAttribute(Qt::WA_ShowWithoutActivating);
-    setFocusPolicy(Qt::NoFocus);
-    setWindowFlags(Qt::ToolTip | Qt::FramelessWindowHint | 
-        Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus);
+    setFocusPolicy(Qt::ClickFocus);
+    setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | 
+        Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint);
 
     Platform::setupFloatingBubbleWindow(this);
 
@@ -358,11 +380,11 @@ MessageBubble::MessageBubble(QWidget *parent)
     mainLayout->setSpacing(8);
 
     // ==========================================
-    // 顶部操作栏（1:1 对标截图：打开应用 / 复制 / 历史记录 / 倒计时 / 关闭）
+    // 顶部操作栏（打开应用 / 复制 / 历史记录）
     // ==========================================
     m_topBarWidget = new QWidget(this);
     auto topBarLayout = new QHBoxLayout(m_topBarWidget);
-    topBarLayout->setContentsMargins(0, 0, 0, 0);
+    topBarLayout->setContentsMargins(0, 0, 85, 0); // 为右侧的倒计时与关闭按钮预留空间
     topBarLayout->setSpacing(8);
 
     m_openAppBtn = new IconCardButton("🚀", "打开应用", "#6366f1", m_topBarWidget);
@@ -372,30 +394,40 @@ MessageBubble::MessageBubble(QWidget *parent)
 
     m_historyBtn = new IconCardButton("🕒", "历史记录", "#f59e0b", m_topBarWidget);
 
-    // 倒计时指示胶囊
-    m_countdownLabel = new QLabel("⏱️ 25s", m_topBarWidget);
+    topBarLayout->addWidget(m_openAppBtn);
+    topBarLayout->addWidget(m_copyBtn);
+    topBarLayout->addWidget(m_historyBtn);
+    topBarLayout->addStretch();
+    mainLayout->addWidget(m_topBarWidget);
+
+    // ==========================================
+    // 倒计时指示胶囊与手动关闭按钮 (挂载在 MessageBubble 本身，双模式统一使用)
+    // ==========================================
+    m_countdownLabel = new QLabel("⏱️ 25s", this);
+    m_countdownLabel->setToolTip("展示倒计时（鼠标悬停暂停）");
     m_countdownLabel->setStyleSheet(
         "QLabel {"
-        "  background-color: #f1f5f9;"
-        "  color: #64748b;"
+        "  background-color: rgba(241, 245, 249, 0.85);"
+        "  color: #475569;"
         "  font-size: 11px;"
         "  font-weight: 600;"
-        "  padding: 4px 8px;"
-        "  border-radius: 10px;"
-        "  border: 1px solid #e2e8f0;"
+        "  padding: 3px 8px;"
+        "  border-radius: 11px;"
+        "  border: 1px solid rgba(203, 213, 225, 0.8);"
         "}"
     );
     m_countdownLabel->hide();
 
-    m_closeBtn = new QPushButton("✕", m_topBarWidget);
+    m_closeBtn = new QPushButton("✕", this);
+    m_closeBtn->setToolTip("关闭气泡");
     m_closeBtn->setStyleSheet(
         "QPushButton {"
-        "  background-color: transparent;"
-        "  color: #94a3b8;"
-        "  font-size: 12px;"
+        "  background-color: rgba(241, 245, 249, 0.8);"
+        "  color: #64748b;"
+        "  font-size: 11px;"
         "  font-weight: bold;"
-        "  border: none;"
-        "  border-radius: 10px;"
+        "  border: 1px solid rgba(226, 232, 240, 0.9);"
+        "  border-radius: 11px;"
         "  min-width: 22px;"
         "  max-width: 22px;"
         "  min-height: 22px;"
@@ -404,25 +436,43 @@ MessageBubble::MessageBubble(QWidget *parent)
         "}"
         "QPushButton:hover {"
         "  background-color: #fee2e2;"
+        "  border: 1px solid #fca5a5;"
         "  color: #ef4444;"
+        "}"
+        "QPushButton:pressed {"
+        "  background-color: #fecaca;"
+        "  border: 1px solid #f87171;"
+        "  color: #dc2626;"
         "}"
     );
     m_closeBtn->setCursor(Qt::PointingHandCursor);
-
-    topBarLayout->addWidget(m_openAppBtn);
-    topBarLayout->addWidget(m_copyBtn);
-    topBarLayout->addWidget(m_historyBtn);
-    topBarLayout->addStretch();
-    topBarLayout->addWidget(m_countdownLabel);
-    topBarLayout->addWidget(m_closeBtn);
-    mainLayout->addWidget(m_topBarWidget);
 
     // ==========================================
     // 富文本/Markdown 渲染器（排版自适应、无截断）
     // ==========================================
     m_textBrowser = new QTextBrowser(this);
     m_textBrowser->setReadOnly(true);
-    m_textBrowser->setOpenExternalLinks(true);
+    m_textBrowser->setOpenExternalLinks(false);
+    m_textBrowser->setOpenLinks(false);
+    connect(m_textBrowser, &QTextBrowser::anchorClicked, this, [](const QUrl &url) {
+        if (url.scheme() == "vocab") {
+            QString host = url.host();
+            QUrlQuery query(url);
+            if (host == "answer") {
+                qint64 cardId = query.queryItemValue("id").toLongLong();
+                int choice = query.queryItemValue("choice").toInt();
+                VocabLearningEngine::instance()->submitQuizAnswer(cardId, choice);
+            } else if (host == "quiz") {
+                qint64 cardId = query.queryItemValue("id").toLongLong();
+                VocabLearningEngine::instance()->triggerQuizForCard(cardId);
+            } else if (host == "mark_known") {
+                qint64 cardId = query.queryItemValue("id").toLongLong();
+                VocabLearningEngine::instance()->markCardKnown(cardId);
+            }
+        } else {
+            QDesktopServices::openUrl(url);
+        }
+    });
     m_textBrowser->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard | Qt::LinksAccessibleByMouse);
     m_textBrowser->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
     m_textBrowser->setLineWrapMode(QTextEdit::WidgetWidth);
@@ -461,6 +511,82 @@ MessageBubble::MessageBubble(QWidget *parent)
         "}"
     );
     mainLayout->addWidget(m_textBrowser);
+
+    // ==========================================
+    // 底部互动回复栏 (让主人可直接打字回答桌宠的问询)
+    // ==========================================
+    m_replyBarWidget = new QWidget(this);
+    auto replyLayout = new QHBoxLayout(m_replyBarWidget);
+    replyLayout->setContentsMargins(0, 4, 0, 0);
+    replyLayout->setSpacing(8);
+
+    m_replyInput = new QLineEdit(m_replyBarWidget);
+    m_replyInput->setFocusPolicy(Qt::StrongFocus);
+    m_replyInput->setPlaceholderText("💬 回复桌宠 (按 Enter 发送)...");
+    m_replyInput->setStyleSheet(
+        "QLineEdit {"
+        "  background-color: rgba(255, 255, 255, 0.85);"
+        "  color: #0f172a;"
+        "  font-size: 12.5px;"
+        "  padding: 4px 12px;"
+        "  border: 1px solid rgba(203, 213, 225, 0.9);"
+        "  border-radius: 13px;"
+        "}"
+        "QLineEdit:focus {"
+        "  background-color: rgba(255, 255, 255, 0.98);"
+        "  border: 1.5px solid #8b5cf6;"
+        "}"
+    );
+
+    m_replySendBtn = new QPushButton("➤", m_replyBarWidget);
+    m_replySendBtn->setCursor(Qt::PointingHandCursor);
+    m_replySendBtn->setToolTip("发送回复 (Enter)");
+    m_replySendBtn->setStyleSheet(
+        "QPushButton {"
+        "  background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #6366f1, stop:1 #8b5cf6);"
+        "  color: white;"
+        "  font-size: 13px;"
+        "  font-weight: bold;"
+        "  border: none;"
+        "  border-radius: 13px;"
+        "  min-width: 26px;"
+        "  max-width: 26px;"
+        "  min-height: 26px;"
+        "  max-height: 26px;"
+        "  padding: 0px;"
+        "}"
+        "QPushButton:hover {"
+        "  background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #4f46e5, stop:1 #7c3aed);"
+        "}"
+        "QPushButton:pressed {"
+        "  background: #4338ca;"
+        "}"
+    );
+
+    replyLayout->addWidget(m_replyInput);
+    replyLayout->addWidget(m_replySendBtn);
+    mainLayout->addWidget(m_replyBarWidget);
+    m_replyBarWidget->hide();
+
+    auto submitReply = [this]() {
+        QString text = m_replyInput->text().trimmed();
+        if (text.isEmpty()) return;
+        m_replyInput->clear();
+        m_replyBarWidget->hide();
+        if (onReplySubmitted) {
+            onReplySubmitted(m_text, text);
+        }
+    };
+
+    connect(m_replyInput, &QLineEdit::returnPressed, this, submitReply);
+    connect(m_replySendBtn, &QPushButton::clicked, this, submitReply);
+
+    connect(m_replyInput, &QLineEdit::textChanged, this, [this](const QString &t) {
+        if (!t.isEmpty() && !m_isCountdownPaused) {
+            m_isCountdownPaused = true;
+            updateCountdownDisplay();
+        }
+    });
 
     // 事件绑定
     static_cast<IconCardButton*>(m_openAppBtn)->onClicked = [this]() {
@@ -503,8 +629,26 @@ MessageBubble::MessageBubble(QWidget *parent)
     if (m_openAppBtn) m_openAppBtn->installEventFilter(this);
     if (m_historyBtn) m_historyBtn->installEventFilter(this);
     if (m_copyBtn) m_copyBtn->installEventFilter(this);
-    if (m_countdownLabel) m_countdownLabel->installEventFilter(this);
-    if (m_closeBtn) m_closeBtn->installEventFilter(this);
+    if (m_countdownLabel) {
+        m_countdownLabel->installEventFilter(this);
+        m_countdownLabel->setMouseTracking(true);
+    }
+    if (m_closeBtn) {
+        m_closeBtn->installEventFilter(this);
+        m_closeBtn->setMouseTracking(true);
+    }
+    if (m_replyBarWidget) {
+        m_replyBarWidget->installEventFilter(this);
+        m_replyBarWidget->setMouseTracking(true);
+    }
+    if (m_replyInput) {
+        m_replyInput->installEventFilter(this);
+        m_replyInput->setMouseTracking(true);
+    }
+    if (m_replySendBtn) {
+        m_replySendBtn->installEventFilter(this);
+        m_replySendBtn->setMouseTracking(true);
+    }
 
     m_hideTimer = new QTimer(this);
     m_hideTimer->setSingleShot(true);
@@ -569,7 +713,7 @@ void MessageBubble::openAppTarget()
 }
 
 
-void MessageBubble::showMessage(QString const& text, int duration, QString const& appTarget, bool forceCompact)
+void MessageBubble::showMessage(QString const& text, int duration, QString const& appTarget, bool forceCompact, bool allowReply)
 {
     m_text = normalizeMarkdownText(text);
     m_lastDuration = duration;
@@ -578,6 +722,19 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
     if (m_text.isEmpty()) {
         hide();
         return;
+    }
+
+    bool isQuestion = m_text.contains('?') || m_text.contains(QString::fromUtf8("？")) ||
+                      m_text.contains("呢") || m_text.contains("吗") || m_text.contains("如何") ||
+                      m_text.contains("什么") || m_text.contains("几点") || m_text.contains("怎样");
+    bool showReplyInput = (allowReply || isQuestion) && !m_text.contains("vocab://") && !m_text.startsWith("🤖 **定时任务");
+    m_hasReplyBar = showReplyInput;
+
+    if (showReplyInput) {
+        m_replyBarWidget->show();
+        m_replyInput->clear();
+    } else {
+        m_replyBarWidget->hide();
     }
 
     // 关键优化：日常主动发话、闲聊、系统短句、动作交互一律使用轻量简洁好看的萌系胶囊小气泡！
@@ -591,9 +748,11 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
         bool hasHeader = m_text.startsWith("# ") || m_text.contains("\n# ") ||
                          m_text.startsWith("## ") || m_text.contains("\n## ");
         bool hasAppAction = !m_appTarget.isEmpty();
+        bool hasVocab = m_text.contains("vocab://");
+        bool hasMultiLineStructure = (m_text.count('\n') >= 3 && (m_text.contains("• ") || m_text.contains("- ") || m_text.contains("👉 ")));
         bool isVeryLong = m_text.length() > 220;
 
-        hasMarkdown = hasCodeBlock || hasTable || hasHeader || hasAppAction || isVeryLong;
+        hasMarkdown = hasCodeBlock || hasTable || hasHeader || hasAppAction || hasVocab || hasMultiLineStructure || isVeryLong;
     }
 
     m_isCompactCuteMode = !hasMarkdown;
@@ -630,21 +789,28 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
 
         int bubbleWidth = 0;
         int bubbleHeight = 0;
+        int controlsRightMargin = (duration > 0) ? 95 : 36;
 
         if (textWidth <= 340 && !m_text.contains('\n')) {
-            bubbleWidth = std::clamp(textWidth + 52, 130, 420);
+            bubbleWidth = std::clamp(textWidth + 48 + controlsRightMargin, 160, 520);
             bubbleHeight = 48;
-            m_textBrowser->document()->setTextWidth(-1);
-            m_textBrowser->setFixedWidth(bubbleWidth - 28);
+            int innerW = bubbleWidth - 28 - controlsRightMargin;
+            m_textBrowser->setFixedWidth(innerW);
+            m_textBrowser->document()->setTextWidth(innerW);
             m_textBrowser->setFixedHeight(bubbleHeight - 16);
         } else {
-            bubbleWidth = std::clamp(std::min(textWidth + 52, 420), 200, 420);
-            int innerW = bubbleWidth - 28;
+            bubbleWidth = std::clamp(std::min(textWidth + 48 + controlsRightMargin, 520), 220, 520);
+            int innerW = bubbleWidth - 28 - controlsRightMargin;
             m_textBrowser->setFixedWidth(innerW);
             m_textBrowser->document()->setTextWidth(innerW);
             int docH = static_cast<int>(std::ceil(m_textBrowser->document()->size().height()));
             bubbleHeight = std::clamp(docH + 26, 52, 180);
             m_textBrowser->setFixedHeight(bubbleHeight - 18);
+        }
+
+        if (showReplyInput) {
+            bubbleHeight += 44;
+            bubbleWidth = std::clamp(std::max(bubbleWidth, 360), 360, 520);
         }
 
         setFixedSize(bubbleWidth, bubbleHeight);
@@ -685,8 +851,12 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
         int docHeight = static_cast<int>(std::ceil(m_textBrowser->document()->size().height()));
         int bubbleHeight = std::clamp(docHeight + 84, 120, 580);
 
+        if (showReplyInput) {
+            bubbleHeight += 44;
+        }
+
         setFixedSize(bubbleWidth, bubbleHeight);
-        m_textBrowser->setFixedHeight(bubbleHeight - 50);
+        m_textBrowser->setFixedHeight(bubbleHeight - 50 - (showReplyInput ? 44 : 0));
     }
 
     // 自动记录重要任务到历史任务管理器 (仅记录真实任务与问答，不收录桌宠主动闲聊/互动)
@@ -706,18 +876,21 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
     show();
     update();
 
+    m_closeBtn->show();
+    m_closeBtn->raise();
+
     if (duration > 0) {
         m_remainingSeconds = std::max(1, (int)std::ceil(duration / 1000.0));
         m_isCountdownPaused = false;
+        m_countdownLabel->show();
+        m_countdownLabel->raise();
         updateCountdownDisplay();
-        if (!m_isCompactCuteMode && m_countdownLabel) {
-            m_countdownLabel->show();
-        }
         m_countdownTimer->start(1000);
     } else {
         if (m_countdownLabel) m_countdownLabel->hide();
         m_countdownTimer->stop();
     }
+    updateControlsPosition();
 }
 
 void MessageBubble::updateCountdownDisplay()
@@ -727,12 +900,12 @@ void MessageBubble::updateCountdownDisplay()
         m_countdownLabel->setText(QString("⏸ %1s").arg(m_remainingSeconds));
         m_countdownLabel->setStyleSheet(
             "QLabel {"
-            "  background-color: #fef3c7;"
+            "  background-color: rgba(254, 243, 199, 0.95);"
             "  color: #d97706;"
             "  font-size: 11px;"
             "  font-weight: 600;"
-            "  padding: 4px 8px;"
-            "  border-radius: 10px;"
+            "  padding: 3px 8px;"
+            "  border-radius: 11px;"
             "  border: 1px solid #fde68a;"
             "}"
         );
@@ -740,15 +913,67 @@ void MessageBubble::updateCountdownDisplay()
         m_countdownLabel->setText(QString("⏱️ %1s").arg(m_remainingSeconds));
         m_countdownLabel->setStyleSheet(
             "QLabel {"
-            "  background-color: #f1f5f9;"
-            "  color: #64748b;"
+            "  background-color: rgba(241, 245, 249, 0.85);"
+            "  color: #475569;"
             "  font-size: 11px;"
             "  font-weight: 600;"
-            "  padding: 4px 8px;"
-            "  border-radius: 10px;"
-            "  border: 1px solid #e2e8f0;"
+            "  padding: 3px 8px;"
+            "  border-radius: 11px;"
+            "  border: 1px solid rgba(203, 213, 225, 0.8);"
             "}"
         );
+    }
+    updateControlsPosition();
+}
+
+void MessageBubble::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    updateControlsPosition();
+}
+
+void MessageBubble::updateControlsPosition()
+{
+    if (!m_closeBtn) return;
+
+    int bubbleWidth = width();
+    int bubbleHeight = height();
+
+    if (m_isCompactCuteMode) {
+        int closeW = 22;
+        int closeH = 22;
+        int closeY = (bubbleHeight <= 54) ? (bubbleHeight - closeH) / 2 : 12;
+        int closeX = bubbleWidth - 14 - closeW;
+
+        m_closeBtn->setGeometry(closeX, closeY, closeW, closeH);
+        m_closeBtn->raise();
+
+        if (m_countdownLabel && m_countdownLabel->isVisible()) {
+            m_countdownLabel->adjustSize();
+            int cdW = m_countdownLabel->width();
+            int cdH = 22;
+            int cdY = (bubbleHeight <= 54) ? (bubbleHeight - cdH) / 2 : 12;
+            int cdX = closeX - 6 - cdW;
+            m_countdownLabel->setGeometry(cdX, cdY, cdW, cdH);
+            m_countdownLabel->raise();
+        }
+    } else {
+        int closeW = 22;
+        int closeH = 22;
+        int closeX = bubbleWidth - 18 - closeW;
+        int closeY = 16;
+
+        m_closeBtn->setGeometry(closeX, closeY, closeW, closeH);
+        m_closeBtn->raise();
+
+        if (m_countdownLabel && m_countdownLabel->isVisible()) {
+            m_countdownLabel->adjustSize();
+            int cdW = m_countdownLabel->width();
+            int cdH = 22;
+            int cdX = closeX - 8 - cdW;
+            m_countdownLabel->setGeometry(cdX, closeY, cdW, cdH);
+            m_countdownLabel->raise();
+        }
     }
 }
 
@@ -777,6 +1002,10 @@ void MessageBubble::hideMessage()
     m_appTarget.clear();
     if (m_openAppBtn) m_openAppBtn->hide();
     if (m_countdownLabel) m_countdownLabel->hide();
+    if (m_closeBtn) m_closeBtn->hide();
+    if (m_replyBarWidget) m_replyBarWidget->hide();
+    if (m_replyInput) m_replyInput->clear();
+    m_hasReplyBar = false;
     if (m_hideTimer) m_hideTimer->stop();
     if (m_countdownTimer) m_countdownTimer->stop();
     hide();
@@ -801,12 +1030,16 @@ void MessageBubble::showHistoryDialog()
 
 bool MessageBubble::eventFilter(QObject *watched, QEvent *event)
 {
-    (void)watched;
     if (event->type() == QEvent::Enter || 
         event->type() == QEvent::HoverEnter || 
-        event->type() == QEvent::MouseMove ||
-        event->type() == QEvent::MouseButtonPress) {
+        event->type() == QEvent::MouseMove) {
         setHovered(true);
+    } else if (event->type() == QEvent::MouseButtonPress) {
+        setHovered(true);
+        if (watched == m_replyInput || watched == m_replyBarWidget) {
+            this->activateWindow();
+            m_replyInput->setFocus(Qt::MouseFocusReason);
+        }
     } else if (event->type() == QEvent::Leave || event->type() == QEvent::HoverLeave) {
         // 检查鼠标是否完全离开当前气泡全局区域
         QPoint globalMousePos = QCursor::pos();
@@ -816,6 +1049,12 @@ bool MessageBubble::eventFilter(QObject *watched, QEvent *event)
         }
     }
     return false;
+}
+
+void MessageBubble::mousePressEvent(QMouseEvent *event)
+{
+    this->activateWindow();
+    QWidget::mousePressEvent(event);
 }
 
 void MessageBubble::enterEvent(QEnterEvent *)
@@ -881,27 +1120,32 @@ void MessageBubble::paintEvent(QPaintEvent *)
             painter.fillPath(shadowPath, QColor(139, 92, 246, 3 * i));
         }
 
-        // 2. 润泽晶莹珍珠白底色
+        int opacityPercent = SettingsDb::instance()->getInt("ui.bubble_opacity", 78);
+        int alphaTop = std::clamp(opacityPercent * 255 / 100, 60, 255);
+        int alphaMid = std::clamp((opacityPercent - 4) * 255 / 100, 50, 255);
+        int alphaBot = std::clamp((opacityPercent - 8) * 255 / 100, 40, 255);
+
+        // 2. 润泽晶莹珍珠白底色 (通透毛玻璃效果)
         QLinearGradient bgGrad(0, 0, 0, bubbleHeight);
-        bgGrad.setColorAt(0.0, QColor(255, 255, 255, 255));
-        bgGrad.setColorAt(0.55, QColor(253, 252, 255, 252));
-        bgGrad.setColorAt(1.0, QColor(246, 248, 255, 250));
+        bgGrad.setColorAt(0.0, QColor(255, 255, 255, alphaTop));
+        bgGrad.setColorAt(0.55, QColor(253, 252, 255, alphaMid));
+        bgGrad.setColorAt(1.0, QColor(246, 248, 255, alphaBot));
         painter.fillPath(path, bgGrad);
 
         // 3. 顶部微米级高光反光层
         QPainterPath topHighlight;
         topHighlight.addRoundedRect(1.5, 1.5, bubbleWidth - 3, std::min(14, bubbleHeight / 3), radius, radius);
         QLinearGradient highlightGrad(0, 1.5, 0, 14);
-        highlightGrad.setColorAt(0.0, QColor(255, 255, 255, 240));
+        highlightGrad.setColorAt(0.0, QColor(255, 255, 255, alphaTop * 160 / 255));
         highlightGrad.setColorAt(1.0, QColor(255, 255, 255, 0));
         painter.fillPath(topHighlight, highlightGrad);
 
-        // 4. 大胆惊艳的极光霓虹渐变边框 (靛蓝 -> 梦幻紫 -> 樱花粉)
+        // 4. 大胆惊艳的极光霓虹渐变边框 (靛蓝 -> 梦幻紫 -> 樱花粉，透光柔和)
         QLinearGradient borderGrad(0, 0, bubbleWidth, bubbleHeight);
-        borderGrad.setColorAt(0.0, QColor(99, 102, 241, 240));  // Electric Indigo
-        borderGrad.setColorAt(0.5, QColor(168, 85, 247, 240));  // Lavender
-        borderGrad.setColorAt(1.0, QColor(244, 114, 182, 240)); // Sakura Pink
-        painter.setPen(QPen(borderGrad, 1.8)); // 鲜明 1.8px 极光边框
+        borderGrad.setColorAt(0.0, QColor(99, 102, 241, std::clamp(alphaTop + 20, 80, 240)));  // Electric Indigo
+        borderGrad.setColorAt(0.5, QColor(168, 85, 247, std::clamp(alphaTop + 20, 80, 240)));  // Lavender
+        borderGrad.setColorAt(1.0, QColor(244, 114, 182, std::clamp(alphaTop + 20, 80, 240))); // Sakura Pink
+        painter.setPen(QPen(borderGrad, 1.6)); // 鲜明 1.6px 极光微透边框
         painter.drawPath(path);
     } else {
         // === 专业通知卡片 (用于 Markdown / 表格 / 长文本 / 任务通知) ===
@@ -933,22 +1177,27 @@ void MessageBubble::paintEvent(QPaintEvent *)
             painter.fillPath(shadowPath, QColor(15, 23, 42, 2.5 * i));
         }
 
-        // 2. 润泽晶莹白底色
+        int opacityPercent = SettingsDb::instance()->getInt("ui.bubble_opacity", 80);
+        int alphaTop = std::clamp(opacityPercent * 255 / 100, 60, 255);
+        int alphaMid = std::clamp((opacityPercent - 4) * 255 / 100, 50, 255);
+        int alphaBot = std::clamp((opacityPercent - 8) * 255 / 100, 40, 255);
+
+        // 2. 润泽晶莹白底色 (通透现代卡片)
         QLinearGradient bgGrad(0, 0, 0, bubbleHeight);
-        bgGrad.setColorAt(0.0, QColor(255, 255, 255, 255));
-        bgGrad.setColorAt(0.65, QColor(252, 253, 255, 252));
-        bgGrad.setColorAt(1.0, QColor(248, 250, 254, 250));
+        bgGrad.setColorAt(0.0, QColor(255, 255, 255, alphaTop));
+        bgGrad.setColorAt(0.65, QColor(252, 253, 255, alphaMid));
+        bgGrad.setColorAt(1.0, QColor(248, 250, 254, alphaBot));
         painter.fillPath(path, bgGrad);
 
         // 3. 顶部操作栏分隔微光细线
-        painter.setPen(QPen(QColor(241, 245, 249, 200), 1));
+        painter.setPen(QPen(QColor(241, 245, 249, alphaTop * 180 / 255), 1));
         painter.drawLine(18, 46, bubbleWidth - 18, 46);
 
         // 4. 极细柔和边框
         QLinearGradient borderGrad(0, 0, 0, bubbleHeight);
-        borderGrad.setColorAt(0.0, QColor(255, 255, 255, 245));
-        borderGrad.setColorAt(0.15, QColor(226, 232, 240, 210));
-        borderGrad.setColorAt(1.0, QColor(203, 213, 225, 180));
+        borderGrad.setColorAt(0.0, QColor(255, 255, 255, std::clamp(alphaTop + 25, 80, 245)));
+        borderGrad.setColorAt(0.15, QColor(226, 232, 240, std::clamp(alphaTop, 60, 210)));
+        borderGrad.setColorAt(1.0, QColor(203, 213, 225, std::clamp(alphaTop - 30, 40, 180)));
         painter.setPen(QPen(borderGrad, 1.2));
         painter.drawPath(path);
     }

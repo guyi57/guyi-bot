@@ -87,7 +87,7 @@ public:
     QString const& mascotName() {
         return m_data->name();
     }
-    void showMessage(QString const& text, int duration = 0, QString const& appTarget = "", bool moveToCenter = false, bool forceCompact = false);
+    void showMessage(QString const& text, int duration = 0, QString const& appTarget = "", bool moveToCenter = false, bool forceCompact = false, bool forceImmediate = false, bool allowReply = false);
     void hideMessage();
 
     // 执行高阶动作指令
@@ -103,6 +103,7 @@ public:
     void showTranslateDialog(QString const& text = "");
     void onAskRequested(QString const& text);
     void onQuestionSubmitted(QString const& context, QString const& question);
+    void handleUserBubbleReply(const QString &question, const QString &replyText);
     void showMessageHistory();
     void showTimerManager();
     void setWaitingForAgent(bool waiting);
@@ -119,11 +120,13 @@ public:
         QString appTarget;
         bool moveToCenter = false;
         bool forceCompact = false;
+        bool allowReply = false;
         std::function<void()> onStart;
     };
 
-    void queueOrShowMessage(const QString &text, int duration = 0, const QString &appTarget = "", bool moveToCenter = false, std::function<void()> onStart = nullptr, bool forceCompact = false);
+    void queueOrShowMessage(const QString &text, int duration = 0, const QString &appTarget = "", bool moveToCenter = false, std::function<void()> onStart = nullptr, bool forceCompact = false, bool forceImmediate = false, bool allowReply = false);
     void processNextQueuedMessage();
+    void clearMessageQueue() { m_bubbleQueue.clear(); }
     void handlePatrolInterruption(const QString &interruptType, const QString &customDetail = "");
 
     ~ShijimaWidget();
@@ -192,6 +195,7 @@ private:
     QPoint m_lastMousePos;
     QPoint m_dragStartGlobalPos;
     qint64 m_lastMouseMoveTime = 0;
+    qint64 m_lastDragTickTime = 0;
     qint64 m_lastInteractionAITime = 0;
     double m_dragVelocityX = 0.0;
     double m_dragVelocityY = 0.0;
@@ -199,6 +203,8 @@ private:
     double m_throwVx = 0.0;
     double m_throwVy = 0.0;
     bool m_isThrowFlying = false;
+    bool m_isDragStarted = false;
+    QPointF m_dragGrabOffset;
 
     // 动作意图打断与小脾气感知
     enum class PetInterruptedGoal { None, ClimbingCeiling, JumpingWindow, StandingOnWindow, Breeding, RunningFast };

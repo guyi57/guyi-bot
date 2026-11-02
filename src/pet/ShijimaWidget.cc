@@ -38,6 +38,7 @@
 #include "SelectionToolbar.hpp"
 #include "AskDialog.hpp"
 #include "AgentService.hpp"
+#include "LongTermMemoryEngine.hpp"
 #include "AgentSettingsDialog.hpp"
 #include "FileDisposalSequence.hpp"
 #include <QDragEnterEvent>
@@ -112,6 +113,9 @@ ShijimaWidget::ShijimaWidget(MascotData *mascotData,
             // 当用户鼠标悬停在消息弹窗上阅读时，让桌宠原地安静坐下或面对鼠标，绝不上蹿下跳
             trySetBehavior("SitAndFaceMouse") || trySetBehavior("SitDown");
         }
+    };
+    m_messageBubble->onReplySubmitted = [this](const QString &question, const QString &replyText) {
+        handleUserBubbleReply(question, replyText);
     };
     m_selectionToolbar = new SelectionToolbar(m_windowedMode ? parent : nullptr);
     m_askDialog = new AskDialog(m_windowedMode ? parent : nullptr);
@@ -244,7 +248,10 @@ void ShijimaWidget::paintEvent(QPaintEvent *event) {
     painter.save();
     painter.translate(footAnchor.x(), footAnchor.y() + m_motion.bobOffset());
     painter.rotate(m_motion.swayAngle());
-    painter.scale(m_motion.scaleX(), m_motion.scaleY());
+    // 保持 1:1 像素精度，彻底杜绝人偶被拉伸或压扁变形
+    if (std::abs(m_motion.scaleX() - 1.0f) > 0.15f || std::abs(m_motion.scaleY() - 1.0f) > 0.15f) {
+        painter.scale(m_motion.scaleX(), m_motion.scaleY());
+    }
     painter.translate(-footAnchor.x(), -footAnchor.y());
 
     painter.drawImage(QRect { m_drawOrigin, scaledSize }, image);
@@ -585,6 +592,21 @@ void ShijimaWidget::tick() {
         }
     }
 
+    // 弹提示与气泡展示期间，抑制跑动/走动/攀爬/起跳，强制保持原地安静姿态
+    if (m_messageBubble && m_messageBubble->isDisplaying() && m_mascot && m_mascot->state) {
+        QString beh = currentBehaviorName();
+        if (beh.contains("Run", Qt::CaseInsensitive) ||
+            beh.contains("Walk", Qt::CaseInsensitive) ||
+            beh.contains("Climb", Qt::CaseInsensitive) ||
+            beh.contains("Jump", Qt::CaseInsensitive)) {
+            if (!trySetBehavior("SitAndFaceMouse")) {
+                if (!trySetBehavior("SitDown")) {
+                    trySetBehavior("StandUp");
+                }
+            }
+        }
+    }
+
     auto prev_frame = m_mascot->state->active_frame;
     try {
         m_mascot->tick();
@@ -593,6 +615,21 @@ void ShijimaWidget::tick() {
         m_mascot->reset_position();
         m_mascot->detach_from_borders();
         m_mascot->next_behavior("Fall");
+    }
+
+    // tick 之后若触发新行为转移为移动行为，在气泡展示期间同样立即重置为坐下静止
+    if (m_messageBubble && m_messageBubble->isDisplaying() && m_mascot && m_mascot->state) {
+        QString beh = currentBehaviorName();
+        if (beh.contains("Run", Qt::CaseInsensitive) ||
+            beh.contains("Walk", Qt::CaseInsensitive) ||
+            beh.contains("Climb", Qt::CaseInsensitive) ||
+            beh.contains("Jump", Qt::CaseInsensitive)) {
+            if (!trySetBehavior("SitAndFaceMouse")) {
+                if (!trySetBehavior("SitDown")) {
+                    trySetBehavior("StandUp");
+                }
+            }
+        }
     }
 
     checkWindowVanished();
@@ -619,10 +656,7 @@ void ShijimaWidget::tick() {
                     m_isRunningToCenter || m_isThrowFlying;
     bool isOnWindow = m_wasOnWindow;
 
-    // 落地瞬间弹性挤压检测
-    if (m_lastWasFalling && !isFalling) {
-        m_motion.triggerSquash(1.14f, 0.86f);
-    }
+    // 落地状态追踪 (使用原画自带的 Bouncing 动画，不使用全局矩阵非等比挤压，避免像素画变形)
     m_lastWasFalling = isFalling;
 
     // 音乐伴奏联动：如果在窗口顶栏听歌，触发晃腿动作
@@ -777,13 +811,19 @@ void ShijimaWidget::mousePressEvent(QMouseEvent *event) {
             m_dragTarget->m_throwPhysicsTimer->stop();
         }
         m_dragTarget->m_isThrowFlying = false;
-        m_dragTarget->m_motion.triggerStretch(0.92f, 1.10f);
         m_dragTarget->m_mascot->state->dragging = true;
         m_dragTarget->m_lastMousePos = event->globalPosition().toPoint();
         m_dragTarget->m_dragStartGlobalPos = event->globalPosition().toPoint();
         m_dragTarget->m_lastMouseMoveTime = QDateTime::currentMSecsSinceEpoch();
         m_dragTarget->m_dragVelocityX = 0.0;
         m_dragTarget->m_dragVelocityY = 0.0;
+        m_dragTarget->m_isDragStarted = false;
+
+        // 精准抓取偏移采样：锁定鼠标与桌宠身体的物理相对位置，实现绝对 1:1 零延迟贴手
+        m_dragTarget->m_dragGrabOffset = QPointF(
+            event->globalPosition().x() - m_dragTarget->m_mascot->state->anchor.x,
+            event->globalPosition().y() - m_dragTarget->m_mascot->state->anchor.y
+        );
 
         // 捕获拖拽前正在执行的意图（如正在爬顶、扑窗口等）
         m_dragTarget->m_interruptedGoal = m_dragTarget->detectCurrentGoal();
@@ -807,16 +847,20 @@ void ShijimaWidget::mouseMoveEvent(QMouseEvent *event) {
         return;
     }
 
-    // 摸头抚摸手势采样 (在头部区域轻抚)
-    QRect headRect(m_drawOrigin.x(), m_drawOrigin.y(), m_windowWidth, static_cast<int>(m_windowHeight * 0.45));
-    QPoint localPos = event->pos();
-    bool isMouseDown = (event->buttons() & Qt::LeftButton);
-    if (m_dragTarget->m_motion.handlePettingSample(localPos, isMouseDown, headRect)) {
-        BehaviorEngine::instance()->addAffection(1, 1);
-        update();
+    QPoint curPos = event->globalPosition().toPoint();
+    int distFromStart = (curPos - m_dragTarget->m_dragStartGlobalPos).manhattanLength();
+
+    // 仅在极微小位移 (< 15px) 且未进入正式拖拽时作为摸头手势采样
+    if (distFromStart < 15 && !m_dragTarget->m_isDragStarted) {
+        QRect headRect(m_drawOrigin.x(), m_drawOrigin.y(), m_windowWidth, static_cast<int>(m_windowHeight * 0.45));
+        QPoint localPos = event->pos();
+        bool isMouseDown = (event->buttons() & Qt::LeftButton);
+        if (m_dragTarget->m_motion.handlePettingSample(localPos, isMouseDown, headRect)) {
+            BehaviorEngine::instance()->addAffection(1, 1);
+            update();
+        }
     }
 
-    QPoint curPos = event->globalPosition().toPoint();
     qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (m_dragTarget->m_lastMouseMoveTime > 0) {
         qint64 dt = now - m_dragTarget->m_lastMouseMoveTime;
@@ -830,6 +874,29 @@ void ShijimaWidget::mouseMoveEvent(QMouseEvent *event) {
     }
     m_dragTarget->m_lastMousePos = curPos;
     m_dragTarget->m_lastMouseMoveTime = now;
+
+    // 当用户正在拖拽时：
+    if (m_dragTarget->m_mascot->state->dragging) {
+        // 位移 >= 8px 明确开始拎起，仅设置一次 Dragged 动作，绝不每帧重复触发 reset 导致卡顿
+        if (distFromStart >= 8 && !m_dragTarget->m_isDragStarted) {
+            m_dragTarget->m_isDragStarted = true;
+            m_dragTarget->m_mascot->next_behavior("Dragged");
+        }
+
+        // 极速 1:1 跟手物理同步：
+        // 直接将桌宠 anchor 绝对锁定至当前鼠标位置减去抓取时的相对偏移
+        auto env = m_dragTarget->m_mascot->state->env;
+        if (env) {
+            m_dragTarget->m_mascot->state->anchor.x = curPos.x() - m_dragTarget->m_dragGrabOffset.x();
+            m_dragTarget->m_mascot->state->anchor.y = curPos.y() - m_dragTarget->m_dragGrabOffset.y();
+            env->cursor.x = curPos.x();
+            env->cursor.y = curPos.y();
+        }
+
+        // 瞬时更新桌宠窗口物理位置并重绘（不调 tick 避免与主循环并发碰撞和动画超速）
+        m_dragTarget->updateOffsets();
+        m_dragTarget->repaint();
+    }
 }
 
 void ShijimaWidget::closeAction() {
@@ -842,12 +909,15 @@ void ShijimaWidget::mouseReleaseEvent(QMouseEvent *event) {
     }
     if (event->button() == Qt::MouseButton::LeftButton) {
         m_dragTarget->m_mascot->state->dragging = false;
+        m_dragTarget->m_isDragStarted = false;
 
-        // 如果刚刚经历了摸头互动，触发开心爱心贴纸、弹跳形变与治愈互动台词
-        if (m_dragTarget->m_motion.isPetting()) {
+        QPoint releasePos = event->globalPosition().toPoint();
+        int dragDist = (releasePos - m_dragTarget->m_dragStartGlobalPos).manhattanLength();
+
+        // 1. 抚摸摸头互动结算 (位移很小且进入了摸头状态)
+        if (m_dragTarget->m_motion.isPetting() && dragDist < 25) {
             m_dragTarget->m_motion.triggerEmote(PetEmoteType::HappyHeart, 2.8f);
             m_dragTarget->m_motion.spawnHeart(QPointF(0, -25.0f));
-            m_dragTarget->m_motion.triggerStretch(0.92f, 1.15f);
             BehaviorEngine::instance()->addAffection(3, 8);
             PetDiaryManager::instance()->recordPetting();
 
@@ -859,21 +929,50 @@ void ShijimaWidget::mouseReleaseEvent(QMouseEvent *event) {
                 "嘿嘿，收到主人的摸头能量！充满电啦 ⚡"
             };
             int qIdx = QRandomGenerator::global()->bounded(static_cast<int>(petQuotes.size()));
+            m_dragTarget->clearMessageQueue();
             m_dragTarget->showMessage(petQuotes[qIdx], 3500);
-        } else {
-            m_dragTarget->m_motion.triggerSquash(1.12f, 0.88f);
+
+            // 摸头后轻巧坐下面对鼠标，绝不卡死
+            m_dragTarget->trySetBehavior("SitAndFaceMouse");
+            m_dragTarget->handlePatrolInterruption("petting");
+            setDragTarget(nullptr);
+            return;
         }
 
-        // 记录用户互动时间（重置心情衰减）
+        // 2. 纯点击交互 (Click / Poke，位移极小，没有拖动)
+        if (dragDist < 10) {
+            BehaviorEngine::instance()->recordUserInteraction();
+            BehaviorEngine::instance()->addAffection(1, 2);
+
+            QJsonObject payload;
+            payload["mascot_id"] = m_dragTarget->mascotId();
+            PetEventBus::instance()->emitEvent("user.click_pet", payload);
+
+            // 点击即时生动反馈：绝不卡在 SitDown！
+            // 随机做生动的短动作交互 (傲娇晃头、转头看鼠标、原地站起或轻快弹跳站稳)
+            static const std::vector<std::string> clickBehaviors = {
+                "SitAndSpinHead", "SitAndFaceMouse", "StandUp", "Bouncing"
+            };
+            int bIdx = QRandomGenerator::global()->bounded(static_cast<int>(clickBehaviors.size()));
+            if (!m_dragTarget->trySetBehavior(clickBehaviors[bIdx])) {
+                m_dragTarget->trySetBehavior("SitAndFaceMouse") || m_dragTarget->trySetBehavior("StandUp");
+            }
+            m_dragTarget->m_motion.triggerEmote(PetEmoteType::Sparkle, 1.8f);
+
+            m_dragTarget->handlePatrolInterruption("poke");
+            m_dragTarget->m_interruptedGoal = PetInterruptedGoal::None;
+            setDragTarget(nullptr);
+            return;
+        }
+
+        // 3. 拖拽释放 (用户拎起来移动后放下)
         BehaviorEngine::instance()->recordUserInteraction();
+        BehaviorEngine::instance()->addAffection(2, 5);
 
         // 判定用户是否在快速甩动手势中松手 (必须在最近 90ms 内有连续位移，且速度标量 >= 6.0)
         qint64 now = QDateTime::currentMSecsSinceEpoch();
         bool hasRecentFlick = (m_dragTarget->m_lastMouseMoveTime > 0 && (now - m_dragTarget->m_lastMouseMoveTime) < 90);
         double throwSpeed = hasRecentFlick ? std::hypot(m_dragTarget->m_dragVelocityX, m_dragTarget->m_dragVelocityY) : 0.0;
-
-        // 平稳放下或快速甩出均增加互动亲密度
-        BehaviorEngine::instance()->addAffection(2, 5);
 
         // 仅当用户明确快速甩手丢出 (throwSpeed >= 6.0) 时启动抛物线飞行
         if (throwSpeed >= 6.0) {
@@ -890,22 +989,28 @@ void ShijimaWidget::mouseReleaseEvent(QMouseEvent *event) {
                 m_dragTarget->m_throwPhysicsTimer->stop();
             }
 
-            // 平稳着陆吸附或原地笔直下落，绝不横向乱跳
+            // 平稳着陆吸附或自然下落弹跳站稳
             m_dragTarget->snapToNearestBorderOrWindow();
 
             QJsonObject payload;
             payload["mascot_id"] = m_dragTarget->mascotId();
-            PetEventBus::instance()->emitEvent("user.click_pet", payload);
+            PetEventBus::instance()->emitEvent("user.drag_pet", payload);
 
-            // 区分摸头、挪动搬家与轻戳点击，交由大模型结合当前心情与可用动作进行决策
-            int dragDist = (event->globalPosition().toPoint() - m_dragTarget->m_dragStartGlobalPos).manhattanLength();
-            if (m_dragTarget->m_motion.isPetting()) {
-                m_dragTarget->handlePatrolInterruption("petting");
-            } else if (dragDist > 60) {
-                m_dragTarget->handlePatrolInterruption("relocate");
-            } else {
-                m_dragTarget->handlePatrolInterruption("poke");
-            }
+            // 关键：拖拽放下后 0 延迟即时反馈！清空残留排队队列并瞬时弹出萌趣台词
+            static const QStringList dropQuotes = {
+                "呼~ 落地啦！小短腿站稳稳~ 🐾",
+                "搬家完成！新视野好开阔呀 ✨",
+                "被拎在半空中晃来晃去，好晕好刺激 🌀",
+                "脚踏实地的感觉最安心啦！(≧▽≦)",
+                "安全着陆！主人挑的新位置真不错 🌸",
+                "原地立正！继续巡逻守护主人 🫡"
+            };
+            int qIdx = QRandomGenerator::global()->bounded(static_cast<int>(dropQuotes.size()));
+            m_dragTarget->clearMessageQueue();
+            m_dragTarget->showMessage(dropQuotes[qIdx], 3200);
+
+            // 异步触发巡逻意图更新，完全不阻塞当前气泡呈现
+            m_dragTarget->handlePatrolInterruption("relocate");
             m_dragTarget->m_interruptedGoal = PetInterruptedGoal::None;
         }
 
@@ -1086,10 +1191,12 @@ void ShijimaWidget::snapToNearestBorderOrWindow() {
     auto env = m_mascot->state->env;
     auto &anchor = m_mascot->state->anchor;
 
-    // 1. 如果放置在地面附近 (距离地面 <= 35px) -> 稳稳立在当前释放点的地面上坐下
+    // 1. 如果放置在地面附近 (距离地面 <= 35px) -> 落地站稳并恢复自然漫步
     if (anchor.y >= (env->floor.y - 35.0)) {
         anchor.y = env->floor.y;
-        m_mascot->next_behavior("SitDown");
+        if (!trySetBehavior("StandUp") && !trySetBehavior("WalkAlongWorkAreaFloor")) {
+            m_mascot->next_behavior("SitDown");
+        }
         updateOffsets();
         update();
         return;
@@ -1156,7 +1263,7 @@ void ShijimaWidget::snapToNearestBorderOrWindow() {
         return;
     }
 
-    // 5. 其他任何空中位置：原地笔直自然掉落，绝不横向吸附或跳跃！
+    // 5. 其他任何空中位置：原地笔直自然掉落，触地后自动着陆
     m_mascot->next_behavior("Fall");
     updateOffsets();
     update();
@@ -1218,7 +1325,7 @@ bool ShijimaWidget::checkAndJumpToActiveIE() {
     return false;
 }
 
-void ShijimaWidget::queueOrShowMessage(const QString &text, int duration, const QString &appTarget, bool moveToCenter, std::function<void()> onStart, bool forceCompact) {
+void ShijimaWidget::queueOrShowMessage(const QString &text, int duration, const QString &appTarget, bool moveToCenter, std::function<void()> onStart, bool forceCompact, bool forceImmediate, bool allowReply) {
     (void)moveToCenter;
     if (m_messageBubble == nullptr || !m_mascot || !m_mascot->state || !m_mascot->state->env) {
         return;
@@ -1227,10 +1334,11 @@ void ShijimaWidget::queueOrShowMessage(const QString &text, int duration, const 
     // 关键防冲突队列保护机制：
     // 若当前气泡正在展示且倒计时仍在运行（用户正在阅读任务结果/交付/重要提醒），严禁粗暴打断！
     // 放入待播报队列排队，等待当前气泡自然阅读倒计时归零关闭后，优雅留白 2.2 秒再弹出。
-    if (m_messageBubble->isDisplaying() && m_messageBubble->isCountdownRunning()) {
+    // 但当指定 forceImmediate（如答题反馈、用户主动操作）时，立刻原地替换展示，不进入等待队列。
+    if (!forceImmediate && m_messageBubble->isDisplaying() && m_messageBubble->isCountdownRunning()) {
         std::cout << "[气泡防冲突队列] 检测到当前有正在阅读的弹窗 (剩余倒计时 " << m_messageBubble->remainingSeconds()
                   << "s)，新动作与消息已加入队列排队等待: " << text.left(25).toStdString() << std::endl;
-        m_bubbleQueue.enqueue({text, duration, appTarget, moveToCenter, forceCompact, onStart});
+        m_bubbleQueue.enqueue({text, duration, appTarget, moveToCenter, forceCompact, allowReply, onStart});
         return;
     }
 
@@ -1249,18 +1357,23 @@ void ShijimaWidget::queueOrShowMessage(const QString &text, int duration, const 
     // 设置当前发言桌宠为活跃对象
     BehaviorEngine::instance()->setActiveWidget(this);
 
-    // 说话时如果正在奔跑或走动，优先原地乖巧坐下或面对鼠标，避免一边说话一边在屏幕乱窜
+    // 说话弹提示时如果正在奔跑、走动、攀爬或起跳，强制原地乖巧坐下或面对鼠标，避免一边说话一边全屏乱跑
     if (m_mascot && m_mascot->state) {
         QString beh = currentBehaviorName();
         if (beh.contains("Run", Qt::CaseInsensitive) ||
             beh.contains("Walk", Qt::CaseInsensitive) ||
-            beh.contains("Climb", Qt::CaseInsensitive)) {
-            trySetBehavior("SitAndFaceMouse") || trySetBehavior("SitDown");
+            beh.contains("Climb", Qt::CaseInsensitive) ||
+            beh.contains("Jump", Qt::CaseInsensitive)) {
+            if (!trySetBehavior("SitAndFaceMouse")) {
+                if (!trySetBehavior("SitDown")) {
+                    trySetBehavior("StandUp");
+                }
+            }
         }
     }
 
     // 立即在当前桌宠头顶弹出气泡并计算贴合位置
-    m_messageBubble->showMessage(text, duration, appTarget, forceCompact);
+    m_messageBubble->showMessage(text, duration, appTarget, forceCompact, allowReply);
     updateOffsets();
 }
 
@@ -1286,17 +1399,22 @@ void ShijimaWidget::processNextQueuedMessage() {
             QString beh = currentBehaviorName();
             if (beh.contains("Run", Qt::CaseInsensitive) ||
                 beh.contains("Walk", Qt::CaseInsensitive) ||
-                beh.contains("Climb", Qt::CaseInsensitive)) {
-                trySetBehavior("SitAndFaceMouse") || trySetBehavior("SitDown");
+                beh.contains("Climb", Qt::CaseInsensitive) ||
+                beh.contains("Jump", Qt::CaseInsensitive)) {
+                if (!trySetBehavior("SitAndFaceMouse")) {
+                    if (!trySetBehavior("SitDown")) {
+                        trySetBehavior("StandUp");
+                    }
+                }
             }
         }
-        m_messageBubble->showMessage(item.text, item.duration, item.appTarget, item.forceCompact);
+        m_messageBubble->showMessage(item.text, item.duration, item.appTarget, item.forceCompact, item.allowReply);
         updateOffsets();
     });
 }
 
-void ShijimaWidget::showMessage(QString const& text, int duration, QString const& appTarget, bool moveToCenter, bool forceCompact) {
-    queueOrShowMessage(text, duration, appTarget, moveToCenter, nullptr, forceCompact);
+void ShijimaWidget::showMessage(QString const& text, int duration, QString const& appTarget, bool moveToCenter, bool forceCompact, bool forceImmediate, bool allowReply) {
+    queueOrShowMessage(text, duration, appTarget, moveToCenter, nullptr, forceCompact, forceImmediate, allowReply);
 }
 
 void ShijimaWidget::hideMessage() {
@@ -1324,7 +1442,7 @@ void ShijimaWidget::doAction(const PetActionCommand &cmd) {
 
     // 1. 如果有伴随的气泡文本，展示气泡（带 moveToCenter 控制）
     if (!cmd.speechText.isEmpty()) {
-        showMessage(cmd.speechText, cmd.durationMs > 0 ? cmd.durationMs : 4000, cmd.appTarget, cmd.moveToCenter);
+        showMessage(cmd.speechText, cmd.durationMs > 0 ? cmd.durationMs : 4000, cmd.appTarget, cmd.moveToCenter, false, cmd.forceImmediate, cmd.allowReply);
     }
 
     // 触发情绪贴纸与弹性动作
@@ -1398,7 +1516,12 @@ void ShijimaWidget::doAction(const PetActionCommand &cmd) {
             }
             break;
         case PetActionType::Talk:
-            // 仅说话，不强制打断当前移动/坐姿
+            // 说话弹提示时，如果当前在跑动，原地安静坐下面对鼠标
+            if (m_mascot && m_mascot->state) {
+                if (!trySetBehavior("SitAndFaceMouse")) {
+                    trySetBehavior("SitDown");
+                }
+            }
             break;
     }
 }
@@ -1478,6 +1601,68 @@ void ShijimaWidget::onQuestionSubmitted(QString const& context, QString const& q
                 petPtr->showMessage(result, 14000, appTarget, true);
             } else {
                 petPtr->showMessage("❌ " + result, 5000, appTarget, true);
+            }
+        });
+}
+
+void ShijimaWidget::handleUserBubbleReply(const QString &question, const QString &replyText) {
+    if (replyText.trimmed().isEmpty()) return;
+
+    std::cout << "[桌宠互动] 用户在气泡中直接回答桌宠提问: "
+              << "原提问=" << question.left(30).toStdString()
+              << ", 回答=" << replyText.toStdString() << std::endl;
+
+    // 1. 增加亲密度与心情
+    BehaviorEngine::instance()->addAffection(4, 10);
+
+    // 2. 状态反馈：桌宠显示思考状态
+    showMessage("💭 正在认真听你说...", 0, "", false, false, true, false);
+
+    // 3. 构建给 AgentService 的对话上下文
+    QString contextPrompt = QString(
+        "【桌面宠物刚才主动对主人说】\n%1\n\n"
+        "【主人刚刚给出的直接回答】\n%2"
+    ).arg(question, replyText);
+
+    QString lower = replyText.toLower();
+    bool mentionsResource = lower.contains("卡") || lower.contains("内存") || lower.contains("cpu") || 
+                           lower.contains("硬盘") || lower.contains("磁盘") || lower.contains("配置") ||
+                           lower.contains("资源") || lower.contains("硬件");
+    if (mentionsResource) {
+        SystemResourceStats stats = SystemObserver::instance()->getSystemResourceStats();
+        contextPrompt += QString("\n\n【系统实时资源占用情况】:\n%1\n（请务必结合上述实际硬件比例数据，生动关切地回答主人，切忌凭空臆想）").arg(stats.formattedSummary());
+    }
+
+    QString userQuery = "请以桌宠伴侣的生动口吻，针对主人的直接回答给出温暖、自然、简短（15~35字左右）的回应。如果回答中包含用户的个人喜好、习惯或状态，请在回应中表现出你已经记在心里了。";
+
+    QPointer<ShijimaWidget> petPtr(this);
+    AgentService::instance()->ask(contextPrompt, userQuery,
+        [petPtr](const QString &) {
+        },
+        [petPtr, question, replyText](bool success, const QString &result, const QString &appTarget) {
+            (void)appTarget;
+            if (!petPtr) return;
+            if (success) {
+                PetActionCommand cmd;
+                cmd.type = PetActionType::Talk;
+                cmd.speechText = result;
+                cmd.durationMs = 12000;
+                cmd.emote = PetEmoteType::HappyHeart;
+                cmd.forceImmediate = true;
+                cmd.allowReply = true; // 允许继续聊下去
+                petPtr->doAction(cmd);
+
+                // 异步反思并提炼为长期记忆 (记住主人的回答)
+                AgentConfig cfg = AgentService::instance()->config();
+                ModelProfile activeProfile = AgentService::instance()->getActiveProfile();
+                QString apiBase = !activeProfile.apiBase.isEmpty() ? activeProfile.apiBase : cfg.apiBase;
+                QString apiKey = !activeProfile.apiKey.isEmpty() ? activeProfile.apiKey : cfg.apiKey;
+                QString model = !activeProfile.model.isEmpty() ? activeProfile.model : cfg.model;
+
+                QString reflectionUserMsg = QString("桌宠问: %1 -> 主人答: %2").arg(question, replyText);
+                LongTermMemoryEngine::instance()->triggerAsyncReflection(reflectionUserMsg, result, apiBase, apiKey, model);
+            } else {
+                petPtr->showMessage("💖 收到啦！主人说的我都记在心里啦~", 5000, "", false, false, true, false);
             }
         });
 }
@@ -1644,6 +1829,8 @@ void ShijimaWidget::handlePatrolInterruption(const QString &interruptType, const
     petStateInfo["energy"] = state.energy;
     petStateInfo["current_app"] = SystemObserver::instance()->currentActiveAppName();
     petStateInfo["window_title"] = SystemObserver::instance()->currentActiveWindowTitle();
+    petStateInfo["document_path"] = SystemObserver::instance()->currentActiveDocumentPath();
+    petStateInfo["content_summary"] = SystemObserver::instance()->currentActiveContentSummary();
 
     QStringList allowedBehaviors = {
         "RunAlongWorkAreaFloor (在地面全速狂奔巡逻，充满活力或急躁赶路)",
@@ -1696,13 +1883,9 @@ void ShijimaWidget::handlePatrolInterruption(const QString &interruptType, const
                             safePet->m_motion.triggerEmote(PetEmoteType::SleepZzz, 2.5f);
                         }
 
-                        // 3. 微物理形变
+                        // 3. 伴随生动动作反馈 (绝不进行非等比拉伸变形，保护像素画质)
                         if (intent.action == "bounce" || intent.action == "jump") {
-                            safePet->m_motion.triggerStretch(0.92f, 1.15f);
-                        } else if (intent.action == "stretch") {
-                            safePet->m_motion.triggerStretch(0.88f, 1.22f);
-                        } else if (intent.action == "squash") {
-                            safePet->m_motion.triggerSquash(1.18f, 0.82f);
+                            safePet->m_motion.triggerEmote(PetEmoteType::Sparkle, 2.0f);
                         }
 
                         if (intent.blush) {

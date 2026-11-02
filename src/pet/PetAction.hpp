@@ -38,4 +38,6 @@ struct PetActionCommand {
     int affectionDelta = 0;     // 亲密度变动数值
     bool interruptible = true;  // 是否可被其他普通行为打断
     int priority = 0;           // 优先级（高优先级可打断低优先级）
+    bool forceImmediate = false; // 是否强行立刻替换当前气泡，不进入排队等待
+    bool allowReply = false;    // 是否在气泡底部提供直接回复输入框
 };

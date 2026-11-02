@@ -26,9 +26,12 @@ public:
 
 protected:
     void showEvent(QShowEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
 
 private:
     QString m_contextText;
+    QString m_droppedPath;
     QLabel *m_titleLabel;
     QComboBox *m_modelCombo = nullptr;
     QWidget *m_contextWidget = nullptr;

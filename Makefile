@@ -43,6 +43,7 @@ SOURCES = src/main.cc \
 	src/agent/AgentService.cc \
 	src/agent/FastTranslateService.cc \
 	src/agent/LongTermMemoryEngine.cc \
+	src/agent/VocabLearningEngine.cc \
 	src/agent/AipyAdapter.cc \
 	src/agent/PersonaManager.cc \
 	src/agent/SkillManager.cc \
@@ -216,6 +217,10 @@ publish/macOS/$(CONFIG)/$(TARGET).app: publish/macOS/$(CONFIG)
 	cp libshimejifinder/build/unarr/libunarr.1.dylib $@/Contents/MacOS/ 2>/dev/null || true
 	macdeployqt $@ || true
 	python3 scripts/fix_bundle_symlinks.py $@
+	mkdir -p $@/Contents/MacOS/scripts
+	cp -r scripts/compressor $@/Contents/MacOS/scripts/ 2>/dev/null || true
+	mkdir -p $@/Contents/Resources/res
+	cp -r res/* $@/Contents/Resources/res/ 2>/dev/null || true
 
 publish/Linux/$(CONFIG)/$(TARGET).AppImage: publish/Linux/$(CONFIG) linuxdeploy.AppImage
 	rm -rf AppDir

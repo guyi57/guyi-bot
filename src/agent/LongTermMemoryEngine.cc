@@ -3,6 +3,7 @@
 #include <sqlite3.h>
 #include <QDir>
 #include <QDateTime>
+#include <QRandomGenerator>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -153,9 +154,22 @@ void LongTermMemoryEngine::createTablesIfNeeded()
         ");";
     sqlite3_exec(db, createEventsSql, nullptr, nullptr, nullptr);
 
+    const char *createFollowupsSql =
+        "CREATE TABLE IF NOT EXISTS followup_events ("
+        "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  title TEXT,"
+        "  context TEXT,"
+        "  event_time INTEGER,"
+        "  status TEXT DEFAULT 'pending',"
+        "  created_at INTEGER"
+        ");";
+    sqlite3_exec(db, createFollowupsSql, nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "ALTER TABLE followup_events ADD COLUMN ask_count INTEGER DEFAULT 0;", nullptr, nullptr, nullptr);
+
     // 创建加速索引
     sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_mem_active ON semantic_memories(is_active, importance);", nullptr, nullptr, nullptr);
     sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_events_session ON episodic_events(session_id, timestamp);", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_followup_status ON followup_events(status, event_time);", nullptr, nullptr, nullptr);
 }
 
 void LongTermMemoryEngine::migrateLegacyData()
@@ -272,6 +286,10 @@ CoreUserProfile LongTermMemoryEngine::coreProfile()
             else if (key == "preferred_langs") p.preferredLangs = val;
             else if (key == "music_taste") p.musicTaste = val;
             else if (key == "work_habits") p.workHabits = val;
+            else if (key == "favorite_food") p.favoriteFood = val;
+            else if (key == "birthday") p.birthday = val;
+            else if (key == "current_project") p.currentProject = val;
+            else if (key == "hobbies") p.hobbies = val;
             else if (key == "notes") p.notes = val;
         }
         sqlite3_finalize(stmt);
@@ -306,6 +324,10 @@ void LongTermMemoryEngine::updateCoreProfile(const CoreUserProfile &profile)
         saveKey("preferred_langs", profile.preferredLangs);
         saveKey("music_taste", profile.musicTaste);
         saveKey("work_habits", profile.workHabits);
+        saveKey("favorite_food", profile.favoriteFood);
+        saveKey("birthday", profile.birthday);
+        saveKey("current_project", profile.currentProject);
+        saveKey("hobbies", profile.hobbies);
         saveKey("notes", profile.notes);
     }
     notifyMemoryUpdated();
@@ -338,12 +360,304 @@ void LongTermMemoryEngine::updateProfileAttribute(const QString &key, const QStr
 QString LongTermMemoryEngine::formatProfileForPrompt()
 {
     auto p = coreProfile();
-    QString res = QString("【主人全局核心档案】称呼:%1 | 身份:%2 | 常用技术栈:%3 | 音乐偏好:%4 | 作息习惯:%5")
-        .arg(p.name, p.occupation, p.preferredLangs, p.musicTaste, p.workHabits);
-    if (!p.notes.trimmed().isEmpty()) {
-        res += " | 关键备忘:" + p.notes.trimmed();
+    QStringList parts;
+    if (!p.name.isEmpty()) parts << "称呼:" + p.name;
+    if (!p.occupation.isEmpty()) parts << "身份:" + p.occupation;
+    if (!p.preferredLangs.isEmpty()) parts << "常用技术栈:" + p.preferredLangs;
+    if (!p.musicTaste.isEmpty()) parts << "音乐偏好:" + p.musicTaste;
+    if (!p.workHabits.isEmpty()) parts << "作息习惯:" + p.workHabits;
+    if (!p.favoriteFood.isEmpty()) parts << "饮食喜好与忌口:" + p.favoriteFood;
+    if (!p.birthday.isEmpty()) parts << "生日星座:" + p.birthday;
+    if (!p.currentProject.isEmpty()) parts << "手头攻坚项目:" + p.currentProject;
+    if (!p.hobbies.isEmpty()) parts << "闲暇爱好:" + p.hobbies;
+    if (!p.notes.trimmed().isEmpty()) parts << "关键备忘:" + p.notes.trimmed();
+
+    return "【主人全局核心档案】" + parts.join(" | ");
+}
+
+// === 好奇心引擎 (Curiosity Engine) ===
+QList<CuriosityGap> LongTermMemoryEngine::detectCuriosityGaps()
+{
+    auto p = coreProfile();
+    QList<CuriosityGap> gaps;
+
+    if (p.name.trimmed().isEmpty() || p.name == "主人") {
+        gaps.append({"preferred_name", "称谓偏好", "桌宠还不知道该怎么称呼主人最亲切（如专属昵称、名字还是外号），自然亲昵地打听一下"});
+    }
+    if (p.birthday.trimmed().isEmpty()) {
+        gaps.append({"birthday", "生日与星座", "桌宠的小本本上还没记录主人的生日或星座，俏皮地问问，表示想在过生日时准时准备惊喜"});
+    }
+    if (p.favoriteFood.trimmed().isEmpty()) {
+        gaps.append({"favorite_food", "饮食喜好与忌口", "想知道主人平时最爱吃什么美食，或者有没有绝对不碰的忌口（如香菜/不吃辣）"});
+    }
+    if (p.musicTaste.trimmed().isEmpty() || p.musicTaste == "华语流行, 轻音乐") {
+        gaps.append({"music_taste", "音乐偏好", "想知道主人写代码或摸鱼时最喜欢循环播放哪位歌手或什么风格的歌"});
+    }
+    if (p.hobbies.trimmed().isEmpty()) {
+        gaps.append({"hobbies", "闲暇爱好", "想知道主人周末不上班或平时下班后最喜欢做些什么放松（打游戏、看番、运动还是发呆）"});
+    }
+    if (p.currentProject.trimmed().isEmpty()) {
+        gaps.append({"current_project", "手头攻坚项目", "关心地问问主人最近在忙着开发或推进什么有趣的项目"});
+    }
+    if (p.preferredLangs.trimmed().isEmpty() || p.preferredLangs == "C++, Qt") {
+        gaps.append({"preferred_langs", "技术栈偏好", "好奇主人除了主力语言，最近还在探索哪些新技术或框架"});
+    }
+
+    return gaps;
+}
+
+bool LongTermMemoryEngine::canTriggerCuriosityInquiry(qint64 nowMs) const
+{
+    if (m_lastCuriosityTime == 0) return true;
+    // 至少间隔 35 分钟才进行一次主动好奇提问，避免查户口式频繁打扰
+    return (nowMs - m_lastCuriosityTime) >= 35 * 60 * 1000;
+}
+
+CuriosityGap LongTermMemoryEngine::getNextCuriosityGap()
+{
+    auto gaps = detectCuriosityGaps();
+    if (gaps.isEmpty()) return CuriosityGap{};
+
+    for (const auto &g : gaps) {
+        if (!m_recentlyAskedGaps.contains(g.fieldKey)) {
+            return g;
+        }
+    }
+    // 若都问过一轮，取首个进行温和跟进
+    return gaps.first();
+}
+
+void LongTermMemoryEngine::markCuriosityInquiryAsked(const QString &fieldKey)
+{
+    m_lastCuriosityTime = QDateTime::currentMSecsSinceEpoch();
+    if (!fieldKey.isEmpty()) {
+        m_recentlyAskedGaps.append(fieldKey);
+        if (m_recentlyAskedGaps.size() > 6) {
+            m_recentlyAskedGaps.removeFirst();
+        }
+    }
+}
+
+// === 事件回访系统 (Follow-up Loop) ===
+qint64 LongTermMemoryEngine::addFollowupEvent(const QString &title, const QString &context, qint64 eventTimeMs)
+{
+    QString trimmedTitle = title.trimmed();
+    if (trimmedTitle.isEmpty()) return 0;
+
+    QMutexLocker locker(&m_mutex);
+    sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
+    if (!db) return 0;
+
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const char *sql = "INSERT INTO followup_events (title, context, event_time, status, created_at) VALUES (?, ?, ?, 'pending', ?);";
+    sqlite3_stmt *stmt = nullptr;
+    qint64 newId = 0;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, trimmedTitle.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, context.trimmed().toUtf8().constData(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 3, eventTimeMs);
+        sqlite3_bind_int64(stmt, 4, now);
+        if (sqlite3_step(stmt) == SQLITE_DONE) {
+            newId = sqlite3_last_insert_rowid(db);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return newId;
+}
+
+QList<FollowupEvent> LongTermMemoryEngine::getPendingFollowupEvents(int limit)
+{
+    QMutexLocker locker(&m_mutex);
+    QList<FollowupEvent> res;
+    sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
+    if (!db) return res;
+
+    const char *sql = "SELECT id, title, context, event_time, status, created_at FROM followup_events WHERE status = 'pending' ORDER BY event_time ASC LIMIT ?;";
+    sqlite3_stmt *stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, limit);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            FollowupEvent ev;
+            ev.id = sqlite3_column_int64(stmt, 0);
+            ev.title = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
+            ev.context = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2)));
+            ev.eventTime = sqlite3_column_int64(stmt, 3);
+            ev.status = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4)));
+            ev.createdAt = sqlite3_column_int64(stmt, 5);
+            res.append(ev);
+        }
+        sqlite3_finalize(stmt);
     }
     return res;
+}
+
+bool LongTermMemoryEngine::resolveFollowupEvent(qint64 id, const QString &status)
+{
+    QMutexLocker locker(&m_mutex);
+    sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
+    if (!db) return false;
+
+    const char *sql = "UPDATE followup_events SET status = ? WHERE id = ?;";
+    sqlite3_stmt *stmt = nullptr;
+    bool ok = false;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, status.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, id);
+        ok = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+    }
+    return ok;
+}
+
+bool LongTermMemoryEngine::dismissFollowupEvent(qint64 id)
+{
+    return resolveFollowupEvent(id, "dismissed");
+}
+
+QList<FollowupEvent> LongTermMemoryEngine::getAllFollowupEvents(int limit)
+{
+    QMutexLocker locker(&m_mutex);
+    QList<FollowupEvent> res;
+    sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
+    if (!db) return res;
+
+    const char *sql = "SELECT id, title, context, event_time, status, created_at FROM followup_events ORDER BY created_at DESC LIMIT ?;";
+    sqlite3_stmt *stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, limit);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            FollowupEvent ev;
+            ev.id = sqlite3_column_int64(stmt, 0);
+            ev.title = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
+            ev.context = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2)));
+            ev.eventTime = sqlite3_column_int64(stmt, 3);
+            ev.status = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4)));
+            ev.createdAt = sqlite3_column_int64(stmt, 5);
+            res.append(ev);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return res;
+}
+
+void LongTermMemoryEngine::recordFollowupAsked(qint64 id, int maxAsks)
+{
+    int currentAsks = 0;
+    {
+        QMutexLocker locker(&m_mutex);
+        currentAsks = ++m_followupAskCounts[id];
+        sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
+        if (db) {
+            const char *sql = "UPDATE followup_events SET ask_count = ask_count + 1 WHERE id = ?;";
+            sqlite3_stmt *stmt = nullptr;
+            if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+                sqlite3_bind_int64(stmt, 1, id);
+                sqlite3_step(stmt);
+                sqlite3_finalize(stmt);
+            }
+        }
+    }
+
+    if (currentAsks >= maxAsks) {
+        resolveFollowupEvent(id, "resolved");
+        std::cout << "[LongTermMemoryEngine] 事项 ID=" << id << " 已主动回访达到 " 
+                  << currentAsks << " 次，自动归档为 resolved 状态，避免复读。" << std::endl;
+    }
+}
+
+void LongTermMemoryEngine::addOcrMemory(const QString &appName, const QString &contentSummary)
+{
+    QString trimmedSummary = contentSummary.trimmed();
+    if (trimmedSummary.length() < 10) return;
+
+    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    {
+        QMutexLocker locker(&m_mutex);
+        if (m_lastOcrAppName == appName && m_lastOcrSummary == trimmedSummary && (now - m_lastOcrTime) < 180000) {
+            return; // 3分钟内相同内容防抖去重
+        }
+        m_lastOcrAppName = appName;
+        m_lastOcrSummary = trimmedSummary;
+        m_lastOcrTime = now;
+    }
+
+    // 1. 记入事件流
+    recordEpisodicEvent("desktop_ocr", appName, trimmedSummary);
+
+    // 2. 沉淀为语义记忆
+    QString snippet = trimmedSummary;
+    if (snippet.length() > 120) snippet = snippet.left(120) + "...";
+    QString memoryText = QString("在【%1】中浏览或出现: %2").arg(appName, snippet);
+    addSemanticMemory("ocr_reading", memoryText, 2);
+    std::cout << "[LongTermMemoryEngine] 已将屏幕 OCR 内容自动沉淀为记忆: " << memoryText.toStdString() << std::endl;
+}
+
+void LongTermMemoryEngine::addCodingMemory(const QString &agentName, const QString &status, const QString &task, const QString &details)
+{
+    QString pfx = agentName.isEmpty() ? "CodingAgent" : agentName;
+    QString mainTask = task.trimmed();
+    if (mainTask.isEmpty()) mainTask = details.trimmed();
+    if (mainTask.isEmpty()) return;
+
+    // 过滤掉包含大段模型回复、OCR文字片段、测试用例或杂乱日志的内容，避免污染长期记忆
+    if (mainTask.contains("OCR", Qt::CaseInsensitive) || 
+        mainTask.contains("截图") || 
+        mainTask.contains("相反速度比之前快") || 
+        mainTask.length() > 60) {
+        // 仅记入瞬时事件流，绝不沉淀为语义项目记忆
+        recordEpisodicEvent("coding_task", pfx, QString("[%1] %2").arg(status, mainTask.left(100)));
+        return;
+    }
+
+    // 防重复：若最近已记录过相同或极度相似的编程任务，跳过
+    static QString s_lastRecordedCodingTask;
+    if (mainTask == s_lastRecordedCodingTask) {
+        return;
+    }
+    s_lastRecordedCodingTask = mainTask;
+
+    // 1. 记录进事件流
+    QString content = QString("[%1] 任务: %2 (详情: %3)").arg(status, task, details);
+    recordEpisodicEvent("coding_task", pfx, content);
+
+    // 2. 沉淀为语义项目记忆
+    if (status == "finished") {
+        addSemanticMemory("project", QString("编程助手【%1】顺利完成任务: %2").arg(pfx, mainTask), 3);
+    } else if (status == "error") {
+        addSemanticMemory("tech", QString("编程助手【%1】在任务「%2」中遭遇报错: %3").arg(pfx, mainTask, details.left(100)), 2);
+    } else if (status == "working" || status == "coding") {
+        static qint64 s_lastWorkingLogTime = 0;
+        qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if ((now - s_lastWorkingLogTime) > 300000) { // 5分钟防刷
+            s_lastWorkingLogTime = now;
+            addSemanticMemory("project", QString("主人正在使用【%1】推进攻坚: %2").arg(pfx, mainTask), 2);
+        }
+    }
+}
+
+QString LongTermMemoryEngine::getRandomTopicMemory()
+{
+    QList<SemanticMemoryRecord> pool;
+    auto allMems = getAllActiveMemories();
+    for (const auto &m : allMems) {
+        // 关键优化：严禁强行抽取系统工具日志、代码报错或工具执行记录作为搭讪话题！
+        // 只选取用户明确表达过的真实兴趣、个人喜好、探讨过的技术话题（importance >= 3）
+        if (m.content.contains("编程助手") || 
+            m.content.contains("顺利完成任务") || 
+            m.content.contains("遭遇报错") || 
+            m.content.contains("OCR", Qt::CaseInsensitive) || 
+            m.content.contains("截图") ||
+            m.content.contains("推进攻坚")) {
+            continue;
+        }
+
+        if ((m.category == "preference" || m.category == "inquiry" || m.category == "tech") && m.importance >= 3) {
+            pool.append(m);
+        }
+    }
+    if (pool.isEmpty()) return "";
+    int idx = QRandomGenerator::global()->bounded(static_cast<int>(pool.size()));
+    return pool[idx].content;
 }
 
 // === L3: Semantic Memories ===
@@ -385,8 +699,40 @@ QString LongTermMemoryEngine::addSemanticMemory(const QString &category, const Q
         }
     }
 
+    // 异步触发高维 Embedding 向量计算并更新入库
+    auto settings = SettingsDb::instance();
+    QString apiKey = settings->get("agent.api_key", "");
+    QString apiBase = settings->get("agent.api_base", "");
+    if (!apiKey.trimmed().isEmpty() && !apiKey.contains("YOUR_API_KEY")) {
+        requestEmbeddingAsync(trimmed, apiBase, apiKey, [this, id](const QVector<float> &emb) {
+            if (!emb.isEmpty()) {
+                updateMemoryEmbedding(id, emb);
+            }
+        });
+    }
+
     notifyMemoryUpdated();
     return id;
+}
+
+bool LongTermMemoryEngine::updateMemoryEmbedding(const QString &id, const QVector<float> &embedding)
+{
+    if (id.isEmpty() || embedding.isEmpty()) return false;
+    QMutexLocker locker(&m_mutex);
+    sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
+    if (!db) return false;
+
+    const char *sql = "UPDATE semantic_memories SET embedding_blob = ? WHERE id = ?;";
+    sqlite3_stmt *stmt = nullptr;
+    bool success = false;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        int blobSize = embedding.size() * sizeof(float);
+        sqlite3_bind_blob(stmt, 1, embedding.constData(), blobSize, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, id.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+        success = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+    }
+    return success;
 }
 
 bool LongTermMemoryEngine::updateSemanticMemory(const QString &id, const QString &content, int importance)
@@ -499,7 +845,7 @@ int LongTermMemoryEngine::getActiveMemoryCount()
     return count;
 }
 
-// 混合检索 (Hybrid Retrieval)
+// 混合检索 (Hybrid Retrieval: 向量余弦相似度 + BM25 关键词倒排 + 重要度加权 + 时间衰减)
 QList<SemanticMemoryRecord> LongTermMemoryEngine::searchMemories(const QString &query, int limit)
 {
     auto all = getAllActiveMemories();
@@ -509,40 +855,111 @@ QList<SemanticMemoryRecord> LongTermMemoryEngine::searchMemories(const QString &
     QVector<float> queryVec = computeLocalSparseVector(q);
     qint64 now = QDateTime::currentMSecsSinceEpoch();
 
+    // 1. BM25 关键词分词提取
+    auto tokenize = [](const QString &text) -> QStringList {
+        QStringList tokens;
+        QString curWord;
+        for (int i = 0; i < text.length(); ++i) {
+            QChar ch = text[i];
+            if (ch.isLetterOrNumber()) {
+                curWord += ch.toLower();
+            } else {
+                if (!curWord.isEmpty()) {
+                    tokens << curWord;
+                    curWord.clear();
+                }
+                if (ch.unicode() >= 0x4e00 && ch.unicode() <= 0x9fa5) {
+                    tokens << QString(ch);
+                    if (i + 1 < text.length() && text[i+1].unicode() >= 0x4e00 && text[i+1].unicode() <= 0x9fa5) {
+                        tokens << text.mid(i, 2);
+                    }
+                }
+            }
+        }
+        if (!curWord.isEmpty()) tokens << curWord;
+        return tokens;
+    };
+
+    QStringList queryTerms = tokenize(q);
+    int numDocs = all.size();
+
+    // 计算语料库平均长度与各 term 的文档频率 DF
+    double totalDocLen = 0.0;
+    QMap<QString, int> docFreq;
+    QList<QStringList> docTokensList;
+    docTokensList.reserve(numDocs);
+
+    for (const auto &mem : all) {
+        QStringList dt = tokenize(mem.content);
+        docTokensList.append(dt);
+        totalDocLen += dt.size();
+        QSet<QString> uniqueTerms = QSet<QString>(dt.begin(), dt.end());
+        for (const auto &term : uniqueTerms) {
+            docFreq[term] = docFreq.value(term, 0) + 1;
+        }
+    }
+    double avgdl = (numDocs > 0) ? (totalDocLen / numDocs) : 1.0;
+    if (avgdl < 1.0) avgdl = 1.0;
+
+    const double k1 = 1.2;
+    const double b = 0.75;
+
+    float maxBm25 = 0.0f;
+    QVector<float> bm25Scores(numDocs, 0.0f);
+
+    for (int docIdx = 0; docIdx < numDocs; ++docIdx) {
+        const auto &dt = docTokensList[docIdx];
+        int docLen = dt.size();
+        double score = 0.0;
+
+        QMap<QString, int> tfMap;
+        for (const auto &t : dt) {
+            tfMap[t] = tfMap.value(t, 0) + 1;
+        }
+
+        for (const auto &term : queryTerms) {
+            int df = docFreq.value(term, 0);
+            if (df == 0) continue;
+            double idf = std::log(1.0 + (numDocs - df + 0.5) / (df + 0.5));
+            if (idf < 0.0) idf = 0.0;
+
+            int tf = tfMap.value(term, 0);
+            double tfNorm = (tf * (k1 + 1.0)) / (tf + k1 * (1.0 - b + b * (docLen / avgdl)));
+            score += idf * tfNorm;
+        }
+        bm25Scores[docIdx] = static_cast<float>(score);
+        if (bm25Scores[docIdx] > maxBm25) maxBm25 = bm25Scores[docIdx];
+    }
+
     struct ScoredItem {
         SemanticMemoryRecord record;
         float score = 0.0f;
     };
     QList<ScoredItem> scored;
+    scored.reserve(numDocs);
 
-    for (const auto &mem : all) {
+    for (int docIdx = 0; docIdx < numDocs; ++docIdx) {
+        const auto &mem = all[docIdx];
         float vecSim = cosineSimilarity(queryVec, mem.embedding);
-        
-        // 词汇重叠度 (Lexical Match)
-        float lexicalMatch = 0.0f;
+
+        // 归一化 BM25 分数
+        float bm25Norm = (maxBm25 > 1e-4f) ? (bm25Scores[docIdx] / maxBm25) : 0.0f;
+
+        // 直接子串命中保底强化
         QString contentLower = mem.content.toLower();
         if (q.contains(contentLower) || contentLower.contains(q)) {
-            lexicalMatch += 0.5f;
-        } else {
-            // 简单 n-gram 关键词命中测试
-            int hits = 0;
-            for (int i = 0; i < q.length() - 1; ++i) {
-                QString bi = q.mid(i, 2);
-                if (contentLower.contains(bi)) hits++;
-            }
-            if (q.length() > 1) {
-                lexicalMatch += std::min(0.4f, (float)hits / (q.length() - 1));
-            }
+            bm25Norm = std::max(bm25Norm, 0.75f);
         }
 
-        // 重要度加权 (1~5 -> 0.05 ~ 0.25)
-        float impBonus = mem.importance * 0.05f;
+        // 重要度加权 (1~5 -> 0.03 ~ 0.15)
+        float impBonus = mem.importance * 0.03f;
 
         // 时间衰减 (30天内略微偏置)
         float daysDiff = std::max(0.0f, (float)(now - mem.createdAt) / (1000.0f * 86400.0f));
-        float recencyBonus = std::max(0.0f, 0.1f * (1.0f - std::min(1.0f, daysDiff / 30.0f)));
+        float recencyBonus = std::max(0.0f, 0.08f * (1.0f - std::min(1.0f, daysDiff / 30.0f)));
 
-        float finalScore = (vecSim * 0.5f) + (lexicalMatch * 0.3f) + impBonus + recencyBonus;
+        // 综合混合打分: 向量 45% + BM25 35% + 重要度 12% + 新鲜度 8%
+        float finalScore = (vecSim * 0.45f) + (bm25Norm * 0.35f) + impBonus + recencyBonus;
         scored.append({mem, finalScore});
     }
 
@@ -681,16 +1098,22 @@ void LongTermMemoryEngine::triggerAsyncReflection(const QString &userMsg,
     promptSys["role"] = "system";
     promptSys["content"] = 
         "你是一个顶级的长期记忆反思与事实提炼引擎（类似 MemGPT 与 Claude Code 记忆管理器）。\n"
-        "分析用户与AI桌宠的最新对话，提炼出关于用户的**长期有效事实、习惯、偏好、当前项目与身份特征**。\n"
+        "分析用户与AI桌宠的最新对话，提炼出：\n"
+        "1. 关于用户的**长期有效事实、习惯、偏好、当前攻坚项目、饮食忌口、生日与身份特征**；\n"
+        "2. 用户**主动提问、关注的技术概念、公式用法、业务疑问或学习探讨的主题**（如关注 Excel 公式、某种语言特性、框架原理等，category 填 'tech' 或 'inquiry'，importance 2~4）；\n"
+        "3. 对话中明确需要未来关切回访的未决事项（注意：若只是即时问答且已解答完毕，绝不要生成 followup_events）。\n"
         "要求严格输出 JSON 格式（不要包含 markdown 代码块或解释）：\n"
         "{\n"
         "  \"facts\": [\n"
-        "    {\"fact\": \"精炼的事实陈述\", \"category\": \"preference\"|\"tech\"|\"project\"|\"habit\"|\"identity\", \"importance\": 1~5}\n"
+        "    {\"fact\": \"精炼的事实或询问主题陈述\", \"category\": \"preference\"|\"tech\"|\"project\"|\"habit\"|\"identity\"|\"inquiry\", \"importance\": 1~5}\n"
         "  ],\n"
-        "  \"profile_updates\": {\"name\": \"...\", \"occupation\": \"...\", \"preferred_langs\": \"...\", \"music_taste\": \"...\"},\n"
+        "  \"profile_updates\": {\"name\": \"...\", \"occupation\": \"...\", \"preferred_langs\": \"...\", \"music_taste\": \"...\", \"favorite_food\": \"...\", \"birthday\": \"...\", \"current_project\": \"...\", \"hobbies\": \"...\"},\n"
+        "  \"followup_events\": [\n"
+        "    {\"title\": \"需跟进事件名\", \"context\": \"背景简述\", \"hours_later\": 4}\n"
+        "  ],\n"
         "  \"superseded_keywords\": [\"已经被新信息颠覆或修改的旧关键词，用于废弃旧记忆\"]\n"
         "}\n"
-        "如果对话属于日常无意义闲聊、临时查询或无任何新信息，请输出: {\"facts\": []}";
+        "如果对话无任何新信息，请输出: {\"facts\": []}";
 
     QJsonObject userObj;
     userObj["role"] = "user";
@@ -740,6 +1163,24 @@ void LongTermMemoryEngine::triggerAsyncReflection(const QString &userMsg,
                 QString val = it.value().toString().trimmed();
                 if (!val.isEmpty()) {
                     updateProfileAttribute(it.key(), val);
+                }
+            }
+        }
+
+        // 2. 处理自动登记待跟进/回访事件 (Follow-up Events)
+        if (resObj.contains("followup_events") && resObj["followup_events"].isArray()) {
+            QJsonArray fArr = resObj["followup_events"].toArray();
+            qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+            for (const auto &fVal : fArr) {
+                if (fVal.isObject()) {
+                    QJsonObject fObj = fVal.toObject();
+                    QString title = fObj["title"].toString().trimmed();
+                    QString ctx = fObj["context"].toString().trimmed();
+                    int hoursLater = fObj["hours_later"].toInt(4);
+                    if (hoursLater <= 0) hoursLater = 4;
+                    if (!title.isEmpty()) {
+                        addFollowupEvent(title, ctx.isEmpty() ? title : ctx, nowMs + static_cast<qint64>(hoursLater) * 3600 * 1000);
+                    }
                 }
             }
         }
@@ -918,3 +1359,48 @@ float LongTermMemoryEngine::cosineSimilarity(const QVector<float> &v1, const QVe
     }
     return std::max(0.0f, std::min(1.0f, dot));
 }
+
+void LongTermMemoryEngine::requestEmbeddingAsync(const QString &text,
+                                                 const QString &apiBase,
+                                                 const QString &apiKey,
+                                                 std::function<void(const QVector<float>&)> callback)
+{
+    if (apiKey.trimmed().isEmpty() || apiKey.contains("YOUR_API_KEY") || text.trimmed().isEmpty()) {
+        if (callback) callback(QVector<float>());
+        return;
+    }
+
+    QString cleanApiBase = apiBase.trimmed();
+    if (cleanApiBase.isEmpty()) cleanApiBase = "https://api.openai.com/v1";
+    if (cleanApiBase.endsWith("/")) cleanApiBase.chop(1);
+    QUrl url(cleanApiBase + "/embeddings");
+
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    req.setRawHeader("Authorization", ("Bearer " + apiKey.trimmed()).toUtf8());
+
+    QJsonObject root;
+    root["model"] = "text-embedding-3-small";
+    root["input"] = text.trimmed().left(1000);
+
+    QNetworkReply *reply = m_netManager->post(req, QJsonDocument(root).toJson(QJsonDocument::Compact));
+    QObject::connect(reply, &QNetworkReply::finished, [reply, callback]() {
+        reply->deleteLater();
+        QVector<float> vec;
+        if (reply->error() == QNetworkReply::NoError) {
+            auto doc = QJsonDocument::fromJson(reply->readAll());
+            if (doc.isObject()) {
+                QJsonArray dataArr = doc.object()["data"].toArray();
+                if (!dataArr.isEmpty()) {
+                    QJsonArray embArr = dataArr[0].toObject()["embedding"].toArray();
+                    vec.reserve(embArr.size());
+                    for (const auto &v : embArr) {
+                        vec.append(static_cast<float>(v.toDouble()));
+                    }
+                }
+            }
+        }
+        if (callback) callback(vec);
+    });
+}
+

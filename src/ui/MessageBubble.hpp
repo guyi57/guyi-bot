@@ -10,19 +10,21 @@
 #include <QTextBrowser>
 #include <QPushButton>
 #include <QLabel>
+#include <QLineEdit>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 
 class QPaintEvent;
 class QEnterEvent;
 class QEvent;
+class QResizeEvent;
 class MessageHistoryDialog;
 
 class MessageBubble : public QWidget
 {
 public:
     explicit MessageBubble(QWidget *parent = nullptr);
-    void showMessage(QString const& text, int duration = 0, QString const& appTarget = "", bool forceCompact = false);
+    void showMessage(QString const& text, int duration = 0, QString const& appTarget = "", bool forceCompact = false, bool allowReply = false);
     void hideMessage();
     void showHistoryDialog();
     bool hasMessage() const { return !m_text.isEmpty(); }
@@ -35,6 +37,7 @@ public:
 
     std::function<void()> onClosed = nullptr;
     std::function<void(bool isHovered)> onHoverChanged = nullptr;
+    std::function<void(const QString &question, const QString &replyText)> onReplySubmitted = nullptr;
 
     static QString normalizeMarkdownText(QString const& raw);
     static QString markdownToRichHtml(QString const& raw);
@@ -44,6 +47,8 @@ public:
 
 protected:
     void paintEvent(QPaintEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
     void enterEvent(QEnterEvent *event) override;
     void leaveEvent(QEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -51,6 +56,7 @@ protected:
 private:
     void openAppTarget();
     void updateCountdownDisplay();
+    void updateControlsPosition();
     void setHovered(bool hovered);
 
     QString m_text;
@@ -73,6 +79,11 @@ private:
     QWidget *m_historyBtn = nullptr;
     QLabel *m_countdownLabel = nullptr;
     QPushButton *m_closeBtn = nullptr;
+
+    QWidget *m_replyBarWidget = nullptr;
+    QLineEdit *m_replyInput = nullptr;
+    QPushButton *m_replySendBtn = nullptr;
+    bool m_hasReplyBar = false;
 
     MessageHistoryDialog *m_historyDialog = nullptr;
 };

@@ -25,13 +25,23 @@
 #include "AgentService.hpp"
 #include "FileDisposalSequence.hpp"
 #include "PersonaManager.hpp"
+#include "BehaviorEngine.hpp"
 #include <thread>
 #include <iostream>
+#include <future>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QBuffer>
 #include <QJsonObject>
 #include <QPixmap>
+#include <QFileDialog>
+#include <QDir>
+#include <QFileInfo>
+#include <QProcess>
+#include <QStandardPaths>
+#include <QFile>
+#include <QCoreApplication>
+#include <QDirIterator>
 
 using namespace httplib;
 
@@ -660,6 +670,313 @@ ShijimaHttpApi::ShijimaHttpApi(ShijimaManager *manager): m_server(new Server),
         responseObj["success"] = true;
         responseObj["active_persona_id"] = PersonaManager::instance()->activePersonaId();
         sendJson(res, responseObj);
+    });
+
+    // 
+    // 视觉压缩工坊 (Squoosh 风格) 相关 HTTP 接口
+    // 
+    m_server->Get("/compress", [](Request const&, Response &res) {
+        QString htmlPath = QDir::currentPath() + "/scripts/compressor/compress.html";
+        if (!QFile::exists(htmlPath)) {
+            htmlPath = QCoreApplication::applicationDirPath() + "/scripts/compressor/compress.html";
+        }
+        if (!QFile::exists(htmlPath)) {
+            htmlPath = QCoreApplication::applicationDirPath() + "/../Resources/scripts/compressor/compress.html";
+        }
+        QFile f(htmlPath);
+        if (f.open(QIODevice::ReadOnly)) {
+            QByteArray content = f.readAll();
+            res.set_content(content.constData(), content.size(), "text/html; charset=utf-8");
+        } else {
+            res.status = 404;
+            res.set_content("compress.html not found", "text/plain");
+        }
+    });
+
+    m_server->Post("/guyi/api/v1/compress/browse_folder", [](Request const&, Response &res) {
+        res.set_header("Access-Control-Allow-Origin", "*");
+        auto p = std::make_shared<std::promise<QString>>();
+        auto f = p->get_future();
+        QMetaObject::invokeMethod(qApp, [p]() {
+            QString dir = QFileDialog::getExistingDirectory(nullptr, "选择需要压缩的图片文件夹", QDir::homePath());
+            p->set_value(dir);
+        }, Qt::QueuedConnection);
+        QString selectedPath = f.get();
+
+        QJsonObject resp;
+        resp["path"] = selectedPath;
+        sendJson(res, resp);
+    });
+
+    m_server->Post("/guyi/api/v1/compress/browse_file", [](Request const&, Response &res) {
+        res.set_header("Access-Control-Allow-Origin", "*");
+        auto p = std::make_shared<std::promise<QString>>();
+        auto f = p->get_future();
+        QMetaObject::invokeMethod(qApp, [p]() {
+            QString file = QFileDialog::getOpenFileName(nullptr, "选择单张图片", QDir::homePath(),
+                "Images (*.png *.jpg *.jpeg *.webp *.avif *.gif *.tiff);;All Files (*)");
+            p->set_value(file);
+        }, Qt::QueuedConnection);
+        QString selectedPath = f.get();
+
+        QJsonObject resp;
+        resp["path"] = selectedPath;
+        sendJson(res, resp);
+    });
+
+    m_server->Get("/guyi/api/v1/compress/scan", [](Request const& req, Response &res) {
+        res.set_header("Access-Control-Allow-Origin", "*");
+        if (!req.has_param("path")) {
+            QJsonObject err; err["error"] = "Missing path param"; sendJson(res, err); return;
+        }
+        QString targetPath = QString::fromUtf8(req.get_param_value("path").c_str());
+        QFileInfo fi(targetPath);
+        if (!fi.exists()) {
+            QJsonObject err; err["error"] = "Path does not exist"; sendJson(res, err); return;
+        }
+
+        QStringList imageExts = { "png", "jpg", "jpeg", "webp", "avif", "gif", "tiff" };
+        QJsonArray filesArr;
+
+        if (fi.isFile()) {
+            QString ext = fi.suffix().toLower();
+            if (imageExts.contains(ext)) {
+                QJsonObject item;
+                item["name"] = fi.fileName();
+                item["path"] = fi.absoluteFilePath();
+                item["size"] = (qint64)fi.size();
+                filesArr.append(item);
+            }
+        } else if (fi.isDir()) {
+            QDirIterator it(targetPath, QStringList() << "*.png" << "*.jpg" << "*.jpeg" << "*.webp" << "*.avif" << "*.gif" << "*.tiff",
+                            QDir::Files, QDirIterator::Subdirectories);
+            int limit = 500;
+            while (it.hasNext() && filesArr.size() < limit) {
+                it.next();
+                QFileInfo subFi = it.fileInfo();
+                if (subFi.fileName().contains(".min.")) continue;
+                QJsonObject item;
+                item["name"] = subFi.fileName();
+                item["path"] = subFi.absoluteFilePath();
+                item["size"] = (qint64)subFi.size();
+                filesArr.append(item);
+            }
+        }
+
+        QJsonObject resp;
+        resp["path"] = targetPath;
+        resp["files"] = filesArr;
+        resp["total"] = filesArr.size();
+        sendJson(res, resp);
+    });
+
+    m_server->Get("/guyi/api/v1/compress/read_image", [](Request const& req, Response &res) {
+        res.set_header("Access-Control-Allow-Origin", "*");
+        if (!req.has_param("path")) {
+            res.status = 400; return;
+        }
+        QString imgPath = QString::fromUtf8(req.get_param_value("path").c_str());
+        QFile f(imgPath);
+        if (!f.open(QIODevice::ReadOnly)) {
+            res.status = 404; return;
+        }
+        QByteArray data = f.readAll();
+        QString ext = QFileInfo(imgPath).suffix().toLower();
+        std::string mime = "image/png";
+        if (ext == "jpg" || ext == "jpeg") mime = "image/jpeg";
+        else if (ext == "webp") mime = "image/webp";
+        else if (ext == "avif") mime = "image/avif";
+        else if (ext == "gif") mime = "image/gif";
+        else if (ext == "tiff") mime = "image/tiff";
+
+        res.set_content(data.constData(), data.size(), mime);
+    });
+
+    m_server->Post("/guyi/api/v1/compress/preview_one", [](Request const& req, Response &res) {
+        res.set_header("Access-Control-Allow-Origin", "*");
+        auto jsonOpt = jsonForRequest(req);
+        if (!jsonOpt.has_value()) {
+            QJsonObject err; err["success"] = false; err["error"] = "Invalid JSON body"; sendJson(res, err); return;
+        }
+        QJsonObject root = jsonOpt.value();
+        root["mode"] = "preview";
+
+        QString nodePath = "node";
+        for (const QString &candidate : {
+            "/Users/guyi/.nvm/versions/node/v22.22.2/bin/node",
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node"
+        }) {
+            if (QFile::exists(candidate)) {
+                nodePath = candidate;
+                break;
+            }
+        }
+
+        QString scriptPath = QDir::currentPath() + "/scripts/compressor/compress_worker.js";
+        if (!QFile::exists(scriptPath)) {
+            scriptPath = QCoreApplication::applicationDirPath() + "/scripts/compressor/compress_worker.js";
+        }
+        if (!QFile::exists(scriptPath)) {
+            scriptPath = QCoreApplication::applicationDirPath() + "/../Resources/scripts/compressor/compress_worker.js";
+        }
+
+        QProcess proc;
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        env.insert("PATH", env.value("PATH") + ":/Users/guyi/.nvm/versions/node/v22.22.2/bin:/opt/homebrew/bin:/usr/local/bin");
+        proc.setProcessEnvironment(env);
+
+        QString jsonStr = QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+        proc.start(nodePath, QStringList() << scriptPath << jsonStr);
+        bool ok = proc.waitForFinished(10000);
+
+        if (!ok) {
+            QJsonObject err; err["success"] = false; err["error"] = "Preview timed out"; sendJson(res, err); return;
+        }
+
+        QByteArray outBytes = proc.readAllStandardOutput();
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson(outBytes, &err);
+        if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+            QJsonObject errObj;
+            errObj["success"] = false;
+            errObj["error"] = QString("Preview worker error: ") + QString::fromUtf8(proc.readAllStandardError());
+            sendJson(res, errObj);
+            return;
+        }
+
+        sendJson(res, doc.object());
+    });
+
+    m_server->Post("/guyi/api/v1/compress/cutout", [](Request const& req, Response &res) {
+        res.set_header("Access-Control-Allow-Origin", "*");
+        auto jsonOpt = jsonForRequest(req);
+        if (!jsonOpt.has_value()) {
+            QJsonObject err; err["success"] = false; err["error"] = "Invalid JSON body"; sendJson(res, err); return;
+        }
+        QJsonObject root = jsonOpt.value();
+        root["mode"] = "cutout";
+
+        QString nodePath = "node";
+        for (const QString &candidate : {
+            "/Users/guyi/.nvm/versions/node/v22.22.2/bin/node",
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node"
+        }) {
+            if (QFile::exists(candidate)) {
+                nodePath = candidate;
+                break;
+            }
+        }
+
+        QString scriptPath = QDir::currentPath() + "/scripts/compressor/compress_worker.js";
+        if (!QFile::exists(scriptPath)) {
+            scriptPath = QCoreApplication::applicationDirPath() + "/scripts/compressor/compress_worker.js";
+        }
+        if (!QFile::exists(scriptPath)) {
+            scriptPath = QCoreApplication::applicationDirPath() + "/../Resources/scripts/compressor/compress_worker.js";
+        }
+
+        QProcess proc;
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        env.insert("PATH", env.value("PATH") + ":/Users/guyi/.nvm/versions/node/v22.22.2/bin:/opt/homebrew/bin:/usr/local/bin");
+        proc.setProcessEnvironment(env);
+
+        QString jsonStr = QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+        proc.start(nodePath, QStringList() << scriptPath << jsonStr);
+        bool ok = proc.waitForFinished(20000);
+
+        if (!ok) {
+            QJsonObject err; err["success"] = false; err["error"] = "Cutout timed out"; sendJson(res, err); return;
+        }
+
+        QByteArray outBytes = proc.readAllStandardOutput();
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson(outBytes, &err);
+        if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+            QJsonObject errObj;
+            errObj["success"] = false;
+            errObj["error"] = QString("Cutout worker error: ") + QString::fromUtf8(proc.readAllStandardError());
+            sendJson(res, errObj);
+            return;
+        }
+
+        sendJson(res, doc.object());
+    });
+
+    m_server->Post("/guyi/api/v1/compress/execute", [](Request const& req, Response &res) {
+        res.set_header("Access-Control-Allow-Origin", "*");
+        auto jsonOpt = jsonForRequest(req);
+        if (!jsonOpt.has_value()) {
+            QJsonObject err; err["success"] = false; err["error"] = "Invalid JSON body"; sendJson(res, err); return;
+        }
+        QJsonObject root = jsonOpt.value();
+
+        QString nodePath = "node";
+        for (const QString &candidate : {
+            "/Users/guyi/.nvm/versions/node/v22.22.2/bin/node",
+            "/opt/homebrew/bin/node",
+            "/usr/local/bin/node"
+        }) {
+            if (QFile::exists(candidate)) {
+                nodePath = candidate;
+                break;
+            }
+        }
+
+        QString scriptPath = QDir::currentPath() + "/scripts/compressor/compress_worker.js";
+        if (!QFile::exists(scriptPath)) {
+            scriptPath = QCoreApplication::applicationDirPath() + "/scripts/compressor/compress_worker.js";
+        }
+        if (!QFile::exists(scriptPath)) {
+            scriptPath = QCoreApplication::applicationDirPath() + "/../Resources/scripts/compressor/compress_worker.js";
+        }
+
+        QProcess proc;
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        env.insert("PATH", env.value("PATH") + ":/Users/guyi/.nvm/versions/node/v22.22.2/bin:/opt/homebrew/bin:/usr/local/bin");
+        proc.setProcessEnvironment(env);
+
+        QString jsonStr = QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+        proc.start(nodePath, QStringList() << scriptPath << jsonStr);
+        bool ok = proc.waitForFinished(180000);
+
+        if (!ok) {
+            QJsonObject err; err["success"] = false; err["error"] = "Process timed out or failed to start"; sendJson(res, err); return;
+        }
+
+        QByteArray outBytes = proc.readAllStandardOutput();
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson(outBytes, &err);
+        if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+            QJsonObject errObj;
+            errObj["success"] = false;
+            errObj["error"] = QString("Worker error: ") + QString::fromUtf8(proc.readAllStandardError());
+            sendJson(res, errObj);
+            return;
+        }
+
+        QJsonObject resObj = doc.object();
+        if (resObj["success"].toBool()) {
+            int total = resObj["processedCount"].toInt();
+            double savedPct = resObj["savedPercent"].toDouble();
+            QString savedFormatted = resObj["savedBytesFormatted"].toString();
+            QString msg = QString("🎉 批量图片压缩大获全胜！已处理 %1 张图片，体积节省了 %2% (%3) 🐾")
+                .arg(total).arg(QString::number(savedPct, 'f', 1)).arg(savedFormatted);
+
+            QMetaObject::invokeMethod(qApp, [msg]() {
+                ShijimaWidget *target = BehaviorEngine::instance()->activeWidget();
+                if (target == nullptr) {
+                    auto &mascots = ShijimaManager::defaultManager()->mascots();
+                    if (!mascots.empty()) target = mascots.front();
+                }
+                if (target != nullptr) {
+                    target->showMessage(msg, 12000, "", true);
+                }
+            }, Qt::QueuedConnection);
+        }
+
+        sendJson(res, resObj);
     });
 
     m_server->Get(".*", badRequest);

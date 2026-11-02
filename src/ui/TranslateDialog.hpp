@@ -73,6 +73,7 @@ private:
 
     QPushButton *m_copyPrimaryBtn = nullptr;
     QPushButton *m_speakPrimaryBtn = nullptr;
+    QPushButton *m_addToVocabBtn = nullptr;
 
     QScrollArea *m_scrollArea = nullptr;
     QVBoxLayout *m_cardsLayout = nullptr;
