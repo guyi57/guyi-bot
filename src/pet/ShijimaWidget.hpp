@@ -109,6 +109,7 @@ public:
     void setWaitingForAgent(bool waiting);
     bool isWaitingForAgent() const { return m_isWaitingForAgent; }
     MessageBubble *messageBubble() const { return m_messageBubble; }
+    AskDialog *askDialog() const { return m_askDialog; }
 
     PetMotionController &motionController() { return m_motion; }
     void triggerEmote(PetEmoteType type, float durationSec = 2.5f) { m_motion.triggerEmote(type, durationSec); }

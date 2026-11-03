@@ -138,6 +138,12 @@ ShijimaWidget::ShijimaWidget(MascotData *mascotData,
         setWaitingForAgent(false);
     };
 
+    m_askDialog->onDisplayModeChanged = [](AskDialog::DisplayMode) {
+        if (auto *mgr = ShijimaManager::defaultManager()) {
+            mgr->updateSystemTray();
+        }
+    };
+
     // 当设置变更时刷新全局快捷键配置
     connect(m_settingsDialog, &QDialog::accepted, this, []() {
         ShijimaManager::defaultManager()->updateGlobalHotkeys();

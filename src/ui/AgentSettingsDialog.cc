@@ -16,6 +16,7 @@
 #include "SensorManager.hpp"
 #include "BehaviorEngine.hpp"
 #include "VocabLearningEngine.hpp"
+#include "AskDialog.hpp"
 #include <QFileDialog>
 #include <QInputDialog>
 #include <QFormLayout>
@@ -1019,6 +1020,10 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     m_showHeadStatusOrbCheck->setStyleSheet("font-size: 13px; font-weight: 500; color: #1e293b;");
     displayForm->addRow("状态微盘开关:", m_showHeadStatusOrbCheck);
 
+    m_askDialogShortcutCheck = new QCheckBox("开启菜单栏吸顶快捷模式 (可吸附于 macOS 菜单栏或 Windows 顶部，支持磁吸拖拽与随时 Esc 隐藏)", displayGroup);
+    m_askDialogShortcutCheck->setStyleSheet("font-size: 13px; font-weight: 500; color: #1e293b;");
+    displayForm->addRow("提问窗口模式:", m_askDialogShortcutCheck);
+
     auto opacityRow = new QWidget(displayGroup);
     auto opacityLayout = new QHBoxLayout(opacityRow);
     opacityLayout->setContentsMargins(0, 0, 0, 0);
@@ -1447,6 +1452,7 @@ void AgentSettingsDialog::refreshValues() {
     m_stateDebounceSpin->setValue(cfg.stateDebounceSec);
 
     m_showHeadStatusOrbCheck->setChecked(SettingsDb::instance()->get("ui.show_head_status_orb", "false") == "true");
+    m_askDialogShortcutCheck->setChecked(SettingsDb::instance()->getBool("ask_dialog.shortcut_mode", false));
     int bubbleOpacity = SettingsDb::instance()->getInt("ui.bubble_opacity", 78);
     m_bubbleOpacitySlider->setValue(bubbleOpacity);
     m_bubbleOpacityLabel->setText(QString("%1% (%2)").arg(bubbleOpacity).arg(bubbleOpacity < 65 ? "超通透" : (bubbleOpacity <= 85 ? "轻薄毛玻璃" : "清晰凝实")));
@@ -1718,6 +1724,12 @@ void AgentSettingsDialog::saveAndClose() {
     // 保存外观、系统与自主搭讪设置
     bool showOrb = m_showHeadStatusOrbCheck->isChecked();
     SettingsDb::instance()->set("ui.show_head_status_orb", showOrb ? "true" : "false");
+    bool shortcutMode = m_askDialogShortcutCheck->isChecked();
+    SettingsDb::instance()->setBool("ask_dialog.shortcut_mode", shortcutMode);
+    if (auto pet = ShijimaManager::defaultManager()->mainPet(); pet && pet->askDialog()) {
+        pet->askDialog()->setDisplayMode(shortcutMode ? AskDialog::DisplayMode::ShortcutBar : AskDialog::DisplayMode::Standard);
+    }
+    ShijimaManager::defaultManager()->updateSystemTray();
     SettingsDb::instance()->setInt("ui.bubble_opacity", m_bubbleOpacitySlider->value());
     SettingsDb::instance()->setBool("sys.auto_check_update", m_autoCheckUpdateCheck->isChecked());
 

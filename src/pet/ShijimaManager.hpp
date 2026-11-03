@@ -28,6 +28,9 @@
 #include <QListWidget>
 #include <QSettings>
 #include <QScreen>
+#include <QSystemTrayIcon>
+#include <QMenu>
+#include <QAction>
 #include "PlatformWidget.hpp"
 #include "MascotData.hpp"
 #include <set>
@@ -81,6 +84,11 @@ public:
     ShijimaWidget *mainPet() const;
     std::vector<ShijimaWidget *> clonePets() const;
     void startEliminateClones(ShijimaWidget *targetClone = nullptr, bool chainAll = true);
+
+    void initSystemTray();
+    void updateSystemTray();
+    void toggleQuickAskDialog();
+    QSystemTrayIcon *systemTrayIcon() const { return m_trayIcon; }
 
     ~ShijimaManager();
 protected:
@@ -158,4 +166,9 @@ private:
     QAction *m_randomBreedAction = nullptr;
     qint64 m_lastAutoEliminateCheck = 0;
     void checkAutoEliminateClones();
+
+    QSystemTrayIcon *m_trayIcon = nullptr;
+    QMenu *m_trayMenu = nullptr;
+    QAction *m_trayAskAction = nullptr;
+    QAction *m_trayModeAction = nullptr;
 };

@@ -41,6 +41,7 @@
 #include "ShijimaApiDialog.hpp"
 #include "SettingsDb.hpp"
 #include "ShijimaWidget.hpp"
+#include "AskDialog.hpp"
 #include "HotkeyManager.hpp"
 #include "AgentService.hpp"
 #include "BehaviorEngine.hpp"
@@ -325,6 +326,152 @@ void ShijimaManager::importAction() {
 void ShijimaManager::quitAction() {
     m_allowClose = true;
     close();
+    qApp->quit();
+}
+
+void ShijimaManager::initSystemTray() {
+    if (m_trayIcon) return;
+
+    m_trayIcon = new QSystemTrayIcon(this);
+    m_trayIcon->setToolTip("guyi-bot 智能伴侣");
+
+    // 设置托盘图标
+    QIcon icon;
+    if (auto pet = mainPet(); pet && pet->mascotData()) {
+        icon = pet->mascotData()->preview();
+    }
+    if (icon.isNull()) {
+        QString appDir = QCoreApplication::applicationDirPath();
+        if (QFile::exists(appDir + "/../Resources/AppIcon.icns")) {
+            icon = QIcon(appDir + "/../Resources/AppIcon.icns");
+        } else if (QFile::exists("com.pixelomer.ShijimaQt.png")) {
+            icon = QIcon("com.pixelomer.ShijimaQt.png");
+        } else if (QFile::exists("DefaultMascot/img/shime1.png")) {
+            icon = QIcon("DefaultMascot/img/shime1.png");
+        }
+    }
+    m_trayIcon->setIcon(icon);
+
+    m_trayMenu = new QMenu();
+    m_trayMenu->setStyleSheet(
+        "QMenu {"
+        "  background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 4px;"
+        "}"
+        "QMenu::item {"
+        "  padding: 6px 18px; font-size: 13px; color: #1e293b; border-radius: 4px;"
+        "}"
+        "QMenu::item:selected { background-color: #f1f5f9; color: #4f46e5; }"
+    );
+
+    m_trayAskAction = m_trayMenu->addAction("💬 快捷提问 (随时唤出 / Esc 隐藏)");
+    QFont boldFont = m_trayAskAction->font();
+    boldFont.setBold(true);
+    m_trayAskAction->setFont(boldFont);
+    connect(m_trayAskAction, &QAction::triggered, this, &ShijimaManager::toggleQuickAskDialog);
+
+    m_trayModeAction = m_trayMenu->addAction("📌 开启菜单栏吸顶模式");
+    m_trayModeAction->setCheckable(true);
+    bool isShortcut = SettingsDb::instance()->getBool("ask_dialog.shortcut_mode", false);
+    m_trayModeAction->setChecked(isShortcut);
+    connect(m_trayModeAction, &QAction::toggled, this, [this](bool checked) {
+        SettingsDb::instance()->setBool("ask_dialog.shortcut_mode", checked);
+        if (auto pet = mainPet(); pet && pet->askDialog()) {
+            pet->askDialog()->setDisplayMode(checked ? AskDialog::DisplayMode::ShortcutBar : AskDialog::DisplayMode::Standard);
+        }
+    });
+
+    m_trayMenu->addSeparator();
+
+    auto musicAct = m_trayMenu->addAction("🎵 音乐工坊 (⌥M)");
+    connect(musicAct, &QAction::triggered, []() {
+        MusicPlayerDialog::instance()->toggleVisibility();
+    });
+
+    auto settingsAct = m_trayMenu->addAction("⚙️ 桌宠设置...");
+    connect(settingsAct, &QAction::triggered, [this]() {
+        if (auto pet = mainPet()) {
+            pet->showAgentSettings();
+        }
+    });
+
+    auto panelAct = m_trayMenu->addAction("📋 桌宠管理面板");
+    connect(panelAct, &QAction::triggered, [this]() {
+        setManagerVisible(true);
+        raise();
+        activateWindow();
+    });
+
+    m_trayMenu->addSeparator();
+
+    auto quitAct = m_trayMenu->addAction("🚪 退出 guyi-bot");
+    connect(quitAct, &QAction::triggered, this, &ShijimaManager::quitAction);
+
+    m_trayIcon->setContextMenu(m_trayMenu);
+
+    connect(m_trayIcon, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) {
+        if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick) {
+            toggleQuickAskDialog();
+        }
+    });
+
+    m_trayIcon->show();
+}
+
+void ShijimaManager::updateSystemTray() {
+    if (!m_trayIcon) return;
+
+    bool isShortcut = SettingsDb::instance()->getBool("ask_dialog.shortcut_mode", false);
+    if (m_trayModeAction && m_trayModeAction->isChecked() != isShortcut) {
+        QSignalBlocker blocker(m_trayModeAction);
+        m_trayModeAction->setChecked(isShortcut);
+    }
+
+    if (auto pet = mainPet(); pet && pet->mascotData()) {
+        auto preview = pet->mascotData()->preview();
+        if (!preview.isNull()) {
+            m_trayIcon->setIcon(preview);
+        }
+    }
+}
+
+void ShijimaManager::toggleQuickAskDialog() {
+    auto pet = mainPet();
+    if (!pet) return;
+    auto *ask = pet->askDialog();
+    if (!ask) return;
+
+    if (ask->isVisible()) {
+        ask->hide();
+        return;
+    }
+
+    bool isShortcut = SettingsDb::instance()->getBool("ask_dialog.shortcut_mode", false);
+    ask->setDisplayMode(isShortcut ? AskDialog::DisplayMode::ShortcutBar : AskDialog::DisplayMode::Standard, false);
+    ask->promptForContext("");
+
+    if (isShortcut && m_trayIcon) {
+        QRect trayRect = m_trayIcon->geometry();
+        QScreen *screen = QGuiApplication::primaryScreen();
+        QRect screenGeom = screen ? screen->availableGeometry() : QRect(0, 0, 1920, 1080);
+
+        if (trayRect.isValid() && !trayRect.isEmpty()) {
+            int x = trayRect.center().x() - ask->width() / 2;
+            if (x < screenGeom.left() + 10) x = screenGeom.left() + 10;
+            if (x + ask->width() > screenGeom.right() - 10) x = screenGeom.right() - ask->width() - 10;
+
+            int y = screenGeom.top() + 4;
+            #if defined(Q_OS_WIN)
+            if (trayRect.top() > screenGeom.center().y()) {
+                y = screenGeom.bottom() - ask->height() - 10;
+            }
+            #endif
+            ask->move(x, y);
+        }
+    }
+
+    ask->show();
+    ask->raise();
+    ask->activateWindow();
 }
 
 void ShijimaManager::deleteAction() {
@@ -875,6 +1022,15 @@ void ShijimaManager::updateGlobalHotkeys() {
 }
 
 ShijimaManager::~ShijimaManager() {
+    if (m_trayIcon) {
+        m_trayIcon->hide();
+        delete m_trayIcon;
+        m_trayIcon = nullptr;
+    }
+    if (m_trayMenu) {
+        delete m_trayMenu;
+        m_trayMenu = nullptr;
+    }
     HotkeyManager::instance()->unregisterAll();
     disconnect(qApp, &QGuiApplication::screenAdded,
         this, &ShijimaManager::screenAdded);
@@ -1059,6 +1215,7 @@ ShijimaManager::ShijimaManager(QWidget *parent):
 
     m_httpApi.start("127.0.0.1", 32456);
     updateGlobalHotkeys();
+    initSystemTray();
 }
 
 void ShijimaManager::itemDoubleClicked(QListWidgetItem *qItem) {
@@ -1444,6 +1601,7 @@ ShijimaWidget *ShijimaManager::spawn(std::string const& name) {
         m_mascots.push_back(shimeji);
         m_mascotsById[shimeji->mascotId()] = shimeji;
         env->reset_scale();
+        updateSystemTray();
         return shimeji;
     } catch (const std::exception &e) {
         std::cerr << "[ShijimaManager] 生成桌宠异常: " << e.what() << std::endl;

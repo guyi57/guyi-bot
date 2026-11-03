@@ -86,6 +86,7 @@ private:
     QLabel *m_personaDescLabel;
     QTextEdit *m_customPromptEdit;
     QCheckBox *m_showHeadStatusOrbCheck;
+    QCheckBox *m_askDialogShortcutCheck;
     QSlider *m_bubbleOpacitySlider;
     QLabel *m_bubbleOpacityLabel;
     QComboBox *m_banterFreqCombo;

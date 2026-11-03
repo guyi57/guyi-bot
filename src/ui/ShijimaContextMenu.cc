@@ -26,6 +26,7 @@
 #include "UpdateManager.hpp"
 #include "UpdateDialog.hpp"
 #include "AgentService.hpp"
+#include "AskDialog.hpp"
 #include "SettingsDb.hpp"
 #include <QMessageBox>
 #include <QFileDialog>
@@ -165,6 +166,14 @@ ShijimaContextMenu::ShijimaContextMenu(ShijimaWidget *parent)
         action = behaviorsMenu->addAction("💬 向 AI 提问");
         connect(action, &QAction::triggered, [petPtr](){
             if (petPtr) petPtr->onAskRequested("");
+        });
+
+        bool isShortcutMode = SettingsDb::instance()->getBool("ask_dialog.shortcut_mode", false);
+        action = behaviorsMenu->addAction(isShortcutMode ? "📌 提问模式: 菜单栏吸顶 (点击切为弹窗)" : "🪟 提问模式: 居中弹窗 (点击吸附菜单栏)");
+        connect(action, &QAction::triggered, [petPtr]() {
+            if (petPtr && petPtr->askDialog()) {
+                petPtr->askDialog()->toggleDisplayMode();
+            }
         });
 
         action = behaviorsMenu->addAction("🌐 翻译文本 (⌥T)...");
