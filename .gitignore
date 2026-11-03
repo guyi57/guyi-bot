@@ -41,6 +41,8 @@
 !/docs/**
 !/.images/
 !/.images/**
+!/res/
+!/res/**
 
 # Generated / Built files
 licenses_generated.hpp
@@ -66,5 +68,8 @@ music_favorites.db
 .DS_Store
 node_modules/
 mac_cutout
+__pycache__/
+*.pyc
+
 
 

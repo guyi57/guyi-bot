@@ -157,6 +157,8 @@ publish/Windows/$(CONFIG): $(TARGET)$(EXE) FORCE
 	@$(call copy_changed,$<,$@)
 	@$(call copy_exe_dlls,$<,$@)
 	@$(call copy_qt_plugin_dlls,$@)
+	mkdir -p $@/res
+	cp -r res/* $@/res/ 2>/dev/null || true
 	if [ $(CONFIG) = release ]; then find $@ -name '*.dll' -exec $(STRIP) -S '{}' \;; fi
 	if [ $(CONFIG) = release ]; then $(STRIP)  -S $@/libunarr.so.1.1.0; fi
 

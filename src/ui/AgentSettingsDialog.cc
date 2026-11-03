@@ -890,10 +890,22 @@ AgentSettingsDialog::AgentSettingsDialog(QWidget *parent)
     m_vocabTriggerSampleQuizBtn->setStyleSheet("padding: 5px 10px; font-size: 12px; font-weight: bold; background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; border-radius: 4px;");
     m_vocabTriggerSampleQuizBtn->setCursor(Qt::PointingHandCursor);
 
+    m_vocabSyncDefaultBtn = new QPushButton("🔄 补全新版内置全量词库 (5000+词)", vocabStatsGroup);
+    m_vocabSyncDefaultBtn->setStyleSheet("padding: 5px 10px; font-size: 12px; font-weight: bold; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; border-radius: 4px;");
+    m_vocabSyncDefaultBtn->setCursor(Qt::PointingHandCursor);
+
     vocabBtnRow->addWidget(m_vocabImportJsonBtn);
     vocabBtnRow->addWidget(m_vocabImportTxtBtn);
+    vocabBtnRow->addWidget(m_vocabSyncDefaultBtn);
     vocabBtnRow->addWidget(m_vocabTriggerSampleQuizBtn);
     vocabStatsLayout->addLayout(vocabBtnRow);
+
+    connect(m_vocabSyncDefaultBtn, &QPushButton::clicked, this, [this]() {
+        VocabLearningEngine::instance()->reloadSeedData();
+        refreshValues();
+        auto stats = VocabLearningEngine::instance()->stats();
+        QMessageBox::information(this, "同步完成", QString("已成功增量同步内置全量词库！当前总词库词汇量为: %1 词").arg(stats.totalCount));
+    });
 
     connect(m_vocabImportJsonBtn, &QPushButton::clicked, this, [this]() {
         QString path = QFileDialog::getOpenFileName(this, "选择 JSON 词库文件", "", "JSON Files (*.json)");

@@ -104,6 +104,7 @@ private:
     QPushButton *m_vocabImportJsonBtn;
     QPushButton *m_vocabImportTxtBtn;
     QPushButton *m_vocabTriggerSampleQuizBtn;
+    QPushButton *m_vocabSyncDefaultBtn;
 
     // 🧬 繁殖模式与克隆
     QCheckBox *m_breedingEnabledCheck;

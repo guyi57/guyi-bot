@@ -616,20 +616,113 @@ PROGRAMMING_WORDS = [
     }
 ]
 
+import urllib.request
+import re
+
 def main():
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     vocab_dir = os.path.join(base_dir, "res", "vocab")
     os.makedirs(vocab_dir, exist_ok=True)
 
+    print("Building full vocabulary datasets (Curated + Full CET4/专升本 + IT/Programming)...")
+    
+    # 1. 专升本/四级核心考点词库
+    upgrade_map = {}
+    for w in UPGRADE_EXAM_WORDS:
+        key = w['word'].strip().lower()
+        upgrade_map[key] = w
+
+    # 2. 编程与计算机常用词库
+    prog_map = {}
+    for w in PROGRAMMING_WORDS:
+        key = w['word'].strip().lower()
+        prog_map[key] = w
+
+    # 尝试联网扩充全量 5000+ 词汇
+    try:
+        url_cet4 = 'https://raw.githubusercontent.com/RealKai42/qwerty-learner/master/public/dicts/CET4_T.json'
+        url_xh = 'https://raw.githubusercontent.com/RealKai42/qwerty-learner/master/public/dicts/xinghuoqiaoji_4.json'
+        url_it = 'https://raw.githubusercontent.com/RealKai42/qwerty-learner/master/public/dicts/it-words.json'
+
+        print("Fetching online standard CET4/专升本考纲词汇...")
+        req = urllib.request.Request(url_cet4, headers={'User-Agent': 'Mozilla/5.0'})
+        cet4 = json.loads(urllib.request.urlopen(req, timeout=10).read().decode('utf-8'))
+        
+        req_xh = urllib.request.Request(url_xh, headers={'User-Agent': 'Mozilla/5.0'})
+        xh = json.loads(urllib.request.urlopen(req_xh, timeout=10).read().decode('utf-8'))
+
+        print("Fetching online programmer IT vocabulary...")
+        req_it = urllib.request.Request(url_it, headers={'User-Agent': 'Mozilla/5.0'})
+        it = json.loads(urllib.request.urlopen(req_it, timeout=10).read().decode('utf-8'))
+
+        for item in xh:
+            name = item.get('name', '').strip()
+            if not name or not re.match(r'^[a-zA-Z\-\s\']+$', name): continue
+            key = name.lower()
+            if key in upgrade_map: continue
+            trans = item.get('trans', [])
+            def_str = '；'.join(trans) if isinstance(trans, list) else str(trans)
+            usphone = item.get('usphone', '') or item.get('ukphone', '')
+            if usphone and not usphone.startswith('/'): usphone = f'/{usphone}/'
+            upgrade_map[key] = {
+                'word': name,
+                'phonetic': usphone,
+                'pos': '',
+                'definition': def_str,
+                'example': '',
+                'memory_tip': ''
+            }
+
+        for item in cet4:
+            name = item.get('name', '').strip()
+            if not name or not re.match(r'^[a-zA-Z\-\s\']+$', name): continue
+            key = name.lower()
+            if key in upgrade_map: continue
+            trans = item.get('trans', [])
+            def_str = '；'.join(trans) if isinstance(trans, list) else str(trans)
+            usphone = item.get('usphone', '') or item.get('ukphone', '')
+            if usphone and not usphone.startswith('/'): usphone = f'/{usphone}/'
+            upgrade_map[key] = {
+                'word': name,
+                'phonetic': usphone,
+                'pos': '',
+                'definition': def_str,
+                'example': '',
+                'memory_tip': ''
+            }
+
+        for item in it:
+            name = item.get('name', '').strip()
+            if not name or not re.match(r'^[a-zA-Z0-9_\-\s\.]+$', name): continue
+            key = name.lower()
+            if key in prog_map: continue
+            trans = item.get('trans', [])
+            def_str = '；'.join(trans) if isinstance(trans, list) else str(trans)
+            prog_map[key] = {
+                'word': name,
+                'phonetic': '',
+                'pos': '',
+                'definition': def_str,
+                'example': '',
+                'memory_tip': '程序员高频实战词汇'
+            }
+        print("Online dictionary expansion completed successfully.")
+    except Exception as e:
+        print(f"Notice: online fetch skipped or failed ({e}), using curated seed words.")
+
+    upgrade_list = list(upgrade_map.values())
+    prog_list = list(prog_map.values())
+
     upgrade_path = os.path.join(vocab_dir, "vocab_upgrade_exam.json")
     with open(upgrade_path, "w", encoding="utf-8") as f:
-        json.dump(UPGRADE_EXAM_WORDS, f, ensure_ascii=False, indent=2)
-    print(f"Generated {len(UPGRADE_EXAM_WORDS)} upgrade exam words at: {upgrade_path}")
+        json.dump(upgrade_list, f, ensure_ascii=False, indent=2)
+    print(f"Generated {len(upgrade_list)} upgrade exam words at: {upgrade_path}")
 
     prog_path = os.path.join(vocab_dir, "vocab_programming.json")
     with open(prog_path, "w", encoding="utf-8") as f:
-        json.dump(PROGRAMMING_WORDS, f, ensure_ascii=False, indent=2)
-    print(f"Generated {len(PROGRAMMING_WORDS)} programming words at: {prog_path}")
+        json.dump(prog_list, f, ensure_ascii=False, indent=2)
+    print(f"Generated {len(prog_list)} programming words at: {prog_path}")
+    print(f"Total vocabulary library: {len(upgrade_list) + len(prog_list)} words.")
 
 if __name__ == "__main__":
     main()

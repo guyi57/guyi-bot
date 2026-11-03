@@ -103,34 +103,11 @@ void VocabLearningEngine::seedDefaultVocabularies()
         sqlite3_finalize(stmt);
     }
 
-    if (count > 0) return; // 已有数据，无需初始化
+    // 若本地词库小于 1000 词（例如初次启动或之前旧版仅有 75 词初始种子），自动增量扩充内置全量专升本与编程词库
+    if (count >= 1000) return;
 
-    std::cout << "[VocabLearningEngine] 词库为空，正在自动植入内置精选专升本与编程词库..." << std::endl;
-
-    // 尝试从应用资源目录加载
-    QString appDir = QCoreApplication::applicationDirPath();
-    QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-    QStringList searchDirs = {
-        dataDir + "/vocab",
-        appDir + "/../Resources/res/vocab",
-        appDir + "/res/vocab",
-        QDir::currentPath() + "/res/vocab"
-    };
-
-    bool imported = false;
-    for (const auto &dirPath : searchDirs) {
-        QString upgradePath = dirPath + "/vocab_upgrade_exam.json";
-        QString progPath = dirPath + "/vocab_programming.json";
-        if (QFile::exists(upgradePath)) {
-            importFromJsonFile(upgradePath, "upgrade_exam");
-            imported = true;
-        }
-        if (QFile::exists(progPath)) {
-            importFromJsonFile(progPath, "programming");
-            imported = true;
-        }
-        if (imported) break;
-    }
+    std::cout << "[VocabLearningEngine] 检测到本地词库较小(" << count << "词)，正在增量扩充内置全量专升本与编程词库..." << std::endl;
+    reloadSeedData();
 }
 
 bool VocabLearningEngine::isEnabled() const
@@ -759,10 +736,12 @@ bool VocabLearningEngine::addWord(const QString &word, const QString &pos, const
     if (!db) return false;
 
     qint64 now = QDateTime::currentMSecsSinceEpoch();
+    // 使用 ON CONFLICT(word) DO NOTHING 保留用户已复习单词的艾宾浩斯进度
     const char *sql = 
-        "INSERT OR REPLACE INTO vocabulary_cards "
+        "INSERT INTO vocabulary_cards "
         "(word, phonetic, pos, definition, example, memory_tip, category, mastery_level, next_review_time, review_count, wrong_count, last_reviewed_at, created_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 0, 0, 0, ?);";
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, 0, 0, 0, ?) "
+        "ON CONFLICT(word) DO NOTHING;";
 
     sqlite3_stmt *stmt = nullptr;
     bool ok = false;
@@ -793,13 +772,34 @@ int VocabLearningEngine::importFromJsonFile(const QString &filePath, const QStri
 
     auto arr = doc.array();
     int added = 0;
+
+    sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
+    if (db) sqlite3_exec(db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
+
     for (const auto &val : arr) {
         if (!val.isObject()) continue;
         auto obj = val.toObject();
         QString w = obj["word"].toString().trimmed();
+        if (w.isEmpty()) w = obj["name"].toString().trimmed(); // 兼容开源词库 name 字段
+
         QString def = obj["definition"].toString().trimmed();
-        if (def.isEmpty()) def = obj["trans"].toString().trimmed();
+        if (def.isEmpty()) {
+            if (obj["trans"].isArray()) {
+                QStringList tlist;
+                for (auto t : obj["trans"].toArray()) tlist << t.toString().trimmed();
+                def = tlist.join("；");
+            } else {
+                def = obj["trans"].toString().trimmed();
+            }
+        }
+
         QString ph = obj["phonetic"].toString().trimmed();
+        if (ph.isEmpty()) {
+            ph = obj["usphone"].toString().trimmed();
+            if (ph.isEmpty()) ph = obj["ukphone"].toString().trimmed();
+            if (!ph.isEmpty() && !ph.startsWith("/")) ph = "/" + ph + "/";
+        }
+
         QString p = obj["pos"].toString().trimmed();
         QString ex = obj["example"].toString().trimmed();
         QString tip = obj["memory_tip"].toString().trimmed();
@@ -807,7 +807,10 @@ int VocabLearningEngine::importFromJsonFile(const QString &filePath, const QStri
             added++;
         }
     }
-    std::cout << "[VocabLearningEngine] 从 " << filePath.toStdString() << " 成功导入 " << added << " 个单词" << std::endl;
+
+    if (db) sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr);
+
+    std::cout << "[VocabLearningEngine] 从 " << filePath.toStdString() << " 成功导入/扩充 " << added << " 个新单词" << std::endl;
     return added;
 }
 
@@ -815,6 +818,9 @@ int VocabLearningEngine::importFromTextFile(const QString &filePath, const QStri
 {
     QFile file(filePath);
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) return 0;
+
+    sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
+    if (db) sqlite3_exec(db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr);
 
     int added = 0;
     while (!file.atEnd()) {
@@ -838,22 +844,37 @@ int VocabLearningEngine::importFromTextFile(const QString &filePath, const QStri
         }
     }
     file.close();
+
+    if (db) sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr);
+
     return added;
 }
 
 void VocabLearningEngine::reloadSeedData()
 {
     QString appDir = QCoreApplication::applicationDirPath();
+    QString dataDir = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
     QStringList searchDirs = {
-        appDir + "/res/vocab",
+        dataDir + "/vocab",
         appDir + "/../Resources/res/vocab",
+        appDir + "/res/vocab",
         QDir::currentPath() + "/res/vocab"
     };
+
+    bool hasUpgrade = false;
+    bool hasProg = false;
 
     for (const auto &dirPath : searchDirs) {
         QString upgradePath = dirPath + "/vocab_upgrade_exam.json";
         QString progPath = dirPath + "/vocab_programming.json";
-        if (QFile::exists(upgradePath)) importFromJsonFile(upgradePath, "upgrade_exam");
-        if (QFile::exists(progPath)) importFromJsonFile(progPath, "programming");
+        if (!hasUpgrade && QFile::exists(upgradePath)) {
+            importFromJsonFile(upgradePath, "upgrade_exam");
+            hasUpgrade = true;
+        }
+        if (!hasProg && QFile::exists(progPath)) {
+            importFromJsonFile(progPath, "programming");
+            hasProg = true;
+        }
+        if (hasUpgrade && hasProg) break;
     }
 }
