@@ -25,4 +25,5 @@ private:
     QPushButton *m_generateBtn;
 
     QList<DiaryEntry> m_entries;
+    QString m_selectedDate;
 };

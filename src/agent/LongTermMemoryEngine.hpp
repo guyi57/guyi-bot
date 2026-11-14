@@ -86,6 +86,7 @@ public:
     qint64 addFollowupEvent(const QString &title, const QString &context, qint64 eventTimeMs);
     QList<FollowupEvent> getPendingFollowupEvents(int limit = 5);
     bool resolveFollowupEvent(qint64 id, const QString &status = "resolved");
+    bool resolveFollowupsByWord(const QString &word);
     bool dismissFollowupEvent(qint64 id);
     QList<FollowupEvent> getAllFollowupEvents(int limit = 50);
     void recordFollowupAsked(qint64 id, int maxAsks = 2);
@@ -115,6 +116,7 @@ public:
 
     // === L2: Episodic Events (完整事件流记录) ===
     void recordEpisodicEvent(const QString &sessionId, const QString &role, const QString &content);
+    QJsonObject getDailyActivitySummary(const QString &dateStr = "");
 
     // === 异步反思提炼流水线 (Reflection Engine) ===
     // 对话完成后调用，自动调用轻量 LLM 提炼用户偏好/事实，去重消歧并写入数据库

@@ -25,6 +25,10 @@
 @property (nonatomic) dispatch_source_t memoryPressureSource;
 @property (nonatomic) dispatch_source_t periodicResourceTimer;
 @property (nonatomic, copy) dispatch_block_t ocrDebounceBlock;
+- (void)startListening;
+- (void)stopListening;
+- (void)triggerImmediateOcr;
+- (void)triggerImmediateOcrWithCallback:(void(^)(NSString *appName, NSString *windowTitle, NSString *ocrText))callback;
 @end
 
 @implementation MacSystemListener
@@ -144,116 +148,40 @@
         }
 
         // 桌宠自身或未知进程不进行后台截图 OCR
-        if (nsName.length == 0 || [nsName isEqualToString:@"guyi-bot"] || [nsBundle isEqualToString:@"com.guyi.pet"]) {
+        if (nsName.length == 0 || [nsName isEqualToString:@"guyi-bot"] || [nsBundle isEqualToString:@"com.guyi.guyibot"] || [nsBundle isEqualToString:@"com.guyi.pet"]) {
             return;
         }
 
-        // 零打扰权限门禁：必须静默前置探测录屏权限，未授权时绝对严禁调用 screencapture，杜绝 macOS 系统弹窗骚扰
-        if (!CGPreflightScreenCaptureAccess()) {
+        // 仅在已确认授权或系统预检通过时才进行后台静默 OCR，绝不在未授权时触发系统弹窗
+        if (!s_hasConfirmedCaptureAccess && !CGPreflightScreenCaptureAccess()) {
             return;
         }
 
-        // 第三层感知: 1.5 秒防抖延时触发原生低开销 Vision OCR
-        pid_t targetPid = pid;
-        NSString *targetAppName = [nsName copy];
-        NSString *targetBundleId = [nsBundle copy];
+        // 降低后台自动 OCR 触发频率：
+        // 1. 同一应用 3 分钟内无需重复自动截屏
+        // 2. 跨应用切换至少间隔 45 秒
+        // 3. 防抖延时由 800ms 提高到 3000ms（避免切窗口时光速触发）
+        static qint64 s_lastAutoOcrTime = 0;
+        static NSString *s_lastOcrBundle = @"";
+        qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        bool sameApp = [s_lastOcrBundle isEqualToString:nsBundle];
+        if (sameApp && (nowMs - s_lastAutoOcrTime < 180000)) {
+            return;
+        }
+        if (!sameApp && (nowMs - s_lastAutoOcrTime < 45000)) {
+            return;
+        }
 
+        // 第三层感知: 3000ms 防抖延时触发原生低开销 Vision OCR
+        __weak MacSystemListener *weakSelf = self;
         dispatch_block_t taskBlock = dispatch_block_create(DISPATCH_BLOCK_INHERIT_QOS_CLASS, ^{
-            @autoreleasepool {
-                // 静默前置门禁：未显式授予录屏权限时绝对严禁执行截屏，杜绝系统弹窗
-                if (!CGPreflightScreenCaptureAccess()) {
-                    return;
-                }
-
-                // 确认该应用依然是当前前台应用
-                NSRunningApplication *front = [[NSWorkspace sharedWorkspace] frontmostApplication];
-                if (!front || front.processIdentifier != targetPid) {
-                    return;
-                }
-
-                // 使用 ScreenCaptureKit 进程内安全捕获，完全规避命令行子进程重复弹窗
-                [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent *content, NSError *scError) {
-                    if (scError || !content) return;
-
-                    SCWindow *targetWindow = nil;
-                    for (SCWindow *win in content.windows) {
-                        if (win.owningApplication && win.owningApplication.processID == targetPid) {
-                            if (win.frame.size.width > 200 && win.frame.size.height > 150) {
-                                targetWindow = win;
-                                break;
-                            }
-                        }
-                    }
-
-                    if (!targetWindow) return;
-
-                    SCContentFilter *filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:targetWindow];
-                    SCStreamConfiguration *config = [[SCStreamConfiguration alloc] init];
-                    config.showsCursor = NO;
-                    CGFloat maxDim = 1280.0;
-                    CGFloat w = targetWindow.frame.size.width;
-                    CGFloat h = targetWindow.frame.size.height;
-                    if (w > maxDim) {
-                        h = (h / w) * maxDim;
-                        w = maxDim;
-                    }
-                    config.width = (size_t)w;
-                    config.height = (size_t)h;
-
-                    [SCScreenshotManager captureImageWithFilter:filter configuration:config completionHandler:^(CGImageRef cgImage, NSError *imgError) {
-                        if (imgError || !cgImage) return;
-
-                        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-                            @autoreleasepool {
-                                VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
-                                request.recognitionLevel = VNRequestTextRecognitionLevelFast;
-                                request.usesLanguageCorrection = YES;
-                                request.recognitionLanguages = @[@"zh-Hans", @"zh-Hant", @"en-US"];
-
-                                VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:cgImage options:@{}];
-                                NSError *err = nil;
-                                [handler performRequests:@[request] error:&err];
-
-                                if (!err && request.results.count > 0) {
-                                    NSMutableArray<NSString*> *lines = [NSMutableArray array];
-                                    for (VNRecognizedTextObservation *obs in request.results) {
-                                        VNRecognizedText *topCand = [obs topCandidates:1].firstObject;
-                                        if (topCand && topCand.string.length > 1) {
-                                            NSString *trimmed = [topCand.string stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-                                            if (trimmed.length > 1) {
-                                                [lines addObject:trimmed];
-                                                if (lines.count >= 12) break;
-                                            }
-                                        }
-                                    }
-
-                                    if (lines.count > 0) {
-                                        NSString *summaryStr = [lines componentsJoinedByString:@" | "];
-                                        QString qSummary = QString::fromNSString(summaryStr);
-                                        QString qAppName = QString::fromNSString(targetAppName);
-                                        QString qBundleId = QString::fromNSString(targetBundleId);
-
-                                        dispatch_async(dispatch_get_main_queue(), ^{
-                                            SystemObserver::instance()->updateContentSummary(qSummary);
-                                            SensorManager::instance()->updateOcrSummary(qAppName, qBundleId, qSummary);
-
-                                            QJsonObject ocrPayload;
-                                            ocrPayload["app_name"] = qAppName;
-                                            ocrPayload["bundle_id"] = qBundleId;
-                                            ocrPayload["content_summary"] = qSummary;
-                                            PetEventBus::instance()->emitEvent("system.app_ocr_updated", ocrPayload);
-                                        });
-                                    }
-                                }
-                            }
-                        });
-                    }];
-                }];
-            }
+            s_lastAutoOcrTime = QDateTime::currentMSecsSinceEpoch();
+            s_lastOcrBundle = [nsBundle copy];
+            [weakSelf triggerImmediateOcr];
         });
 
         self.ocrDebounceBlock = taskBlock;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1500 * NSEC_PER_MSEC)), dispatch_get_main_queue(), taskBlock);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3000 * NSEC_PER_MSEC)), dispatch_get_main_queue(), taskBlock);
     }];
 
     // 2. 系统休眠与唤醒 (严格调度在主线程)
@@ -381,6 +309,220 @@
     }
 }
 
+static bool s_hasConfirmedCaptureAccess = false;
+
+- (void)triggerImmediateOcr {
+    [self triggerImmediateOcrWithCallback:nil];
+}
+
+- (void)triggerImmediateOcrWithCallback:(void(^)(NSString *appName, NSString *windowTitle, NSString *ocrText))callback {
+    if (!s_hasConfirmedCaptureAccess && !CGPreflightScreenCaptureAccess()) {
+        NSLog(@"[SystemObserver OCR] 尚未激活屏幕录制权限，跳过主动截屏以避免触发系统提示");
+        if (callback) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                callback(@"", @"", @"");
+            });
+        }
+        return;
+    }
+    NSRunningApplication *front = [[NSWorkspace sharedWorkspace] frontmostApplication];
+    __block pid_t targetPid = front ? front.processIdentifier : 0;
+    __block NSString *targetAppName = front ? [front.localizedName copy] : @"";
+    __block NSString *targetBundleId = front ? [front.bundleIdentifier copy] : @"";
+
+    [SCShareableContent getShareableContentExcludingDesktopWindows:YES onScreenWindowsOnly:YES completionHandler:^(SCShareableContent *content, NSError *scError) {
+        if (scError || !content) {
+            NSLog(@"[SystemObserver OCR] SCShareableContent 错误: %@", scError);
+            if (callback) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    callback(targetAppName, @"", @"");
+                });
+            }
+            return;
+        }
+
+        s_hasConfirmedCaptureAccess = true;
+
+        SCWindow *targetWindow = nil;
+        // 1. 优先匹配当前活跃视窗（非桌宠自身）
+        if (targetPid > 0 && ![targetAppName isEqualToString:@"guyi-bot"] && ![targetBundleId isEqualToString:@"com.guyi.guyibot"]) {
+            for (SCWindow *win in content.windows) {
+                if (win.owningApplication) {
+                    BOOL pidMatch = (win.owningApplication.processID == targetPid);
+                    BOOL bundleMatch = (targetBundleId.length > 0 && [win.owningApplication.bundleIdentifier isEqualToString:targetBundleId]);
+                    BOOL nameMatch = (targetAppName.length > 0 && [win.owningApplication.applicationName isEqualToString:targetAppName]);
+                    if ((pidMatch || bundleMatch || nameMatch) && win.frame.size.width > 200 && win.frame.size.height > 150) {
+                        targetWindow = win;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 2. 若当前前台是桌宠自身或未能精准匹配，自动回退捕获最上层的外部有效工作视窗
+        if (!targetWindow) {
+            for (SCWindow *win in content.windows) {
+                if (win.owningApplication && win.frame.size.width > 300 && win.frame.size.height > 200) {
+                    NSString *bId = win.owningApplication.bundleIdentifier ?: @"";
+                    NSString *aName = win.owningApplication.applicationName ?: @"";
+                    if ([bId isEqualToString:@"com.guyi.guyibot"] || [aName isEqualToString:@"guyi-bot"]) continue;
+                    if ([aName isEqualToString:@"Window Server"] || [aName isEqualToString:@"Dock"] || [aName isEqualToString:@"控制中心"] || [aName isEqualToString:@"ControlCenter"]) continue;
+                    if ([aName isEqualToString:@"系统设置"] || [aName isEqualToString:@"System Settings"] || [aName isEqualToString:@"System Preferences"]) continue;
+                    if ([bId isEqualToString:@"com.apple.systempreferences"] || [bId isEqualToString:@"com.apple.SecurityAgent"] || [aName isEqualToString:@"universalAccessAuthWarn"]) continue;
+                    targetWindow = win;
+                    targetAppName = aName;
+                    targetBundleId = bId;
+                    break;
+                }
+            }
+        }
+
+        if (!targetWindow) {
+            if (callback) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    callback(targetAppName, @"", @"");
+                });
+            }
+            return;
+        }
+
+        __block NSString *windowTitle = targetWindow ? [targetWindow.title copy] : @"";
+
+        SCContentFilter *filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:targetWindow];
+        SCStreamConfiguration *config = [[SCStreamConfiguration alloc] init];
+        config.showsCursor = NO;
+        CGFloat maxDim = 1280.0;
+        CGFloat w = targetWindow.frame.size.width;
+        CGFloat h = targetWindow.frame.size.height;
+        if (w < 80.0 || h < 80.0) {
+            if (callback) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    callback(targetAppName, windowTitle, @"");
+                });
+            }
+            return;
+        }
+        if (w > maxDim) {
+            h = (h / w) * maxDim;
+            w = maxDim;
+        }
+        config.width = (size_t)w;
+        config.height = (size_t)h;
+
+        [SCScreenshotManager captureImageWithFilter:filter configuration:config completionHandler:^(CGImageRef cgImage, NSError *imgError) {
+            if (imgError || !cgImage) {
+                if (imgError) {
+                    NSLog(@"[SystemObserver OCR] captureImageWithFilter 错误: %@", imgError);
+                }
+                if (callback) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        callback(targetAppName, windowTitle, @"");
+                    });
+                }
+                return;
+            }
+
+            // 关键修复: cgImage 为 CoreGraphics C 结构，ARC 不托管生命周期。
+            // completionHandler 执行完毕后会被系统释放，跨线程必须显式 CGImageRetain 保护，用毕在 finally 中 CGImageRelease，彻底杜绝 UAF 闪退。
+            CGImageRetain(cgImage);
+
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                @autoreleasepool {
+                    @try {
+                        VNRecognizeTextRequest *request = [[VNRecognizeTextRequest alloc] init];
+                        // 采用高精度神经网络 OCR 引擎（全面支持中英双语、上下文语言纠偏），彻底解决 Fast 模式将中文及 UI 噪点识别为乱码符号的问题
+                        request.recognitionLevel = VNRequestTextRecognitionLevelAccurate;
+                        request.usesLanguageCorrection = YES;
+                        request.recognitionLanguages = @[@"zh-Hans", @"zh-Hant", @"en-US"];
+                        request.minimumTextHeight = 0.012; // 过滤小于 15px 的微小噪点、边框与分割线
+
+                        VNImageRequestHandler *handler = [[VNImageRequestHandler alloc] initWithCGImage:cgImage options:@{}];
+                        NSError *err = nil;
+                        [handler performRequests:@[request] error:&err];
+
+                        if (!err && request.results.count > 0) {
+                            s_hasConfirmedCaptureAccess = true;
+                            NSMutableArray<NSString*> *lines = [NSMutableArray array];
+                            NSCharacterSet *noiseChars = [NSCharacterSet characterSetWithCharactersInString:@" \t\r\n•*-_|~#+=/\\:;.,`'\"()[]{}<>^·…"];
+                            NSRegularExpression *validContentRe = [NSRegularExpression regularExpressionWithPattern:@"[\\p{Han}]{1,}|[a-zA-Z]{3,}" options:0 error:nil];
+
+                            for (VNRecognizedTextObservation *obs in request.results) {
+                                VNRecognizedText *topCand = [obs topCandidates:1].firstObject;
+                                if (!topCand || topCand.confidence < 0.40f) continue;
+
+                                NSString *trimmed = [topCand.string stringByTrimmingCharactersInSet:noiseChars];
+                                if (trimmed.length < 2) continue;
+
+                                // 严格校验：必须包含至少 1 个汉字，或至少 1 个长度>=3 的有效英文单词（过滤乱码标点、图标杂质）
+                                NSRange range = NSMakeRange(0, trimmed.length);
+                                if (![validContentRe firstMatchInString:trimmed options:0 range:range]) {
+                                    continue;
+                                }
+
+                                // 符号率过滤：若标点符号比例过高则判定为界面碎片
+                                NSUInteger letterOrDigitCount = 0;
+                                for (NSUInteger i = 0; i < trimmed.length; ++i) {
+                                    unichar c = [trimmed characterAtIndex:i];
+                                    if ((c >= 0x4e00 && c <= 0x9fa5) || isalnum(c)) {
+                                        letterOrDigitCount++;
+                                    }
+                                }
+                                if ((double)letterOrDigitCount / (double)trimmed.length < 0.60) {
+                                    continue;
+                                }
+
+                                if (![lines containsObject:trimmed]) {
+                                    [lines addObject:trimmed];
+                                    if (lines.count >= 15) break;
+                                }
+                            }
+
+                            if (lines.count > 0) {
+                                NSString *summaryStr = [lines componentsJoinedByString:@" | "];
+                                QString qSummary = QString::fromNSString(summaryStr);
+                                QString qAppName = QString::fromNSString(targetAppName);
+                                QString qBundleId = QString::fromNSString(targetBundleId);
+
+                                dispatch_async(dispatch_get_main_queue(), ^{
+                                    SystemObserver::instance()->updateContentSummary(qSummary);
+                                    SensorManager::instance()->updateOcrSummary(qAppName, qBundleId, qSummary);
+
+                                    QJsonObject ocrPayload;
+                                    ocrPayload["app_name"] = qAppName;
+                                    ocrPayload["bundle_id"] = qBundleId;
+                                    ocrPayload["content_summary"] = qSummary;
+                                    PetEventBus::instance()->emitEvent("system.app_ocr_updated", ocrPayload);
+
+                                    if (callback) {
+                                        callback(targetAppName, windowTitle, summaryStr);
+                                    }
+                                });
+                            } else if (callback) {
+                                dispatch_async(dispatch_get_main_queue(), ^{
+                                    callback(targetAppName, windowTitle, @"");
+                                });
+                            }
+                        } else if (callback) {
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                callback(targetAppName, windowTitle, @"");
+                            });
+                        }
+                    } @catch (NSException *ex) {
+                        NSLog(@"[SystemObserver OCR] Vision OCR 处理异常: %@", ex);
+                        if (callback) {
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                callback(targetAppName, windowTitle, @"");
+                            });
+                        }
+                    } @finally {
+                        CGImageRelease(cgImage);
+                    }
+                }
+            });
+        }];
+    }];
+}
+
 @end
 
 SystemObserver::SystemObserver()
@@ -431,6 +573,38 @@ void SystemObserver::stop()
         [listener stopListening];
         m_observerContext = nullptr;
     }
+}
+
+void SystemObserver::triggerOcrSnapshot(std::function<void(const QString &appName, const QString &windowTitle, const QString &ocrText)> callback)
+{
+    if (m_observerContext) {
+        MacSystemListener *listener = (__bridge MacSystemListener*)m_observerContext;
+        if (callback) {
+            [listener triggerImmediateOcrWithCallback:^(NSString *appName, NSString *windowTitle, NSString *ocrText) {
+                QString outApp = QString::fromNSString(appName);
+                QString outTitle = QString::fromNSString(windowTitle);
+                QString outText = QString::fromNSString(ocrText);
+                callback(outApp, outTitle, outText);
+            }];
+        } else {
+            [listener triggerImmediateOcr];
+        }
+    } else if (callback) {
+        callback("", "", "");
+    }
+}
+
+bool SystemObserver::hasScreenCaptureAccess() const
+{
+    if (s_hasConfirmedCaptureAccess) {
+        return true;
+    }
+    return CGPreflightScreenCaptureAccess();
+}
+
+void SystemObserver::requestScreenCaptureAccess()
+{
+    CGRequestScreenCaptureAccess();
 }
 
 QString SystemObserver::currentActiveAppName() const

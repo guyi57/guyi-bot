@@ -44,13 +44,14 @@ SOURCES = src/main.cc \
 	src/agent/FastTranslateService.cc \
 	src/agent/LongTermMemoryEngine.cc \
 	src/agent/VocabLearningEngine.cc \
-	src/agent/AipyAdapter.cc \
+	src/agent/DeepSeekHarnessAdapter.cc \
 	src/agent/PersonaManager.cc \
 	src/agent/SkillManager.cc \
 	src/agent/McpClient.cc \
 	src/agent/McpManager.cc \
 	src/agent/ShijimaHttpApi.cc \
 	src/agent/WebSearchEngine.cc \
+	src/agent/NewsFeedService.cc \
 	src/music/MusicFavoriteDb.cc \
 	src/music/MusicApiService.cc \
 	src/music/MusicPlayerManager.cc \
@@ -61,6 +62,7 @@ SOURCES = src/main.cc \
 	src/system/TrashWatcher.cc \
 	src/system/UpdateManager.cc \
 	src/system/SensorManager.cc \
+	src/system/AudioSpeechService.cc \
 	$(PLATFORM_SYSTEM_SOURCES) \
 	src/ui/FloatingFileWidget.cc \
 	src/ui/TrashTargetWidget.cc \
@@ -217,12 +219,14 @@ publish/macOS/$(CONFIG)/$(TARGET).app: publish/macOS/$(CONFIG)
 	mkdir -p $@/Contents/MacOS $@/Contents/Frameworks
 	cp $^/$(TARGET) $@/Contents/MacOS/$(TARGET)
 	cp libshimejifinder/build/unarr/libunarr.1.dylib $@/Contents/MacOS/ 2>/dev/null || true
-	macdeployqt $@ || true
-	python3 scripts/fix_bundle_symlinks.py $@
-	mkdir -p $@/Contents/MacOS/scripts
-	cp -r scripts/compressor $@/Contents/MacOS/scripts/ 2>/dev/null || true
+	mkdir -p $@/Contents/Resources/scripts/compressor
+	cp -r scripts/compressor/* $@/Contents/Resources/scripts/compressor/ 2>/dev/null || true
+	mkdir -p $@/Contents/Resources/scripts
+	cp scripts/pet_news_feed.py $@/Contents/Resources/scripts/ 2>/dev/null || true
 	mkdir -p $@/Contents/Resources/res
 	cp -r res/* $@/Contents/Resources/res/ 2>/dev/null || true
+	macdeployqt $@ || true
+	python3 scripts/fix_bundle_symlinks.py $@
 
 publish/Linux/$(CONFIG)/$(TARGET).AppImage: publish/Linux/$(CONFIG) linuxdeploy.AppImage
 	rm -rf AppDir

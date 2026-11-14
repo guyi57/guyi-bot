@@ -60,6 +60,17 @@ void SystemObserver::stop() {
     m_started = false;
 }
 
+void SystemObserver::triggerOcrSnapshot(std::function<void(const QString &appName, const QString &windowTitle, const QString &ocrText)> callback) {
+    if (callback) callback("", "", "");
+}
+
+bool SystemObserver::hasScreenCaptureAccess() const {
+    return true;
+}
+
+void SystemObserver::requestScreenCaptureAccess() {
+}
+
 QString SystemObserver::currentActiveAppName() const {
     return m_activeAppName;
 }

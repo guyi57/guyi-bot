@@ -32,8 +32,12 @@ public:
     bool isCountdownRunning() const { return m_countdownTimer && m_countdownTimer->isActive() && m_remainingSeconds > 0; }
     int remainingSeconds() const { return m_remainingSeconds; }
     QString const& message() const { return m_text; }
+    QString lastTopicText() const { return !m_lastTopicText.isEmpty() ? m_lastTopicText : m_text; }
+    qint64 lastTopicTime() const { return m_lastTopicTime; }
     bool isCompactCuteMode() const { return m_isCompactCuteMode; }
     bool isHovered() const { return m_isHovered; }
+    bool isPositionInitialized() const { return m_positionInitialized; }
+    void setPositionInitialized(bool init) { m_positionInitialized = init; }
 
     std::function<void()> onClosed = nullptr;
     std::function<void(bool isHovered)> onHoverChanged = nullptr;
@@ -49,6 +53,7 @@ protected:
     void paintEvent(QPaintEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     void mousePressEvent(QMouseEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
     void enterEvent(QEnterEvent *event) override;
     void leaveEvent(QEvent *event) override;
     bool eventFilter(QObject *watched, QEvent *event) override;
@@ -60,13 +65,19 @@ private:
     void setHovered(bool hovered);
 
     QString m_text;
+    QString m_lastTopicText;
+    qint64 m_lastTopicTime = 0;
     QString m_appTarget;
     QTimer *m_hideTimer = nullptr;
     QTimer *m_countdownTimer = nullptr;
     int m_lastDuration = 0;
     int m_remainingSeconds = 0;
     bool m_isCountdownPaused = false;
+    int m_lastPausedStyleState = -1;
     bool m_isHovered = false;
+    bool m_positionInitialized = false;
+    int m_bubbleOpacity = 78;
+    QTimer *m_leaveDebounceTimer = nullptr;
     bool m_isCompactCuteMode = false;
     int m_tailX = -1;
     bool m_tailFlipped = false;

@@ -28,5 +28,9 @@ private:
     QFileSystemWatcher *m_watcher = nullptr;
     void *m_fseventStream = nullptr;
     QSet<QString> m_knownFiles;
-    qint64 m_lastTriggerTime = 0;
+
+    qint64 m_lastAnimTime = 0;       // 上次动画触发时间
+    qint64 m_lastEventTime = 0;      // 上次文件删除事件时间
+    qint64 m_lastSnapshotTime = 0;   // 快照更新节流时间
+    int m_continuousCount = 0;       // 连续删除事件计数
 };

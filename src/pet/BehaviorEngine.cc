@@ -11,6 +11,7 @@
 #include "PetDiaryManager.hpp"
 #include "LongTermMemoryEngine.hpp"
 #include "VocabLearningEngine.hpp"
+#include "NewsFeedService.hpp"
 #include <QRandomGenerator>
 #include <QDateTime>
 #include <QCursor>
@@ -257,6 +258,21 @@ void BehaviorEngine::onTick()
         s_lastMoodDecayTime = now;
     }
 
+    // 自动累积今日工作与专注时长（每 60 秒检测一次）
+    static qint64 s_lastWorkCheckTime = 0;
+    if (s_lastWorkCheckTime == 0) s_lastWorkCheckTime = now;
+    if ((now - s_lastWorkCheckTime) >= 60000) {
+        s_lastWorkCheckTime = now;
+        QString activeApp = SystemObserver::instance()->currentActiveAppName();
+        bool isUserActive = !activeApp.isEmpty() && 
+                            activeApp != "guyi-bot" && 
+                            activeApp != "ScreenSaver" && 
+                            activeApp != "loginwindow";
+        if (isUserActive) {
+            PetDiaryManager::instance()->recordWorkMinutes(1);
+        }
+    }
+
     // 3. 检查长时间驻留类彩蛋 (如 Chrome > 15分钟)
     PetActionCommand dwellCmd;
     int dwellMoodDelta = 0;
@@ -443,6 +459,7 @@ void BehaviorEngine::checkInitiativeChat()
                 cmd.durationMs = 25000;
                 cmd.moveToCenter = false;
                 cmd.emote = PetEmoteType::ThinkingBulb;
+                // 单词微测验属于 UI 互动卡片组件，无需沉淀进对话上下文，避免后续提问 Prompt 膨胀
                 executeAction(cmd);
                 return;
             }
@@ -451,6 +468,16 @@ void BehaviorEngine::checkInitiativeChat()
         m_isThinking = true;
         contextInfo["trigger_reason"] = reason;
         contextInfo["score"] = score;
+
+        if (reason.contains("hot_trending_meme")) {
+            auto newsItem = NewsFeedService::instance()->getRandomItem("mix");
+            if (!newsItem.text.isEmpty()) {
+                contextInfo["news_source"] = newsItem.source;
+                contextInfo["news_text"] = newsItem.text;
+                contextInfo["news_url"] = newsItem.url;
+                contextInfo["news_category"] = newsItem.category;
+            }
+        }
 
         QString curiosityKey;
         if (reason.contains("curiosity_inquiry")) {
@@ -462,6 +489,7 @@ void BehaviorEngine::checkInitiativeChat()
         }
 
         qint64 followupId = -1;
+        QString followupWord;
         if (reason.contains("event_followup")) {
             auto pendingFollowups = LongTermMemoryEngine::instance()->getPendingFollowupEvents(1);
             if (!pendingFollowups.isEmpty()) {
@@ -469,10 +497,23 @@ void BehaviorEngine::checkInitiativeChat()
                 contextInfo["followup_id"] = followupId;
                 contextInfo["followup_title"] = pendingFollowups.first().title;
                 contextInfo["followup_context"] = pendingFollowups.first().context;
+
+                // 嗅探是否为待复习/抽查的英语生词
+                static QRegularExpression wordRe(R"(\b([a-zA-Z]{2,30})\b)");
+                auto match = wordRe.match(pendingFollowups.first().title + " " + pendingFollowups.first().context);
+                if (match.hasMatch()) {
+                    QString candWord = match.captured(1);
+                    auto card = VocabLearningEngine::instance()->getCardByWord(candWord);
+                    if (card.id > 0) {
+                        followupWord = card.word;
+                        contextInfo["followup_vocab_word"] = card.word;
+                        contextInfo["followup_vocab_def"] = card.definition;
+                    }
+                }
             }
         }
 
-        AgentService::instance()->requestPetIntent(contextInfo, [this, reason, curiosityKey, followupId](bool success, const AIBehaviorIntent &intent) {
+        AgentService::instance()->requestPetIntent(contextInfo, [this, reason, curiosityKey, followupId, followupWord](bool success, const AIBehaviorIntent &intent) {
             m_isThinking = false;
             if (success) {
                 InitiativeTrigger::instance()->recordTalkSuccess(m_state);
@@ -488,7 +529,19 @@ void BehaviorEngine::checkInitiativeChat()
                 PetActionCommand cmd;
                 cmd.type = PetActionType::Talk;
                 cmd.speechText = intent.speech;
-                cmd.durationMs = 20000;
+
+                // 深度联动英语伴学：若为单词跟进，自动追加互动测验题目与原声发音按钮
+                if (!followupWord.isEmpty()) {
+                    auto card = VocabLearningEngine::instance()->getCardByWord(followupWord);
+                    if (card.id > 0) {
+                        auto quiz = VocabLearningEngine::instance()->generateQuizForCard(card.id);
+                        if (!quiz.promptText.isEmpty()) {
+                            cmd.speechText = intent.speech + "\n\n" + quiz.promptText;
+                        }
+                    }
+                }
+
+                cmd.durationMs = 25000;
                 cmd.moveToCenter = false;
                 cmd.allowReply = true;
 
@@ -533,6 +586,7 @@ void BehaviorEngine::checkInitiativeChat()
                 }
 
                 PetDiaryManager::instance()->recordChat();
+                // 单词微测验属于 UI 互动卡片组件，无需沉淀进对话上下文，避免后续提问 Prompt 膨胀
                 executeAction(cmd);
             }
         });

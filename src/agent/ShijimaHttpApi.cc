@@ -672,6 +672,51 @@ ShijimaHttpApi::ShijimaHttpApi(ShijimaManager *manager): m_server(new Server),
         sendJson(res, responseObj);
     });
 
+    // 提问与任务触发接口 (用于测试与外部联动)
+    m_server->Post("/api/agent/ask", [this](Request const& req, Response &res) {
+        QJsonObject responseObj;
+        auto doc = QJsonDocument::fromJson(QByteArray(req.body.c_str(), req.body.size()));
+        if (!doc.isObject()) {
+            res.status = 400;
+            responseObj["success"] = false;
+            responseObj["error"] = "Invalid JSON body";
+            sendJson(res, responseObj);
+            return;
+        }
+        auto root = doc.object();
+        QString question = root["question"].toString().trimmed();
+        QString context = root["context"].toString().trimmed();
+        if (question.isEmpty()) {
+            res.status = 400;
+            responseObj["success"] = false;
+            responseObj["error"] = "Question cannot be empty";
+            sendJson(res, responseObj);
+            return;
+        }
+
+        QMetaObject::invokeMethod(qApp, [this, question, context]() {
+            auto const& list = m_manager->mascots();
+            if (!list.empty()) {
+                list.front()->onQuestionSubmitted(context, question);
+            }
+        }, Qt::QueuedConnection);
+
+        responseObj["success"] = true;
+        responseObj["question"] = question;
+        sendJson(res, responseObj);
+    });
+
+    // 终止当前正在执行的 Agent 深度任务 (与气泡内 [⏹ 终止任务] 对应)
+    auto handleCancelTask = [](Request const&, Response &res) {
+        QJsonObject responseObj;
+        AgentService::instance()->cancelActiveTask();
+        responseObj["success"] = true;
+        responseObj["message"] = "Active task canceled";
+        sendJson(res, responseObj);
+    };
+    m_server->Post("/api/agent/cancel", handleCancelTask);
+    m_server->Get("/api/agent/cancel", handleCancelTask);
+
     // 
     // 视觉压缩工坊 (Squoosh 风格) 相关 HTTP 接口
     // 

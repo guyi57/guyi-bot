@@ -28,6 +28,7 @@ protected:
 private:
     QString m_selectedText;
     QPushButton *m_translateBtn;
+    QPushButton *m_speakBtn;
     QPushButton *m_askBtn;
     QPushButton *m_closeBtn;
 };

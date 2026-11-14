@@ -16,6 +16,8 @@
 #include "MessageHistoryManager.hpp"
 #include "MessageHistoryDialog.hpp"
 #include "VocabLearningEngine.hpp"
+#include "AudioSpeechService.hpp"
+#include "AgentService.hpp"
 #include "SettingsDb.hpp"
 #include <QResizeEvent>
 
@@ -148,10 +150,14 @@ static QString renderInlineMarkdown(QString text) {
         linkProcessed += text.mid(lastPos, match.capturedStart() - lastPos);
         QString label = match.captured(1);
         QString href = match.captured(2);
-        if (href.startsWith("vocab://answer")) {
+        if (href.startsWith("vocab://speak") || href.startsWith("speech://")) {
+            linkProcessed += QString("<a href=\"%1\" style=\"display:inline-block; margin:2px 3px; padding:2px 9px; background-color:#ecfdf5; color:#059669; border:1px solid #a7f3d0; border-radius:12px; font-weight:600; font-size:12px; text-decoration:none;\">%2</a>").arg(href, label);
+        } else if (href.startsWith("vocab://answer")) {
             linkProcessed += QString("<a href=\"%1\" style=\"display:inline-block; margin:2px 3px; padding:3px 10px; background-color:#eff6ff; color:#2563eb; border:1px solid #bfdbfe; border-radius:12px; font-weight:bold; font-size:12px; text-decoration:none;\">%2</a>").arg(href, label);
         } else if (href.startsWith("vocab://")) {
             linkProcessed += QString("<a href=\"%1\" style=\"display:inline-block; margin:2px 3px; padding:2px 8px; background-color:#f1f5f9; color:#475569; border:1px solid #cbd5e1; border-radius:8px; font-size:11.5px; text-decoration:none;\">%2</a>").arg(href, label);
+        } else if (href.startsWith("agent://cancel")) {
+            linkProcessed += QString("<a href=\"%1\" style=\"display:inline-block; margin:4px 0 2px 0; padding:2px 10px; background-color:#fef2f2; color:#ef4444; border:1px solid #fecaca; border-radius:10px; font-size:11.5px; font-weight:600; text-decoration:none;\">%2</a>").arg(href, label);
         } else {
             linkProcessed += QString("<a href=\"%1\" style=\"color:#3b82f6; text-decoration:none; font-weight:500;\">%2</a>").arg(href, label);
         }
@@ -365,6 +371,15 @@ QString MessageBubble::markdownToRichHtml(QString const& raw) {
 MessageBubble::MessageBubble(QWidget *parent)
     : QWidget(parent), m_hideTimer(nullptr), m_lastDuration(0)
 {
+    m_leaveDebounceTimer = new QTimer(this);
+    m_leaveDebounceTimer->setSingleShot(true);
+    connect(m_leaveDebounceTimer, &QTimer::timeout, this, [this]() {
+        QPoint localPos = mapFromGlobal(QCursor::pos());
+        if (!rect().contains(localPos)) {
+            setHovered(false);
+        }
+    });
+
     setAttribute(Qt::WA_TranslucentBackground);
     setAttribute(Qt::WA_NoSystemBackground);
     setAttribute(Qt::WA_ShowWithoutActivating);
@@ -454,7 +469,7 @@ MessageBubble::MessageBubble(QWidget *parent)
     m_textBrowser->setReadOnly(true);
     m_textBrowser->setOpenExternalLinks(false);
     m_textBrowser->setOpenLinks(false);
-    connect(m_textBrowser, &QTextBrowser::anchorClicked, this, [](const QUrl &url) {
+    connect(m_textBrowser, &QTextBrowser::anchorClicked, this, [this](const QUrl &url) {
         if (url.scheme() == "vocab") {
             QString host = url.host();
             QUrlQuery query(url);
@@ -468,6 +483,21 @@ MessageBubble::MessageBubble(QWidget *parent)
             } else if (host == "mark_known") {
                 qint64 cardId = query.queryItemValue("id").toLongLong();
                 VocabLearningEngine::instance()->markCardKnown(cardId);
+            } else if (host == "speak") {
+                QString word = query.queryItemValue("word");
+                if (!word.isEmpty()) {
+                    AudioSpeechService::instance()->speak(word, "en");
+                }
+            }
+        } else if (url.scheme() == "speech") {
+            QString text = QUrlQuery(url).queryItemValue("text");
+            if (!text.isEmpty()) {
+                AudioSpeechService::instance()->speak(text);
+            }
+        } else if (url.scheme() == "agent") {
+            if (url.host() == "cancel") {
+                AgentService::instance()->cancelActiveTask();
+                showMessage("🛑 任务已被主人手动终止", 4000, "", true, false);
             }
         } else {
             QDesktopServices::openUrl(url);
@@ -573,8 +603,9 @@ MessageBubble::MessageBubble(QWidget *parent)
         if (text.isEmpty()) return;
         m_replyInput->clear();
         m_replyBarWidget->hide();
+        QString topic = !m_lastTopicText.isEmpty() ? m_lastTopicText : m_text;
         if (onReplySubmitted) {
-            onReplySubmitted(m_text, text);
+            onReplySubmitted(topic, text);
         }
     };
 
@@ -656,19 +687,19 @@ MessageBubble::MessageBubble(QWidget *parent)
 
     m_countdownTimer = new QTimer(this);
     connect(m_countdownTimer, &QTimer::timeout, this, [this]() {
-        QPoint globalMousePos = QCursor::pos();
-        QRect globalRect = QRect(mapToGlobal(QPoint(0, 0)), size());
-        bool mouseInside = globalRect.contains(globalMousePos);
+        QPoint localPos = mapFromGlobal(QCursor::pos());
+        bool mouseInside = rect().contains(localPos);
+        bool isTyping = (m_replyInput && (m_replyInput->hasFocus() || !m_replyInput->text().trimmed().isEmpty()));
 
-        if (mouseInside) {
-            // 鼠标正悬停在气泡内，暂停倒计时，给用户充分的阅读时间
+        if (mouseInside || isTyping) {
+            // 鼠标正悬停在气泡内或用户正在回复打字，暂停倒计时，给用户充分的交互与阅读时间
             if (!m_isCountdownPaused) {
                 m_isCountdownPaused = true;
                 updateCountdownDisplay();
             }
             return;
         } else {
-            // 鼠标已离开气泡区域，坚决恢复倒计时
+            // 鼠标已离开气泡区域且无正在编辑文字，坚决恢复倒计时
             if (m_isCountdownPaused) {
                 m_isCountdownPaused = false;
                 if (m_remainingSeconds <= 0) {
@@ -715,6 +746,7 @@ void MessageBubble::openAppTarget()
 
 void MessageBubble::showMessage(QString const& text, int duration, QString const& appTarget, bool forceCompact, bool allowReply)
 {
+    m_positionInitialized = false;
     m_text = normalizeMarkdownText(text);
     m_lastDuration = duration;
     m_appTarget = appTarget.trimmed();
@@ -722,6 +754,15 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
     if (m_text.isEmpty()) {
         hide();
         return;
+    }
+
+    // 保护真实会话主题：仅当非临时状态微调提示（💭、🤔、🔍、📸、🤖 正在、⏳）时，才更新有效会话主题与时间戳
+    bool isStatusSpinner = m_text.startsWith("💭") || m_text.startsWith("🤔") || 
+                           m_text.startsWith("🔍") || m_text.startsWith("📸") || 
+                           m_text.startsWith("🤖 正在") || m_text.startsWith("⏳");
+    if (!m_text.isEmpty() && !isStatusSpinner) {
+        m_lastTopicText = m_text;
+        m_lastTopicTime = QDateTime::currentMSecsSinceEpoch();
     }
 
     bool isQuestion = m_text.contains('?') || m_text.contains(QString::fromUtf8("？")) ||
@@ -732,7 +773,9 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
 
     if (showReplyInput) {
         m_replyBarWidget->show();
-        m_replyInput->clear();
+        if (!m_replyInput->hasFocus() && m_replyInput->text().trimmed().isEmpty()) {
+            m_replyInput->clear();
+        }
     } else {
         m_replyBarWidget->hide();
     }
@@ -751,11 +794,13 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
         bool hasVocab = m_text.contains("vocab://");
         bool hasMultiLineStructure = (m_text.count('\n') >= 3 && (m_text.contains("• ") || m_text.contains("- ") || m_text.contains("👉 ")));
         bool isVeryLong = m_text.length() > 220;
+        bool isAgentProgress = m_text.contains("agent://") || m_text.contains("▰") || m_text.contains("▱") || m_text.contains("DeepSeek 正在执行任务");
 
-        hasMarkdown = hasCodeBlock || hasTable || hasHeader || hasAppAction || hasVocab || hasMultiLineStructure || isVeryLong;
+        hasMarkdown = hasCodeBlock || hasTable || hasHeader || hasAppAction || hasVocab || hasMultiLineStructure || isVeryLong || isAgentProgress;
     }
 
     m_isCompactCuteMode = !hasMarkdown;
+    m_bubbleOpacity = SettingsDb::instance()->getInt("ui.bubble_opacity", m_isCompactCuteMode ? 78 : 80);
 
     if (m_isCompactCuteMode) {
         if (m_topBarWidget) m_topBarWidget->hide();
@@ -824,7 +869,13 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
         m_textBrowser->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
         m_textBrowser->document()->setDocumentMargin(2);
 
-        QString richHtml = markdownToRichHtml(m_text);
+        // 关键优化：气泡富文本防卡顿保护（超长文本截取核心前文，完整报告仍完整收录至历史面板）
+        QString bubbleDisplayText = m_text;
+        if (bubbleDisplayText.length() > 1600) {
+            bubbleDisplayText = bubbleDisplayText.left(1300).trimmed() + 
+                "\n\n> 📋 *[注：文本内容较长，气泡已保留核心前文；完整报告已同步存入历史面板，可随时按快捷键或右键气泡查看]*";
+        }
+        QString richHtml = markdownToRichHtml(bubbleDisplayText);
 
         if (!m_appTarget.isEmpty()) {
             QString btnTitle = "打开应用";
@@ -859,11 +910,12 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
         m_textBrowser->setFixedHeight(bubbleHeight - 50 - (showReplyInput ? 44 : 0));
     }
 
-    // 自动记录重要任务到历史任务管理器 (仅记录真实任务与问答，不收录桌宠主动闲聊/互动)
-    if (!m_text.isEmpty() && !m_isCompactCuteMode) {
+    // 自动记录重要任务到历史任务管理器 (仅记录真实任务与问答，不收录桌宠主动闲聊/互动，也不收录正在流式推进中的中间进度)
+    bool isIntermediateProgress = (duration == 0) || m_text.contains("agent://cancel") || m_text.contains("进行中...") || m_text.contains("执行中...");
+    if (!m_text.isEmpty() && !m_isCompactCuteMode && !isIntermediateProgress) {
         QString type;
         if (m_text.startsWith("🔍") || m_text.contains("翻译")) type = "translate";
-        else if (m_text.startsWith("🤖") || !m_appTarget.isEmpty() || m_text.contains("aipy") || m_text.contains("Agent")) type = "agent_task";
+        else if (m_text.startsWith("🤖") || m_text.startsWith("⚡") || !m_appTarget.isEmpty() || m_text.contains("dsh") || m_text.contains("DeepSeek Harness") || m_text.contains("aipy") || m_text.contains("Agent")) type = "agent_task";
         else if (m_text.startsWith("🤔") || m_text.contains("问题")) type = "ask";
 
         if (!type.isEmpty()) {
@@ -896,32 +948,39 @@ void MessageBubble::showMessage(QString const& text, int duration, QString const
 void MessageBubble::updateCountdownDisplay()
 {
     if (!m_countdownLabel) return;
+    int targetState = m_isCountdownPaused ? 1 : 0;
+    if (m_lastPausedStyleState != targetState) {
+        m_lastPausedStyleState = targetState;
+        if (m_isCountdownPaused) {
+            m_countdownLabel->setStyleSheet(
+                "QLabel {"
+                "  background-color: rgba(254, 243, 199, 0.95);"
+                "  color: #d97706;"
+                "  font-size: 11px;"
+                "  font-weight: 600;"
+                "  padding: 3px 8px;"
+                "  border-radius: 11px;"
+                "  border: 1px solid #fde68a;"
+                "}"
+            );
+        } else {
+            m_countdownLabel->setStyleSheet(
+                "QLabel {"
+                "  background-color: rgba(241, 245, 249, 0.85);"
+                "  color: #475569;"
+                "  font-size: 11px;"
+                "  font-weight: 600;"
+                "  padding: 3px 8px;"
+                "  border-radius: 11px;"
+                "  border: 1px solid rgba(203, 213, 225, 0.8);"
+                "}"
+            );
+        }
+    }
     if (m_isCountdownPaused) {
         m_countdownLabel->setText(QString("⏸ %1s").arg(m_remainingSeconds));
-        m_countdownLabel->setStyleSheet(
-            "QLabel {"
-            "  background-color: rgba(254, 243, 199, 0.95);"
-            "  color: #d97706;"
-            "  font-size: 11px;"
-            "  font-weight: 600;"
-            "  padding: 3px 8px;"
-            "  border-radius: 11px;"
-            "  border: 1px solid #fde68a;"
-            "}"
-        );
     } else {
         m_countdownLabel->setText(QString("⏱️ %1s").arg(m_remainingSeconds));
-        m_countdownLabel->setStyleSheet(
-            "QLabel {"
-            "  background-color: rgba(241, 245, 249, 0.85);"
-            "  color: #475569;"
-            "  font-size: 11px;"
-            "  font-weight: 600;"
-            "  padding: 3px 8px;"
-            "  border-radius: 11px;"
-            "  border: 1px solid rgba(203, 213, 225, 0.8);"
-            "}"
-        );
     }
     updateControlsPosition();
 }
@@ -997,6 +1056,8 @@ void MessageBubble::setHovered(bool hovered)
 void MessageBubble::hideMessage()
 {
     bool wasDisplaying = isDisplaying();
+    m_positionInitialized = false;
+    if (m_leaveDebounceTimer) m_leaveDebounceTimer->stop();
     setHovered(false);
     m_text.clear();
     m_appTarget.clear();
@@ -1009,7 +1070,7 @@ void MessageBubble::hideMessage()
     if (m_hideTimer) m_hideTimer->stop();
     if (m_countdownTimer) m_countdownTimer->stop();
     hide();
-    if (wasDisplaying && onClosed) {
+    if (onClosed) {
         onClosed();
     }
 }
@@ -1030,22 +1091,25 @@ void MessageBubble::showHistoryDialog()
 
 bool MessageBubble::eventFilter(QObject *watched, QEvent *event)
 {
-    if (event->type() == QEvent::Enter || 
-        event->type() == QEvent::HoverEnter || 
-        event->type() == QEvent::MouseMove) {
+    if (event->type() == QEvent::Enter || event->type() == QEvent::HoverEnter) {
+        if (m_leaveDebounceTimer) m_leaveDebounceTimer->stop();
         setHovered(true);
     } else if (event->type() == QEvent::MouseButtonPress) {
+        if (m_leaveDebounceTimer) m_leaveDebounceTimer->stop();
         setHovered(true);
         if (watched == m_replyInput || watched == m_replyBarWidget) {
+            Platform::activateApp();
             this->activateWindow();
             m_replyInput->setFocus(Qt::MouseFocusReason);
         }
     } else if (event->type() == QEvent::Leave || event->type() == QEvent::HoverLeave) {
-        // 检查鼠标是否完全离开当前气泡全局区域
-        QPoint globalMousePos = QCursor::pos();
-        QRect globalRect = QRect(mapToGlobal(QPoint(0, 0)), size());
-        if (!globalRect.contains(globalMousePos)) {
-            setHovered(false);
+        if (m_leaveDebounceTimer) {
+            m_leaveDebounceTimer->start(180);
+        } else {
+            QPoint localPos = mapFromGlobal(QCursor::pos());
+            if (!rect().contains(localPos)) {
+                setHovered(false);
+            }
         }
     }
     return false;
@@ -1053,27 +1117,42 @@ bool MessageBubble::eventFilter(QObject *watched, QEvent *event)
 
 void MessageBubble::mousePressEvent(QMouseEvent *event)
 {
+    Platform::activateApp();
     this->activateWindow();
     QWidget::mousePressEvent(event);
 }
 
+void MessageBubble::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_Escape) {
+        hideMessage();
+        event->accept();
+        return;
+    }
+    QWidget::keyPressEvent(event);
+}
+
 void MessageBubble::enterEvent(QEnterEvent *)
 {
+    if (m_leaveDebounceTimer) m_leaveDebounceTimer->stop();
     setHovered(true);
 }
 
 void MessageBubble::leaveEvent(QEvent *)
 {
-    QPoint globalMousePos = QCursor::pos();
-    QRect globalRect = QRect(mapToGlobal(QPoint(0, 0)), size());
-    if (!globalRect.contains(globalMousePos)) {
-        setHovered(false);
+    if (m_leaveDebounceTimer) {
+        m_leaveDebounceTimer->start(180);
+    } else {
+        QPoint localPos = mapFromGlobal(QCursor::pos());
+        if (!rect().contains(localPos)) {
+            setHovered(false);
+        }
     }
 }
 
 void MessageBubble::setTailPosition(int x, bool flippedBelow)
 {
-    if (m_tailX != x || m_tailFlipped != flippedBelow) {
+    if (std::abs(m_tailX - x) >= 3 || m_tailFlipped != flippedBelow) {
         m_tailX = x;
         m_tailFlipped = flippedBelow;
         update();
@@ -1120,7 +1199,7 @@ void MessageBubble::paintEvent(QPaintEvent *)
             painter.fillPath(shadowPath, QColor(139, 92, 246, 3 * i));
         }
 
-        int opacityPercent = SettingsDb::instance()->getInt("ui.bubble_opacity", 78);
+        int opacityPercent = m_bubbleOpacity;
         int alphaTop = std::clamp(opacityPercent * 255 / 100, 60, 255);
         int alphaMid = std::clamp((opacityPercent - 4) * 255 / 100, 50, 255);
         int alphaBot = std::clamp((opacityPercent - 8) * 255 / 100, 40, 255);
@@ -1177,7 +1256,7 @@ void MessageBubble::paintEvent(QPaintEvent *)
             painter.fillPath(shadowPath, QColor(15, 23, 42, 2.5 * i));
         }
 
-        int opacityPercent = SettingsDb::instance()->getInt("ui.bubble_opacity", 80);
+        int opacityPercent = m_bubbleOpacity;
         int alphaTop = std::clamp(opacityPercent * 255 / 100, 60, 255);
         int alphaMid = std::clamp((opacityPercent - 4) * 255 / 100, 50, 255);
         int alphaBot = std::clamp((opacityPercent - 8) * 255 / 100, 40, 255);

@@ -4,7 +4,7 @@
 
 #include "AgentService.hpp"
 #include "WebSearchEngine.hpp"
-#include "AipyAdapter.hpp"
+#include "DeepSeekHarnessAdapter.hpp"
 #include "PetMemory.hpp"
 #include "LongTermMemoryEngine.hpp"
 #include "TimerManager.hpp"
@@ -20,6 +20,9 @@
 #include "PetAction.hpp"
 #include "MessageHistoryManager.hpp"
 #include "ShijimaWidget.hpp"
+#include "VocabLearningEngine.hpp"
+#include "SystemObserver.hpp"
+#include "SensorManager.hpp"
 #include <sqlite3.h>
 #include <QDateTime>
 #include <QNetworkAccessManager>
@@ -459,7 +462,7 @@ static QJsonObject getTimerToolDefinition() {
     QJsonObject typeProp;
     typeProp["type"] = "string";
     typeProp["enum"] = QJsonArray{"notification", "task"};
-    typeProp["description"] = "类型: notification(桌面气泡弹窗提醒), task(到期自动让AI执行任务并输出报告)";
+    typeProp["description"] = "类型: notification(桌面气泡纯文本提醒), task(到期自动调度智能体Agent执行具体任务，如打开网页、点击签到、运行脚本、系统诊断等，执行后输出报告)";
     props["type"] = typeProp;
 
     QJsonObject triggerSecProp;
@@ -485,7 +488,7 @@ static QJsonObject getTimerToolDefinition() {
 
     QJsonObject dailyTimeProp;
     dailyTimeProp["type"] = "string";
-    dailyTimeProp["description"] = "若为 daily 模式，每天执行的时间点，格式 'HH:mm' (例如 '09:00')";
+    dailyTimeProp["description"] = "若为 daily 模式，每天执行的时间点，格式 'HH:mm' (例如 '09:00'，若用户未明确指定具体时刻，默认使用 '09:00')";
     props["daily_time"] = dailyTimeProp;
 
     QJsonObject startTimeProp;
@@ -513,7 +516,7 @@ static QJsonObject getTimerToolDefinition() {
 
     QJsonObject promptProp;
     promptProp["type"] = "string";
-    promptProp["description"] = "若 type 为 task，到期需要让桌宠AI执行的具体任务描述 (如 '查询今日成都天气')";
+    promptProp["description"] = "若 type 为 task，到期需要让桌宠AI执行的具体任务描述 (如 '打开 http://127.0.0.1:8000 然后点自动签到 领取下积分' 或 '扫描磁盘大文件')";
     props["task_prompt"] = promptProp;
 
     QJsonObject timerIdProp;
@@ -550,10 +553,16 @@ static QString executeTimerTool(const QJsonObject &args) {
         int triggerInSec = args["trigger_in_seconds"].toInt(0);
         int intervalSec = args["repeat_interval_seconds"].toInt(0);
         QString dailyTime = args["daily_time"].toString();
+        if (repeat == TimerRepeat::Daily && dailyTime.isEmpty()) {
+            dailyTime = "09:00";
+        }
         QString startTime = args["start_time"].toString("09:00");
         QString endTime = args["end_time"].toString("18:00");
         bool weekdaysOnly = args["weekdays_only"].toBool(false);
         QString taskPrompt = args["task_prompt"].toString();
+        if (type == TimerType::AiTask && taskPrompt.isEmpty()) {
+            taskPrompt = title;
+        }
 
         QList<int> daysOfWeek;
         if (args.contains("days_of_week")) {
@@ -648,6 +657,87 @@ static QString executeTimerTool(const QJsonObject &args) {
         QString timerId = args["timer_id"].toString();
         bool ok = TimerManager::instance()->deleteTimer(timerId);
         return ok ? "🗑 定时器已成功删除！" : "❌ 未找到指定的定时器ID。";
+    }
+    else if (action == "update") {
+        QString timerId = args["timer_id"].toString();
+        auto timers = TimerManager::instance()->getAllTimers();
+        ScheduledTimer foundTimer;
+        bool found = false;
+
+        // 优先根据 timer_id 匹配
+        if (!timerId.isEmpty()) {
+            foundTimer = TimerManager::instance()->getTimer(timerId, &found);
+        }
+        // 若没有 ID 或未找到，尝试根据标题模糊匹配
+        if (!found) {
+            QString matchTitle = args["title"].toString();
+            if (matchTitle.isEmpty()) matchTitle = args["target_title"].toString();
+            if (!matchTitle.isEmpty()) {
+                for (const auto &t : timers) {
+                    if (t.title.contains(matchTitle) || matchTitle.contains(t.title)) {
+                        foundTimer = t;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (!found) {
+            return "❌ 未找到想要修改的定时任务。请确认任务标题或使用 list 查询当前定时器列表。";
+        }
+
+        // 应用修改字段
+        if (args.contains("title") && !args["title"].toString().trimmed().isEmpty()) {
+            foundTimer.title = args["title"].toString().trimmed();
+        }
+        if (args.contains("type")) {
+            QString typeStr = args["type"].toString();
+            foundTimer.type = (typeStr == "task") ? TimerType::AiTask : TimerType::Notification;
+        }
+        if (args.contains("task_prompt")) {
+            foundTimer.taskPrompt = args["task_prompt"].toString().trimmed();
+        }
+        if (args.contains("repeat")) {
+            QString repStr = args["repeat"].toString();
+            if (repStr == "interval") foundTimer.repeat = TimerRepeat::Interval;
+            else if (repStr == "daily") foundTimer.repeat = TimerRepeat::Daily;
+            else if (repStr == "window_interval") foundTimer.repeat = TimerRepeat::WindowInterval;
+            else if (repStr == "once") foundTimer.repeat = TimerRepeat::Once;
+        }
+        if (args.contains("daily_time")) {
+            foundTimer.dailyTime = args["daily_time"].toString();
+        }
+        if (args.contains("repeat_interval_seconds")) {
+            foundTimer.intervalSeconds = args["repeat_interval_seconds"].toInt();
+        }
+        if (args.contains("enabled")) {
+            foundTimer.enabled = args["enabled"].toBool();
+        }
+        if (args.contains("weekdays_only")) {
+            foundTimer.weekdaysOnly = args["weekdays_only"].toBool();
+            if (foundTimer.weekdaysOnly) foundTimer.daysOfWeek = {1, 2, 3, 4, 5};
+        }
+
+        bool ok = TimerManager::instance()->updateTimer(foundTimer);
+        if (!ok) {
+            return "❌ 更新定时任务失败。";
+        }
+
+        QString nextStr = QDateTime::fromMSecsSinceEpoch(foundTimer.targetTimestamp).toString("yyyy-MM-dd HH:mm");
+        QString res = QString("✅ **定时任务已成功更新！**\n\n"
+                              "- 📌 **标题**：%1\n"
+                              "- 🏷️ **类型**：%2\n"
+                              "- ⏳ **下次触发**：%3\n"
+                              "- 🟢 **状态**：%4\n")
+            .arg(foundTimer.title)
+            .arg(foundTimer.type == TimerType::AiTask ? "🤖 自动执行任务" : "📢 纯弹窗提醒")
+            .arg(nextStr)
+            .arg(foundTimer.enabled ? "运行中" : "已暂停");
+        if (foundTimer.type == TimerType::AiTask && !foundTimer.taskPrompt.isEmpty()) {
+            res += QString("- 📋 **执行指令**：%1\n").arg(foundTimer.taskPrompt);
+        }
+        return res;
     }
     return "已处理定时器指令。";
 }
@@ -787,6 +877,130 @@ static QString executeMemoryTool(const QJsonObject &args) {
     return "已处理记忆管理指令。";
 }
 
+static QJsonObject getDshToolDefinition() {
+    QJsonObject fn;
+    fn["name"] = "dsh_task";
+    fn["description"] = "调度 DeepSeek Harness (dsh) 任务智能体执行本地终端命令、系统资源/磁盘占用分析、代码编写与修改、文件读写、工程构建与复杂自动化任务。当需要查看/分析本地磁盘或系统文件、运行 Shell 命令、修改本地工程代码或执行复杂任务时必须调用。";
+
+    QJsonObject props;
+    QJsonObject taskProp;
+    taskProp["type"] = "string";
+    taskProp["description"] = "交由 dsh 智能体执行的具体任务指令与需求描述（如'分析当前电脑存储占用情况并提供清理建议'、'检查当前目录 git 状态'、'排查并修改代码错误'）";
+    props["instruction"] = taskProp;
+
+    QJsonObject parameters;
+    parameters["type"] = "object";
+    parameters["properties"] = props;
+    parameters["required"] = QJsonArray{"instruction"};
+    fn["parameters"] = parameters;
+
+    QJsonObject tool;
+    tool["type"] = "function";
+    tool["function"] = fn;
+    return tool;
+}
+
+static void executeDshTool(const QJsonObject &args, std::function<void(const QString &result)> callback) {
+    QString instruction = args["instruction"].toString().trimmed();
+    if (instruction.isEmpty()) {
+        if (callback) callback("❌ 任务指令不能为空。");
+        return;
+    }
+    auto adapter = AgentService::instance()->dshAdapter();
+    if (!adapter) {
+        if (callback) callback("❌ 未配置或找不到 DeepSeek Harness (dsh) 适配器。");
+        return;
+    }
+    ShijimaManager::defaultManager()->onTickAsync([instruction](ShijimaManager *mgr) {
+        auto const& mascots = mgr->mascots();
+        if (!mascots.empty()) {
+            mascots.front()->startTaskProgress(instruction);
+        }
+    });
+
+    auto progressCb = [](const QString &prog) {
+        ShijimaManager::defaultManager()->onTickAsync([prog](ShijimaManager *mgr) {
+            auto const& mascots = mgr->mascots();
+            if (!mascots.empty()) {
+                mascots.front()->updateTaskProgress(prog);
+            }
+        });
+    };
+    adapter->executeTask(instruction, "", progressCb, [callback, instruction](const AgentTaskResult &res) {
+        ShijimaManager::defaultManager()->onTickAsync([res](ShijimaManager *mgr) {
+            auto const& mascots = mgr->mascots();
+            if (!mascots.empty()) {
+                if (res.success) {
+                    mascots.front()->updateTaskProgress("⚡ `[ ▰▰▰▰▰▰▰▰▰▰ ] 95%` · 智能体执行完毕，正在汇总分析结果...");
+                }
+            }
+        });
+        if (callback) {
+            if (res.success) {
+                callback(QString("⚡ **DeepSeek Harness (dsh) 智能体执行结果**:\n\n%1").arg(res.reply));
+            } else {
+                callback(QString("❌ **DeepSeek Harness (dsh) 执行失败**: %1").arg(res.error));
+            }
+        }
+    });
+}
+
+static QJsonObject getScreenOcrToolDefinition() {
+    QJsonObject fn;
+    fn["name"] = "screen_ocr";
+    fn["description"] = "主动截取并识别当前电脑屏幕前台工作视窗的实时文本内容。当用户询问「我屏幕上在显示什么」、「帮我看下当前屏幕/页面/代码/报错」、「帮我读一下屏幕」、「屏幕里写了什么」等需要视觉屏幕文字信息时必须调用。";
+
+    QJsonObject props;
+    QJsonObject focusProp;
+    focusProp["type"] = "string";
+    focusProp["description"] = "关注的重点或提问诉求（如'查看报错信息'、'总结当前文章'、'读取代码片段'），可留空表示全面提取";
+    props["focus"] = focusProp;
+
+    QJsonObject parameters;
+    parameters["type"] = "object";
+    parameters["properties"] = props;
+    fn["parameters"] = parameters;
+
+    QJsonObject tool;
+    tool["type"] = "function";
+    tool["function"] = fn;
+    return tool;
+}
+
+static void executeScreenOcrTool(const QJsonObject &args, std::function<void(const QString &result)> callback) {
+    (void)args;
+    if (!SystemObserver::instance()->hasScreenCaptureAccess()) {
+        if (callback) callback("⚠️ 当前未激活系统录屏权限，无法截取屏幕文本。请在 macOS「系统设置 -> 隐私与安全性 -> 屏幕录制」中授予权限。");
+        return;
+    }
+
+    SystemObserver::instance()->triggerOcrSnapshot([callback](const QString &appName, const QString &windowTitle, const QString &ocrText) {
+        if (ocrText.trimmed().isEmpty()) {
+            auto obs = SystemObserver::instance();
+            QString fallbackOcr = obs ? obs->currentActiveContentSummary() : "";
+            QString fallbackApp = obs ? obs->currentActiveAppName() : "";
+            if (!fallbackOcr.isEmpty()) {
+                QString res = QString("🖥️ **当前屏幕视窗文本内容 (应用: %1)**:\n\n```text\n%2\n```")
+                    .arg(fallbackApp.isEmpty() ? appName : fallbackApp, fallbackOcr);
+                if (callback) callback(res);
+                return;
+            }
+            if (callback) callback("⚠️ 当前屏幕前台视窗未识别到有效文字，可能该窗口未包含可识别文字或为纯图形/游戏界面。");
+            return;
+        }
+
+        QString res = QString("🖥️ **当前屏幕工作视窗文字识别结果**\n"
+                              "- 前台应用: %1\n"
+                              "- 窗口标题: %2\n\n"
+                              "**识别到的屏幕内容**:\n"
+                              "```text\n%3\n```")
+                          .arg(appName.isEmpty() ? "未知应用" : appName,
+                               windowTitle.isEmpty() ? "未命名窗口" : windowTitle,
+                               ocrText.trimmed());
+        if (callback) callback(res);
+    });
+}
+
 AgentService *AgentService::instance() {
     static AgentService s_instance;
     return &s_instance;
@@ -803,22 +1017,27 @@ AgentService::AgentService()
 }
 
 void AgentService::initAdapters() {
-    auto aipy = std::make_shared<AipyAdapter>(m_networkManager);
-    m_adapters["aipy"] = aipy;
+    auto dsh = std::make_shared<DeepSeekHarnessAdapter>();
+    m_adapters["deepseek_harness"] = dsh;
+    m_adapters["dsh"] = dsh;
+    m_adapters["aipy"] = dsh; // 向下兼容旧调用
     syncAdapterConfigs();
 }
 
 void AgentService::syncAdapterConfigs() {
-    if (auto aipy = aipyAdapter()) {
-        if (!m_config.aipyBase.isEmpty()) aipy->setBaseUrl(m_config.aipyBase);
-        if (!m_config.aipyKey.isEmpty()) aipy->setApiKey(m_config.aipyKey);
+    if (auto dsh = dshAdapter()) {
+        dsh->setDshPath(m_config.dshPath);
+        dsh->setApiKey(m_config.dshKey);
+        dsh->setBaseUrl(m_config.dshBase);
+        dsh->setModel(m_config.dshModel);
+        dsh->setAutoApproval(m_config.dshAutoApproval);
     }
 }
 
-AipyAdapter *AgentService::aipyAdapter() const {
-    auto it = m_adapters.find("aipy");
+DeepSeekHarnessAdapter *AgentService::dshAdapter() const {
+    auto it = m_adapters.find("deepseek_harness");
     if (it != m_adapters.end()) {
-        return dynamic_cast<AipyAdapter*>(it->second.get());
+        return dynamic_cast<DeepSeekHarnessAdapter*>(it->second.get());
     }
     return nullptr;
 }
@@ -978,7 +1197,16 @@ void AgentService::loadConfig(QString const& path) {
         m_config.hotkeyMusicPrev = db->get("hotkey.music_prev", "Option+Left");
         m_config.hotkeyMusicFav = db->get("hotkey.music_fav", "Option+L");
 
-        m_config.activeAgentType = db->get("agent.active_type", "aipy");
+        m_config.activeAgentType = db->get("agent.active_type", "deepseek_harness");
+        if (m_config.activeAgentType == "aipy") {
+            m_config.activeAgentType = "deepseek_harness";
+        }
+        m_config.dshPath = db->get("agent.dsh_path", "");
+        m_config.dshKey = db->get("agent.dsh_key", "");
+        m_config.dshBase = db->get("agent.dsh_base", "https://api.deepseek.com");
+        m_config.dshModel = db->get("agent.dsh_model", "deepseek-chat");
+        m_config.dshAutoApproval = db->getBool("agent.dsh_auto_approval", true);
+
         m_config.aipyBase = db->get("agent.aipy_base", "http://127.0.0.1:41970");
         m_config.aipyKey = db->get("agent.aipy_key", "");
         m_config.routingMode = db->get("agent.routing_mode", "AUTO");
@@ -986,8 +1214,15 @@ void AgentService::loadConfig(QString const& path) {
         m_config.enableAgentStateHook = db->getBool("agent.enable_state_hook", true);
         m_config.enableLlmTaskNarration = db->getBool("agent.enable_llm_narration", false);
         m_config.stateDebounceSec = db->getInt("agent.state_debounce_sec", 2);
+        m_config.enableActiveChat = db->getBool("agent.enable_active_chat", true);
+        m_config.enableNewsPush = db->getBool("agent.enable_news_push", true);
         m_config.banterFrequencyLevel = db->getInt("agent.banter_freq_level", 2);
         m_config.enableContextualCare = db->getBool("agent.enable_contextual_care", true);
+
+        m_config.enableInteractionTimeWindow = db->getBool("agent.enable_time_window", true);
+        m_config.interactionStartTime = db->get("agent.interaction_start_time", "09:00");
+        m_config.interactionEndTime = db->get("agent.interaction_end_time", "18:00");
+        m_config.interactionWorkdaysOnly = db->getBool("agent.interaction_workdays_only", false);
     }
 
     // 同步活动配置至当前配置
@@ -1035,6 +1270,11 @@ void AgentService::saveConfig(QString const& /* path */) {
     db->set("hotkey.music_fav", m_config.hotkeyMusicFav);
 
     db->set("agent.active_type", m_config.activeAgentType);
+    db->set("agent.dsh_path", m_config.dshPath);
+    db->set("agent.dsh_key", m_config.dshKey);
+    db->set("agent.dsh_base", m_config.dshBase);
+    db->set("agent.dsh_model", m_config.dshModel);
+    db->setBool("agent.dsh_auto_approval", m_config.dshAutoApproval);
     db->set("agent.aipy_base", m_config.aipyBase);
     db->set("agent.aipy_key", m_config.aipyKey);
     db->set("agent.routing_mode", m_config.routingMode);
@@ -1042,8 +1282,40 @@ void AgentService::saveConfig(QString const& /* path */) {
     db->setBool("agent.enable_state_hook", m_config.enableAgentStateHook);
     db->setBool("agent.enable_llm_narration", m_config.enableLlmTaskNarration);
     db->setInt("agent.state_debounce_sec", m_config.stateDebounceSec);
+    db->setBool("agent.enable_active_chat", m_config.enableActiveChat);
+    db->setBool("agent.enable_news_push", m_config.enableNewsPush);
     db->setInt("agent.banter_freq_level", m_config.banterFrequencyLevel);
     db->setBool("agent.enable_contextual_care", m_config.enableContextualCare);
+
+    db->setBool("agent.enable_time_window", m_config.enableInteractionTimeWindow);
+    db->set("agent.interaction_start_time", m_config.interactionStartTime);
+    db->set("agent.interaction_end_time", m_config.interactionEndTime);
+    db->setBool("agent.interaction_workdays_only", m_config.interactionWorkdaysOnly);
+}
+
+bool AgentService::isWithinInteractionTimeWindow() const {
+    if (!m_config.enableInteractionTimeWindow) {
+        return true;
+    }
+
+    if (m_config.interactionWorkdaysOnly) {
+        int day = QDate::currentDate().dayOfWeek();
+        if (day < 1 || day > 5) {
+            return false;
+        }
+    }
+
+    QTime now = QTime::currentTime();
+    QTime start = QTime::fromString(m_config.interactionStartTime, "HH:mm");
+    if (!start.isValid()) start = QTime(9, 0);
+    QTime end = QTime::fromString(m_config.interactionEndTime, "HH:mm");
+    if (!end.isValid()) end = QTime(18, 0);
+
+    if (start <= end) {
+        return (now >= start && now <= end);
+    } else {
+        return (now >= start || now <= end);
+    }
 }
 
 void AgentService::setConfig(AgentConfig const& cfg) {
@@ -1064,13 +1336,22 @@ bool AgentService::containsChinese(QString const& text) {
 }
 
 void AgentService::appendMemory(QString const& role, QString const& content) {
+    QString effectiveContent = content;
+    // 关键优化：大模型上下文精简保护（防止长篇执行日志/报告撑爆上下文导致后续问答严重卡死）
+    if (role == "assistant" && effectiveContent.length() > 400) {
+        QString summaryExcerpt = effectiveContent.left(250).trimmed();
+        effectiveContent = QString("%1\n\n> 📋 *[注：本轮任务完整长篇报告已归档至历史记录，此处保留前文摘要以确保对话轻快流畅]*").arg(summaryExcerpt);
+    } else if (role == "user" && effectiveContent.length() > 800) {
+        effectiveContent = effectiveContent.left(600) + "\n...[用户输入超长文本已截断保留前段]";
+    }
+
     QJsonObject item;
     item["role"] = role;
-    item["content"] = content;
+    item["content"] = effectiveContent;
     m_history.append(item);
 
     // 记录完整情节点事件 (L2 Episodic Events)
-    LongTermMemoryEngine::instance()->recordEpisodicEvent("default", role, content);
+    LongTermMemoryEngine::instance()->recordEpisodicEvent("default", role, content.left(1000));
 
     int maxItems = m_config.maxMemoryTurns * 2;
     if (m_history.size() > maxItems) {
@@ -1197,14 +1478,41 @@ void AgentService::translate(QString const& text, std::function<void(bool succes
 void AgentService::ask(QString const& contextText,
                       QString const& question,
                       std::function<void(QString const& progressMsg)> progressCallback,
-                      std::function<void(bool success, QString const& result, QString const& appTarget)> finishCallback)
+                      std::function<void(bool success, QString const& result, QString const& appTarget)> finishCallback,
+                      bool directLlmOnly)
 {
     if (question.trimmed().isEmpty()) {
         finishCallback(false, "问题不能为空", "");
         return;
     }
 
-    QString qLower = question.toLower();
+    QString effectiveQuestion = question.trimmed();
+    bool isForcedAgent = false;
+    static const QRegularExpression prefixRe(R"(^[\/|@]?(?:dsh|agent)[\s:：]+)", QRegularExpression::CaseInsensitiveOption);
+    auto pMatch = prefixRe.match(effectiveQuestion);
+    if (pMatch.hasMatch()) {
+        isForcedAgent = true;
+        effectiveQuestion = effectiveQuestion.mid(pMatch.capturedLength()).trimmed();
+    }
+
+    QString qLower = effectiveQuestion.toLower();
+
+    // 智能分流判定：若显式提及 dsh 或 agent 智能体，直接判定为 Agent 任务意图
+    bool mentionsAgent = (
+        qLower.contains("dsh") ||
+        qLower.contains("agent") ||
+        qLower.contains("智能体") ||
+        qLower.contains("harness") ||
+        qLower.contains("deepseek harness") ||
+        qLower.contains("深求") ||
+        effectiveQuestion.contains("用agent") ||
+        effectiveQuestion.contains("让agent") ||
+        effectiveQuestion.contains("调agent") ||
+        effectiveQuestion.contains("调用agent") ||
+        effectiveQuestion.contains("用dsh") ||
+        effectiveQuestion.contains("让dsh") ||
+        effectiveQuestion.contains("调用dsh")
+    );
 
     // 智能分流判定：若包含定时器/提醒意图关键词，优先走带 Tool Calling 的大模型
     bool isTimerIntent = false;
@@ -1224,7 +1532,7 @@ void AgentService::ask(QString const& contextText,
     if (!pendingList.isEmpty()) {
         auto f = pendingList.first();
         if (QDateTime::currentMSecsSinceEpoch() >= f.eventTime) {
-            QString qlow = question.toLower();
+            QString qlow = effectiveQuestion.toLower();
             if (qlow.contains("搞定") || qlow.contains("约上") || qlow.contains("成了") ||
                 qlow.contains("买好") || qlow.contains("办好") || qlow.contains("没约") ||
                 qlow.contains("没有") || qlow.contains("还没") || qlow.contains("取消") ||
@@ -1235,13 +1543,15 @@ void AgentService::ask(QString const& contextText,
         }
     }
 
-    // 智能分流判定：若包含音乐播放/推荐/歌单/搜歌/喜好画像/偏好标签等意图，走音乐工具
+    // 智能分流判定：若包含明确音乐播放/推荐/歌单/搜歌/偏好标签等意图，走音乐工具
+    // （避开泛化词如单字“推荐”、“优化”、“画像”，防止错误拦截代码或系统诊断任务）
     bool isMusicIntent = false;
     static const QStringList musicKeywords = {
         "歌", "音乐", "播放", "暂停", "下一首", "上一首", "切歌", "放一首", "听歌",
         "民谣", "播放列表", "加歌", "歌单", "music", "song", "play", "playlist",
-        "推荐点", "推荐", "画像", "标签", "偏好", "喜好", "熟悉模式", "探索模式", "随机模式",
-        "放歌", "搜歌", "曲目", "榜单", "热歌", "我的画像", "任务画像", "用户画像", "我的偏好"
+        "推荐点歌", "推荐音乐", "推荐歌曲", "音乐画像", "音乐标签", "听歌偏好", "偏好标签",
+        "喜好标签", "熟悉模式", "探索模式", "随机模式", "放歌", "搜歌", "曲目", "榜单", "热歌",
+        "我的画像", "任务画像", "我的偏好"
     };
     for (const auto &kw : musicKeywords) {
         if (qLower.contains(kw)) {
@@ -1250,47 +1560,100 @@ void AgentService::ask(QString const& contextText,
         }
     }
 
-    // 智能分流判定：若配置为 aipy 智能体，或包含通用任务指令关键词（非纯定时/音乐需求）
+    // 智能分流判定：
+    // 1. 用户强制指令 (/dsh, /agent, @dsh) 或明确提及 agent/dsh/智能体 -> 绝对优先委派 dsh
+    // 2. ALWAYS_AGENT 模式 -> 始终委派
+    // 3. 正在处于有效 dsh 任务会话中，且不是定时器或音乐指令 -> 延续委派
+    // 4. AUTO 模式命中系统诊断/磁盘/排查/代码/Shell 任务关键词 -> 委派
     bool isTaskIntent = false;
-    if (!isTimerIntent && !isMusicIntent) {
-        if (m_config.routingMode == "ALWAYS_AGENT") {
-            isTaskIntent = true;
-        } else if (m_config.routingMode == "ALWAYS_LLM") {
-            isTaskIntent = false;
-        } else {
-            static const QStringList taskKeywords = {
-                "打开", "搜索", "分析", "爬取", "执行", "运行", "编写", "帮我", "生成",
-                "查询", "统计", "抓取", "监控", "下载", "上传", "测试", "部署", "清理",
-                "转换", "备份", "总结", "提取", "重构", "实现", "自动化", "创建", "修改",
-                "删除", "启动", "停止", "检查", "调用", "查找", "定位", "修复", "解释",
-                "新建", "查一下", "搜一下", "改一下", "做一下", "看下", "查下", "搜下",
-                "task", "create", "find", "search", "run", "exec", "build", "debug", "test"
-            };
-            for (const auto &kw : taskKeywords) {
-                if (qLower.contains(kw)) {
-                    isTaskIntent = true;
-                    break;
-                }
-            }
-            if (!contextText.trimmed().isEmpty() && question.length() >= 4) {
+    bool hasActiveDshSession = (dshAdapter() && dshAdapter()->hasActiveSession());
+
+    if (isForcedAgent || mentionsAgent) {
+        isTaskIntent = true;
+    } else if (m_config.routingMode == "ALWAYS_AGENT") {
+        isTaskIntent = true;
+    } else if (m_config.routingMode == "ALWAYS_LLM") {
+        isTaskIntent = false;
+    } else if (hasActiveDshSession && !isTimerIntent && !isMusicIntent) {
+        isTaskIntent = true;
+    } else if (!directLlmOnly && !isTimerIntent && !isMusicIntent) {
+        static const QStringList taskKeywords = {
+            // 系统诊断 / 磁盘 / 内存 / 资源 / 优化
+            "分析", "排查", "诊断", "排错", "查一下", "找一下", "扫描", "清理",
+            "存储占用", "磁盘占用", "空间占用", "内存占用", "硬盘占用", "系统占用", "硬件占用",
+            "磁盘空间", "存储空间", "硬盘空间", "优化空间", "清理废纸篓", "清理缓存", "磁盘", "硬盘",
+            "性能分析", "监控系统", "资源占用",
+            // 编写 / 代码 / 工程 / 文件
+            "编写", "写一个", "写个", "写段", "实现", "重构", "重写", "修改代码", "改一下代码",
+            "修改文件", "改下文件", "修复", "fix", "debug", "测试代码", "运行测试", "单元测试",
+            "代码", "工程", "项目", "仓库", "repo", "编译", "构建", "build", "make", "cmake",
+            // 命令 / 脚本 / 终端 / 自动化 / 技能工具
+            "运行", "执行", "跑一下", "跑个", "自动化", "创建任务", "新建任务", "开始任务",
+            "跑脚本", "跑一下脚本", "写脚本", "执行命令", "命令行", "终端", "shell", "bash", "zsh", "cmd", "powershell",
+            "部署", "爬取", "批量下载", "批量处理", "crawl", "deploy", "exec task", "run task", "create task",
+            "skill", "技能", "电脑", "桌面", "微信", "qq", "飞书", "钉钉", "软件", "应用", "打开",
+            "点击", "输入", "截图", "截屏", "按键", "快捷键", "窗口", "控制", "界面", "操作电脑", "帮我点", "帮我打开", "帮我发",
+            // 任务延续
+            "继续", "接着", "下一步", "在这个基础", "刚才的", "上一步", "continue", "resume"
+        };
+        for (const auto &kw : taskKeywords) {
+            if (qLower.contains(kw)) {
                 isTaskIntent = true;
+                break;
+            }
+        }
+        if (!isTaskIntent) {
+            for (const auto &skill : SkillManager::instance()->getAllSkills()) {
+                if (skill.enabled) {
+                    if (qLower.contains(skill.id.toLower()) || qLower.contains(skill.name.toLower())) {
+                        isTaskIntent = true;
+                        break;
+                    }
+                }
             }
         }
     }
 
-    if (isTaskIntent && m_adapters.count("aipy") > 0) {
+    bool hasAgent = (m_adapters.count("deepseek_harness") > 0 || m_adapters.count("dsh") > 0 || m_adapters.count("aipy") > 0);
+    if (isTaskIntent && hasAgent) {
         if (progressCallback) {
-            progressCallback("🤖 正在调度 aipy-pro Agent 处理复杂任务...");
+            progressCallback("⚡ 正在调度 DeepSeek Harness (dsh) 处理任务...");
         }
-        auto adapter = m_adapters["aipy"];
-        adapter->executeTask(question, contextText, progressCallback, [this, question, finishCallback](AgentTaskResult const& res) {
+        auto adapter = m_adapters.count("deepseek_harness") > 0 ? m_adapters["deepseek_harness"] : m_adapters["aipy"];
+        adapter->executeTask(effectiveQuestion, contextText, progressCallback, [this, effectiveQuestion, finishCallback](AgentTaskResult const& res) {
             if (res.success) {
-                appendMemory("user", question);
-                appendMemory("assistant", res.reply);
-                PetMemory::instance()->autoLearnFromChat(question, res.reply);
-                LongTermMemoryEngine::instance()->addSemanticMemory("inquiry", QString("用户曾向桌宠询问/探讨: %1").arg(question.left(100)), 2);
-                LongTermMemoryEngine::instance()->triggerAsyncReflection(question, res.reply, m_config.apiBase, m_config.apiKey, m_config.model);
-                finishCallback(true, res.reply, res.appName);
+                QString replyText = res.reply;
+                appendMemory("user", effectiveQuestion);
+                appendMemory("assistant", replyText);
+                PetMemory::instance()->autoLearnFromChat(effectiveQuestion, replyText);
+                LongTermMemoryEngine::instance()->addSemanticMemory("inquiry", QString("用户曾向桌宠询问/探讨: %1").arg(effectiveQuestion.left(100)), 2);
+                LongTermMemoryEngine::instance()->triggerAsyncReflection(effectiveQuestion, replyText, m_config.apiBase, m_config.apiKey, m_config.model);
+
+                // 智能关联英语伴学功能：若用户提问特定英文单词，联动生词卡、发音与测验
+                static QRegularExpression wordQueryRe(R"(^([a-zA-Z]{2,30})\s*(是什么意思|怎么读|发音|怎么说|翻译|释义|含义|是什么|意思|用法|例句|\?|？)?$)");
+                static QRegularExpression cnWordQueryRe(R"((?:查一下|查下|搜一下|单词|解释|翻译|释义)\s*([a-zA-Z]{2,30}))");
+                static QRegularExpression singleWordRe(R"(^[a-zA-Z\s\-]{2,30}$)");
+                QString targetWord;
+                auto m1 = wordQueryRe.match(effectiveQuestion.trimmed());
+                if (m1.hasMatch()) targetWord = m1.captured(1).trimmed();
+                else {
+                    auto m2 = cnWordQueryRe.match(effectiveQuestion.trimmed());
+                    if (m2.hasMatch()) targetWord = m2.captured(1).trimmed();
+                    else if (singleWordRe.match(effectiveQuestion.trimmed()).hasMatch()) targetWord = effectiveQuestion.trimmed();
+                }
+                if (!targetWord.isEmpty()) {
+                    auto *vocab = VocabLearningEngine::instance();
+                    auto card = vocab->getCardByWord(targetWord);
+                    if (card.id == 0) {
+                        vocab->addWord(targetWord, "", replyText.left(120).replace("\n", " ").trimmed(), "", "", "", "custom");
+                        card = vocab->getCardByWord(targetWord);
+                    }
+                    if (card.id > 0) {
+                        replyText += vocab->formatVocabBadge(card);
+                    }
+                }
+
+                finishCallback(true, replyText, res.appName);
             } else {
                 finishCallback(false, res.error, "");
             }
@@ -1319,10 +1682,15 @@ void AgentService::ask(QString const& contextText,
         "%1\n\n"
         "【当前本地真实系统时间】: %2。\n"
         "%3\n\n"
-        "你拥有管理本地系统定时器工具（timer_manage）、音乐播放器工具（music_player_manage）、全网实时搜索工具（web_search）与长期记忆管理工具（memory_manage）。\n\n"
+        "你拥有管理本地系统定时器工具（timer_manage）、音乐播放器工具（music_player_manage）、全网实时搜索工具（web_search）、长期记忆管理工具（memory_manage）、屏幕视觉文字识别工具（screen_ocr）以及 DeepSeek Harness 任务智能体工具（dsh_task）。\n\n"
+        "【屏幕视觉感知工具（screen_ocr）使用原则】\n"
+        "- 当用户询问「我屏幕上在显示什么」、「帮我看下当前屏幕/页面/代码/报错」、「帮我读一下屏幕」、「屏幕里写了什么」或需要视觉辅助时，【必须调用 screen_ocr() 截取并读取当前前台视窗的真实文字】后再做专业回答！\n\n"
+        "【DeepSeek Harness 智能体工具（dsh_task）使用原则】\n"
+        "- 当用户需要检查/分析本地磁盘、存储空间、内存与系统资源、运行终端 Shell 命令、查看/修改本地工程代码或执行复杂排查任务时，【必须调用 dsh_task(instruction=...) 调度智能体执行】！\n"
+        "- 切勿直接回复「我没有读取磁盘权限/无法执行命令」，你内置了 dsh_task 工具，可直接委托给本地智能体执行并得到真实结果！\n\n"
         "【全网实时搜索工具（web_search）使用原则】\n"
         "- 当用户询问任何最新事实、时事新闻、今日天气、地方领导人事（如现任/历任市委书记、市长、官员任免）、百科动态、股市金融、技术发布、热点排行等内容时，【必须第一步调用 web_search(query=...) 联网检索】！\n"
-        "- 【自动承接上下文与实体补全】：如果用户提问简略、使用代词或承接上一轮对话（例如只问「市委书记是谁」、「那市长呢」、「天气怎么样」），必须结合上文对话或记忆上下文自动在 query 中补全主体与地名（例如根据前文提及的城市自动拼接为「xx市现任市委书记」），严禁用单薄模糊的词语盲目搜索！\n"
+        "- 【自动承接上下文与实体补全】：如果用户提问简略、使用代词或承接上一轮对话（例如只问「有链接吗我看下」、「真的和解了吗」、「细说」、「怎么回事」、「市委书记是谁」），【必须优先结合上一轮对话提及的事件实体（如中医墓碑刻药方、某某热点事件、特定生词）在 query 中精准补全事件主体与关键词】，严禁跳回更早之前的无关旧话题（如大选或旧闻）！\n"
         "- 严禁凭空盲猜或使用可能过时的离线训练记忆回答！先联网搜索获得最新真实证据后，再给出条理分明的回答。\n\n"
         "【长期记忆与画像工具使用指南】\n"
         "- 当用户透露其身份、技术栈、喜好、作息习惯或正在开发的项目时，主动调用 memory_manage 记录重要事实(remember)或更新主人档案(update_profile)；\n"
@@ -1352,13 +1720,31 @@ void AgentService::ask(QString const& contextText,
     ).arg(personaPrompt, currentLocalTime, memoryContextSection);
     messages.append(sysMsg);
 
-    for (auto val : m_history) {
+    // 动态上下文预算保护：从最新历史往前收集，总字符数控制在 3500 字符内，杜绝超大 Prompt 导致 API 超时假死
+    QJsonArray prunedHistory;
+    int budgetChars = 3500;
+    int currentChars = 0;
+    for (int i = m_history.size() - 1; i >= 0; --i) {
+        QJsonObject obj = m_history[i].toObject();
+        QString text = obj["content"].toString();
+        if (currentChars + text.length() > budgetChars && !prunedHistory.isEmpty()) {
+            break;
+        }
+        currentChars += text.length();
+        prunedHistory.prepend(obj);
+    }
+
+    for (auto val : prunedHistory) {
         messages.append(val.toObject());
     }
 
     QString combinedUserContent;
     if (!contextText.trimmed().isEmpty()) {
-        combinedUserContent = QString("【参考选中文本】:") + QChar(10) + contextText + QString(QChar(10)) + QString(QChar(10)) + QString("【我的问题】:") + QChar(10) + question;
+        if (contextText.contains("【桌面宠物刚才主动说】") || contextText.contains("【桌宠上一轮对主人说】") || contextText.contains("【桌宠最近对主人说】")) {
+            combinedUserContent = contextText + "\n\n【主人的追问/回复】:\n" + question;
+        } else {
+            combinedUserContent = "【参考上下文与选中文本】:\n" + contextText + "\n\n【我的问题】:\n" + question;
+        }
     } else {
         combinedUserContent = question;
     }
@@ -1403,14 +1789,44 @@ void AgentService::ask(QString const& contextText,
             PetMemory::instance()->autoLearnFromChat(question, cleanResult);
             LongTermMemoryEngine::instance()->addSemanticMemory("inquiry", QString("用户曾向桌宠询问/探讨: %1").arg(question.left(100)), 2);
             LongTermMemoryEngine::instance()->triggerAsyncReflection(question, cleanResult, m_config.apiBase, m_config.apiKey, m_config.model);
+
+            // 智能关联英语伴学功能：若用户提问特定英文单词，联动生词卡、发音与测验
+            static QRegularExpression wordQueryRe(R"(^([a-zA-Z]{2,30})\s*(是什么意思|怎么读|发音|怎么说|翻译|释义|含义|是什么|意思|用法|例句|\?|？)?$)");
+            static QRegularExpression cnWordQueryRe(R"((?:查一下|查下|搜一下|单词|解释|翻译|释义)\s*([a-zA-Z]{2,30}))");
+            static QRegularExpression singleWordRe(R"(^[a-zA-Z\s\-]{2,30}$)");
+            QString targetWord;
+            auto m1 = wordQueryRe.match(question.trimmed());
+            if (m1.hasMatch()) targetWord = m1.captured(1).trimmed();
+            else {
+                auto m2 = cnWordQueryRe.match(question.trimmed());
+                if (m2.hasMatch()) targetWord = m2.captured(1).trimmed();
+                else if (singleWordRe.match(question.trimmed()).hasMatch()) targetWord = question.trimmed();
+            }
+            if (!targetWord.isEmpty()) {
+                auto *vocab = VocabLearningEngine::instance();
+                auto card = vocab->getCardByWord(targetWord);
+                if (card.id == 0) {
+                    vocab->addWord(targetWord, "", cleanResult.left(120).replace("\n", " ").trimmed(), "", "", "", "custom");
+                    card = vocab->getCardByWord(targetWord);
+                }
+                if (card.id > 0) {
+                    cleanResult += vocab->formatVocabBadge(card);
+                }
+            }
         }
         finishCallback(success, cleanResult, "");
     }, true /* isUserFacing */);
 }
 
 void AgentService::openTask(QString const& taskId) {
-    if (auto aipy = aipyAdapter()) {
-        aipy->openTask(taskId);
+    if (auto dsh = dshAdapter()) {
+        dsh->openTask(taskId);
+    }
+}
+
+void AgentService::cancelActiveTask() {
+    if (auto dsh = dshAdapter()) {
+        dsh->cancelCurrentTask();
     }
 }
 
@@ -1588,18 +2004,21 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
         QNetworkRequest request{QUrl(endpoint)};
         request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
         request.setRawHeader("Authorization", QString("Bearer %1").arg(currentProfile->apiKey).toUtf8());
+        request.setTransferTimeout(25000); // 25秒传输超时，杜绝网络吊死假死
 
         QJsonObject root;
         root["model"] = currentProfile->model;
         root["messages"] = *currentMessages;
         root["temperature"] = 0.3;
 
-        // 注入全部工具：长期记忆 + 定时器 + 音乐管理 + 内置网络搜索 + MCP 外部工具
+        // 注入全部工具：长期记忆 + 定时器 + 音乐管理 + 内置网络搜索 + dsh 智能体 + 屏幕视觉 OCR + MCP 外部工具
         QJsonArray toolsArr;
         toolsArr.append(getMemoryToolDefinition());
         toolsArr.append(getTimerToolDefinition());
         toolsArr.append(getMusicToolDefinition());
         toolsArr.append(getWebSearchToolDefinition());
+        toolsArr.append(getDshToolDefinition());
+        toolsArr.append(getScreenOcrToolDefinition());
 
         // 针对阿里云百炼 Qwen 模型，开启原生实时搜索
         if (currentProfile->apiBase.contains("aliyuncs.com")) {
@@ -1760,6 +2179,10 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
                         executeMusicTool(argsObj, onToolFinished);
                     } else if (fnName == "web_search") {
                         executeWebSearchTool(argsObj, onToolFinished);
+                    } else if (fnName == "dsh_task" || fnName == "execute_agent_task") {
+                        executeDshTool(argsObj, onToolFinished);
+                    } else if (fnName == "screen_ocr" || fnName == "read_screen") {
+                        executeScreenOcrTool(argsObj, onToolFinished);
                     } else if (McpManager::instance()->hasTool(fnName)) {
                         McpManager::instance()->executeToolCall(fnName, argsObj, [onToolFinished, fnName](bool success, const QString &result) {
                             QString formatted = QString("🔌 **MCP 工具 [%1] 执行%2**\n\n```text\n%3\n```")
@@ -1776,7 +2199,7 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
             QString content = msgObj["content"].toString().trimmed();
 
             // 2. 纯文本内嵌 JSON 代码块容错捕获与执行
-            QRegularExpression jsonBlockRegex(R"RAW(```(?:json)?\s*(\{[\s\S]*?"tool"\s*:\s*"(?:memory_manage|timer_manage|music_player_manage|web_search)"[\s\S]*?\})\s*```)RAW", QRegularExpression::CaseInsensitiveOption);
+            QRegularExpression jsonBlockRegex(R"RAW(```(?:json)?\s*(\{[\s\S]*?"tool"\s*:\s*"(?:memory_manage|timer_manage|music_player_manage|web_search|dsh_task|screen_ocr)"[\s\S]*?\})\s*```)RAW", QRegularExpression::CaseInsensitiveOption);
             auto match = jsonBlockRegex.match(content);
             if (match.hasMatch()) {
                 QString jsonStr = match.captured(1);
@@ -1807,6 +2230,12 @@ void AgentService::sendChatCompletion(QJsonArray const& messages, std::function<
                         return;
                     } else if (toolName == "web_search") {
                         executeWebSearchTool(jobj, onSingleToolDone);
+                        return;
+                    } else if (toolName == "dsh_task" || toolName == "execute_agent_task") {
+                        executeDshTool(jobj, onSingleToolDone);
+                        return;
+                    } else if (toolName == "screen_ocr" || toolName == "read_screen") {
+                        executeScreenOcrTool(jobj, onSingleToolDone);
                         return;
                     }
                 }
@@ -1917,10 +2346,19 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
     if (triggerReason.contains("event_followup")) {
         QString title = contextInfo["followup_title"].toString();
         QString ctx = contextInfo["followup_context"].toString();
-        specialSituation = QString(
-            "\n【当前触发情境 - 暖心日程回访（主动关切进展）】: 主人之前有这样一个事项：「%1」（背景：%2）。\n"
-            "请以贴心、亲切且充满人情味的态度，主动询问主人这件事情进展如何、是否顺利搞定！台词中自然提及该事项（如“对了主人，昨天那个...搞定了吗？”）。\n"
-        ).arg(title, ctx);
+        QString vocabWord = contextInfo["followup_vocab_word"].toString();
+        QString vocabDef = contextInfo["followup_vocab_def"].toString();
+        if (!vocabWord.isEmpty()) {
+            specialSituation = QString(
+                "\n【当前触发情境 - 英语生词抽查复习与日常关怀】: 主人之前曾向你学习或问过英语生词「%1」（释义：%2）。\n"
+                "请以可爱、俏皮、老朋友般的口吻关心主人当下的状态（如到午饭点先去干饭、写代码累了先揉揉眼休息），并顺带提一句考考主人这个单词还记得不（例如“🐾主人，overhead 是'头顶开销'啦，正午了先干饭~ 顺便测测看你记住没？”）。\n"
+            ).arg(vocabWord, vocabDef);
+        } else {
+            specialSituation = QString(
+                "\n【当前触发情境 - 暖心日程回访（主动关切进展）】: 主人之前有这样一个事项：「%1」（背景：%2）。\n"
+                "请以贴心、亲切且充满人情味的态度，主动询问主人这件事情进展如何、是否顺利搞定！台词中自然提及该事项（如“对了主人，昨天那个...搞定了吗？”）。\n"
+            ).arg(title, ctx);
+        }
     } else if (triggerReason.contains("curiosity_inquiry")) {
         QString topic = contextInfo["curiosity_topic"].toString();
         QString guide = contextInfo["curiosity_guide"].toString();
@@ -1930,10 +2368,22 @@ void AgentService::requestPetIntent(const QJsonObject &contextInfo, std::functio
             "请以你专属的人格（俏皮、可爱、真诚），自然向主人打听这件事情，表示想把它记在桌宠的专属备忘小本本里！\n"
         ).arg(topic, guide);
     } else if (triggerReason.contains("hot_trending_meme")) {
-        specialSituation = 
-            "\n【当前触发情境 - 热门趣闻 / 网络爆梗 / 趣味段子 / 幽默解压】: \n"
-            "你可以主动跟主人分享一个当下流行有趣的爆梗、科技/互联网圈热门趣事、程序员幽默段子或令人会心一笑的趣味冷知识！\n"
-            "语气幽默俏皮，帮主人在专注电脑时放松心情、会心一笑~ \n";
+        QString newsSource = contextInfo["news_source"].toString();
+        QString newsText = contextInfo["news_text"].toString();
+        QString newsUrl = contextInfo["news_url"].toString();
+        if (!newsText.isEmpty()) {
+            specialSituation = QString(
+                "\n【当前触发情境 - 热门全网新鲜资讯与时事热梗（来源：%1）】: \n"
+                "刚抓取到的实时全网新鲜热点/热帖: 「%2」\n"
+                "请以你专属的人格（俏皮、傲娇或软萌），像是在刷手机时偶然看到一样，自然地把这个热点/趣闻/梗分享给主人，并附带你一句犀利、俏皮或幽默的神吐槽！\n"
+                "语气要生动活泼，像老朋友分享八卦一样，严禁机械官方复读！\n"
+            ).arg(newsSource, newsText);
+        } else {
+            specialSituation = 
+                "\n【当前触发情境 - 热门趣闻 / 网络爆梗 / 趣味段子 / 幽默解压】: \n"
+                "你可以主动跟主人分享一个当下流行有趣的爆梗、科技/互联网圈热门趣事、程序员幽默段子或令人会心一笑的趣味冷知识！\n"
+                "语气幽默俏皮，帮主人在专注电脑时放松心情、会心一笑~ \n";
+        }
     } else if (triggerReason.contains("memory_topic_followup")) {
         QString topicMem = LongTermMemoryEngine::instance()->getRandomTopicMemory();
         if (!topicMem.isEmpty()) {

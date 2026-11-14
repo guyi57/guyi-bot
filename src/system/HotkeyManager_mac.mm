@@ -517,7 +517,7 @@ static QString simulateCmdCAndGetSelectedText() {
         CFRelease(optUpRight);
     }
 
-    usleep(15000); // 15ms 让系统窗口服务器消化释放修饰键
+    usleep(5000); // 5ms 让系统窗口服务器消化释放修饰键
 
     // 3. 构造纯正的 ⌘+C 组合按键
     CGEventRef keyDown = CGEventCreateKeyboardEvent(source, (CGKeyCode)0x08, true); // 0x08 == 'C'
@@ -537,9 +537,9 @@ static QString simulateCmdCAndGetSelectedText() {
     CFRelease(keyUp);
     if (source) CFRelease(source);
 
-    // 4. 毫秒级轮询剪贴板变化（最多等待 350ms，捕获到变化立即返回，兼顾快速与 Electron/Web 等较慢应用）
-    for (int i = 0; i < 35; ++i) {
-        usleep(10000); // 10ms
+    // 4. 毫秒级极速轮询剪贴板变化（最多等待 60ms，捕获到变化立即返回，杜绝主线程卡顿）
+    for (int i = 0; i < 12; ++i) {
+        usleep(5000); // 5ms
         if ([pasteboard changeCount] != oldChangeCount) {
             NSString *newString = [pasteboard stringForType:NSPasteboardTypeString];
             if (newString && [newString length] > 0) {

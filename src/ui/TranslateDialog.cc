@@ -1,5 +1,6 @@
 #include "TranslateDialog.hpp"
 #include "FastTranslateService.hpp"
+#include "AudioSpeechService.hpp"
 #include "AgentService.hpp"
 #include "ShijimaManager.hpp"
 #include "BehaviorEngine.hpp"
@@ -186,6 +187,23 @@ void TranslateDialog::setupUi()
     );
     inputActionRow->addWidget(m_clearBtn);
 
+    m_speakInputBtn = new QPushButton("🔊 原文发音", this);
+    m_speakInputBtn->setToolTip("免费真人/原生语音朗读输入的原文 (支持英文单词真人原声美音)");
+    m_speakInputBtn->setCursor(Qt::PointingHandCursor);
+    m_speakInputBtn->setStyleSheet(
+        "QPushButton {"
+        "  border: 1px solid #e2e8f0; background: #ffffff; color: #475569; font-size: 11px; padding: 4px 8px;"
+        "}"
+        "QPushButton:hover { background: #eff6ff; color: #2563eb; border-color: #93c5fd; }"
+    );
+    connect(m_speakInputBtn, &QPushButton::clicked, this, [this]() {
+        QString txt = m_inputEdit->toPlainText().trimmed();
+        if (!txt.isEmpty()) {
+            AudioSpeechService::instance()->speak(txt);
+        }
+    });
+    inputActionRow->addWidget(m_speakInputBtn);
+
     m_translateBtn = new QPushButton("⚡ 立即翻译 ↵", this);
     m_translateBtn->setCursor(Qt::PointingHandCursor);
     m_translateBtn->setStyleSheet(
@@ -227,6 +245,24 @@ void TranslateDialog::setupUi()
         "QPushButton:hover { background: #f8fafc; color: #4f46e5; border-color: #c7d2fe; }"
     );
     resultHeaderRow->addWidget(m_copyPrimaryBtn);
+
+    m_audioPronounceBtn = new QPushButton("🔊 朗读首选", this);
+    m_audioPronounceBtn->setToolTip("免费语音朗读最快返回的首选翻译结果");
+    m_audioPronounceBtn->setCursor(Qt::PointingHandCursor);
+    m_audioPronounceBtn->setEnabled(false);
+    m_audioPronounceBtn->setStyleSheet(
+        "QPushButton {"
+        "  border: 1px solid #e2e8f0; background: #ffffff; color: #475569; font-size: 11px; padding: 3px 8px;"
+        "}"
+        "QPushButton:hover { background: #eff6ff; color: #2563eb; border-color: #93c5fd; }"
+        "QPushButton:disabled { color: #cbd5e1; border-color: #f1f5f9; }"
+    );
+    connect(m_audioPronounceBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_lastPrimaryResult.isEmpty()) {
+            AudioSpeechService::instance()->speak(m_lastPrimaryResult);
+        }
+    });
+    resultHeaderRow->addWidget(m_audioPronounceBtn);
 
     m_speakPrimaryBtn = new QPushButton("💬 桌宠念出", this);
     m_speakPrimaryBtn->setToolTip("让桌宠在屏幕上以气泡念出首选翻译");
@@ -397,6 +433,18 @@ TranslationEngineCard TranslateDialog::createEngineCard(const QString &engineId,
     );
     header->addWidget(card.speakBtn);
 
+    card.audioBtn = new QPushButton("🔊 朗读", card.cardWidget);
+    card.audioBtn->setCursor(Qt::PointingHandCursor);
+    card.audioBtn->setEnabled(false);
+    card.audioBtn->setStyleSheet(
+        "QPushButton {"
+        "  border: 1px solid #e2e8f0; background: #ffffff; color: #475569; font-size: 10.5px; padding: 2px 7px; border-radius: 4px;"
+        "}"
+        "QPushButton:hover { background: #eff6ff; color: #2563eb; border-color: #93c5fd; }"
+        "QPushButton:disabled { color: #cbd5e1; border-color: #f1f5f9; }"
+    );
+    header->addWidget(card.audioBtn);
+
     layout->addLayout(header);
 
     // 内容展示框
@@ -436,6 +484,17 @@ TranslationEngineCard TranslateDialog::createEngineCard(const QString &engineId,
         else if (engineId == "ai") speakText(m_aiCard.resultText);
     });
 
+    connect(card.audioBtn, &QPushButton::clicked, this, [this, engineId]() {
+        QString textToSpeak;
+        if (engineId == "dict") textToSpeak = m_dictCard.resultText;
+        else if (engineId == "edge") textToSpeak = m_edgeCard.resultText;
+        else if (engineId == "google") textToSpeak = m_googleCard.resultText;
+        else if (engineId == "ai") textToSpeak = m_aiCard.resultText;
+        if (!textToSpeak.isEmpty()) {
+            AudioSpeechService::instance()->speak(textToSpeak);
+        }
+    });
+
     return card;
 }
 
@@ -447,6 +506,7 @@ void TranslateDialog::resetCard(TranslationEngineCard &card, const QString &plac
     card.badgeLabel->setVisible(false);
     card.copyBtn->setEnabled(false);
     card.speakBtn->setEnabled(false);
+    card.audioBtn->setEnabled(false);
 }
 
 void TranslateDialog::updateCardResult(TranslationEngineCard &card, bool success, const QString &text, qint64 elapsedMs, const QString &errorMsg)
@@ -463,12 +523,14 @@ void TranslateDialog::updateCardResult(TranslationEngineCard &card, bool success
         card.badgeLabel->setVisible(true);
         card.copyBtn->setEnabled(true);
         card.speakBtn->setEnabled(true);
+        card.audioBtn->setEnabled(true);
 
         // 首选结果自动设定：优先采纳最先返回成功的首个卡片
         if (m_lastPrimaryResult.isEmpty()) {
             m_lastPrimaryResult = text;
             m_copyPrimaryBtn->setEnabled(true);
             m_speakPrimaryBtn->setEnabled(true);
+            m_audioPronounceBtn->setEnabled(true);
             m_addToVocabBtn->setEnabled(true);
             m_addToVocabBtn->setText("⭐ 记入背词本");
             if (onTranslated) {
@@ -564,6 +626,7 @@ void TranslateDialog::doTranslate()
     m_lastPrimaryResult.clear();
     m_copyPrimaryBtn->setEnabled(false);
     m_speakPrimaryBtn->setEnabled(false);
+    m_audioPronounceBtn->setEnabled(false);
     m_addToVocabBtn->setEnabled(false);
 
     // 目标语言
@@ -704,6 +767,7 @@ void TranslateDialog::clearInput()
     m_lastPrimaryResult.clear();
     m_copyPrimaryBtn->setEnabled(false);
     m_speakPrimaryBtn->setEnabled(false);
+    m_audioPronounceBtn->setEnabled(false);
     m_addToVocabBtn->setEnabled(false);
     resetCard(m_edgeCard, "等待翻译...");
     resetCard(m_googleCard, "等待翻译...");

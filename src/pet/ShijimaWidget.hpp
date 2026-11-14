@@ -111,6 +111,13 @@ public:
     MessageBubble *messageBubble() const { return m_messageBubble; }
     AskDialog *askDialog() const { return m_askDialog; }
 
+    // Agent 任务进度圈与步骤详情交互
+    void startTaskProgress(const QString &initialPrompt, bool showBubbleImmediately = false);
+    void updateTaskProgress(const QString &progressCardMarkdown);
+    void finishTaskProgress(bool success, const QString &result, const QString &appTarget, const QString &originalQuestion = "");
+    void toggleTaskProgressBubble();
+    bool hasActiveTask() const { return m_hasActiveTask; }
+
     PetMotionController &motionController() { return m_motion; }
     void triggerEmote(PetEmoteType type, float durationSec = 2.5f) { m_motion.triggerEmote(type, durationSec); }
     void triggerInteractionAI(const QString &interactionType);
@@ -182,6 +189,17 @@ private:
     QQueue<QueuedBubbleMessage> m_bubbleQueue;
     bool m_isRunningToCenter = false;
     bool m_isWaitingForAgent = false;
+
+    // 任务执行进度微盘与状态
+    bool m_hasActiveTask = false;
+    int m_taskPercent = 0;
+    int m_taskStep = 1;
+    QString m_taskActionTitle;
+    QString m_activeTaskCardMarkdown;
+    QRect m_taskOrbRect;
+    float m_taskPulsePhase = 0.0f;
+    bool m_isTaskBubbleUserOpened = false;
+    bool m_isTaskOrbHovered = false;
 
     // 划词操作栏、提问弹窗、翻译弹窗、配置窗口与定时器窗口
     SelectionToolbar *m_selectionToolbar = nullptr;

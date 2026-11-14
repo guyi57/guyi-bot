@@ -122,32 +122,50 @@ void PetDiaryDialog::onEntrySelected(int row)
 {
     if (row < 0 || row >= m_entries.size()) return;
     const auto &e = m_entries[row];
+    m_selectedDate = e.date;
 
     m_titleLabel->setText(e.title);
     m_dateLabel->setText(QString("🗓️ %1").arg(e.date));
 
-    QString stats = QString("💻 专注: %1 分钟  |  🎵 听歌: %2 首  |  🐾 摸头: %3 次  |  💬 对话: %4 次")
-        .arg(e.workMinutes)
+    QString workStr;
+    if (e.workMinutes >= 60) {
+        workStr = QString("%1小时%2分钟").arg(e.workMinutes / 60).arg(e.workMinutes % 60);
+    } else {
+        workStr = QString("%1分钟").arg(e.workMinutes);
+    }
+
+    QString stats = QString("💻 专注: %1  |  🎵 听歌: %2 首  |  🐾 摸头: %3 次  |  💬 对话: %4 次")
+        .arg(workStr)
         .arg(e.musicCount)
         .arg(e.pettingCount)
         .arg(e.chatCount);
     m_statsLabel->setText(stats);
 
     m_contentBrowser->setText(e.content);
+
+    QString today = QDate::currentDate().toString("yyyy-MM-dd");
+    if (e.date == today) {
+        m_generateBtn->setText("✨ 重新记录今天");
+    } else {
+        m_generateBtn->setText(QString("🔄 重新提炼【%1】日记").arg(e.date));
+    }
 }
 
 void PetDiaryDialog::onGenerateTodayClicked()
 {
     m_generateBtn->setEnabled(false);
-    m_generateBtn->setText("⏳ 正在撰写中...");
+    m_generateBtn->setText("⏳ 正在结合真实活动撰写中...");
 
-    PetDiaryManager::instance()->generateDailyDiary(true /* forceRegenerate */, [this](bool success, const DiaryEntry &) {
+    QString targetDate = m_selectedDate.isEmpty() ? QDate::currentDate().toString("yyyy-MM-dd") : m_selectedDate;
+
+    PetDiaryManager::instance()->generateDailyDiary(true /* forceRegenerate */, [this, targetDate](bool success, const DiaryEntry &) {
         m_generateBtn->setEnabled(true);
-        m_generateBtn->setText("✨ 重新记录今天");
+        QString today = QDate::currentDate().toString("yyyy-MM-dd");
+        m_generateBtn->setText(targetDate == today ? "✨ 重新记录今天" : QString("🔄 重新提炼【%1】日记").arg(targetDate));
         if (success) {
             refreshEntries();
         } else {
             QMessageBox::warning(this, "提示", "日记生成失败，请确认大模型网络连接正常。");
         }
-    });
+    }, targetDate);
 }

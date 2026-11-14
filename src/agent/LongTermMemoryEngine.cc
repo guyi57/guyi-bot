@@ -210,6 +210,10 @@ void LongTermMemoryEngine::migrateLegacyData()
         QFile::rename(oldSeparateDb, oldSeparateDb + ".bak");
     }
 
+    // 自动清理历史上误沉淀的大量瞬时屏幕 OCR 记录与历史冗余事件，彻底释放数据库与主线程计算负担
+    sqlite3_exec(db, "DELETE FROM semantic_memories WHERE category = 'ocr_reading';", nullptr, nullptr, nullptr);
+    sqlite3_exec(db, "DELETE FROM episodic_events WHERE session_id IN ('desktop_timeline', 'desktop_ocr') AND timestamp < (strftime('%s', 'now') * 1000 - 604800000);", nullptr, nullptr, nullptr);
+
     // 检查 core_profile 是否有数据
     const char *checkSql = "SELECT COUNT(*) FROM core_profile;";
     sqlite3_stmt *stmt = nullptr;
@@ -509,6 +513,28 @@ bool LongTermMemoryEngine::resolveFollowupEvent(qint64 id, const QString &status
     return ok;
 }
 
+bool LongTermMemoryEngine::resolveFollowupsByWord(const QString &word)
+{
+    QString trimmed = word.trimmed().toLower();
+    if (trimmed.isEmpty()) return false;
+
+    QMutexLocker locker(&m_mutex);
+    sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
+    if (!db) return false;
+
+    QString pattern = "%" + trimmed + "%";
+    const char *sql = "UPDATE followup_events SET status = 'resolved' WHERE status = 'pending' AND (LOWER(title) LIKE ? OR LOWER(context) LIKE ?);";
+    sqlite3_stmt *stmt = nullptr;
+    bool ok = false;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, pattern.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 2, pattern.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+        ok = (sqlite3_step(stmt) == SQLITE_DONE);
+        sqlite3_finalize(stmt);
+    }
+    return ok;
+}
+
 bool LongTermMemoryEngine::dismissFollowupEvent(qint64 id)
 {
     return resolveFollowupEvent(id, "dismissed");
@@ -581,15 +607,11 @@ void LongTermMemoryEngine::addOcrMemory(const QString &appName, const QString &c
         m_lastOcrTime = now;
     }
 
-    // 1. 记入事件流
-    recordEpisodicEvent("desktop_ocr", appName, trimmedSummary);
+    // 1. 记入瞬时感知事件流（限制保留最新记录，杜绝数据库无限膨胀）
+    recordEpisodicEvent("desktop_ocr", appName, trimmedSummary.left(300));
 
-    // 2. 沉淀为语义记忆
-    QString snippet = trimmedSummary;
-    if (snippet.length() > 120) snippet = snippet.left(120) + "...";
-    QString memoryText = QString("在【%1】中浏览或出现: %2").arg(appName, snippet);
-    addSemanticMemory("ocr_reading", memoryText, 2);
-    std::cout << "[LongTermMemoryEngine] 已将屏幕 OCR 内容自动沉淀为记忆: " << memoryText.toStdString() << std::endl;
+    // 2. 关键优化：严禁将高频屏幕视窗文字作为长期语义记忆（semantic_memories）入库！
+    // 视觉 OCR 属于动态瞬时感知（用于生词捕获与实时交互），一旦永久沉淀会导致主线程 BM25 检索几千条垃圾文本造成界面彻底卡死。
 }
 
 void LongTermMemoryEngine::addCodingMemory(const QString &agentName, const QString &status, const QString &task, const QString &details)
@@ -851,6 +873,12 @@ QList<SemanticMemoryRecord> LongTermMemoryEngine::searchMemories(const QString &
     auto all = getAllActiveMemories();
     if (all.isEmpty()) return all;
 
+    // 性能保护：由于 getAllActiveMemories 已按 importance DESC, created_at DESC 排序，
+    // 若活跃条目过多，只对前 120 条最重要/最新的记忆进行 BM25 分词与打分，确保 UI 线程微秒级返回
+    if (all.size() > 120) {
+        all = all.mid(0, 120);
+    }
+
     QString q = query.trimmed().toLower();
     QVector<float> queryVec = computeLocalSparseVector(q);
     qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -1074,6 +1102,152 @@ void LongTermMemoryEngine::recordEpisodicEvent(const QString &sessionId, const Q
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
     }
+
+    // 定期瘦身：每记录 50 次事件，清理 7 天前的桌面流水事件（desktop_timeline / desktop_ocr）
+    static int s_eventWriteCount = 0;
+    if (++s_eventWriteCount >= 50) {
+        s_eventWriteCount = 0;
+        qint64 expireTime = now - (7LL * 86400LL * 1000LL);
+        const char *cleanupSql = "DELETE FROM episodic_events WHERE (session_id IN ('desktop_timeline', 'desktop_ocr')) AND timestamp < ?;";
+        sqlite3_stmt *cStmt = nullptr;
+        if (sqlite3_prepare_v2(db, cleanupSql, -1, &cStmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_int64(cStmt, 1, expireTime);
+            sqlite3_step(cStmt);
+            sqlite3_finalize(cStmt);
+        }
+    }
+}
+
+QJsonObject LongTermMemoryEngine::getDailyActivitySummary(const QString &dateStr)
+{
+    QMutexLocker locker(&m_mutex);
+    QJsonObject res;
+    if (!m_sqliteHandle) initDb();
+    sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
+    if (!db) return res;
+
+    QString queryDate = dateStr.trimmed();
+    if (queryDate.isEmpty()) {
+        queryDate = QDate::currentDate().toString("yyyy-MM-dd");
+    }
+
+    QDate d = QDate::fromString(queryDate, "yyyy-MM-dd");
+    if (!d.isValid()) {
+        d = QDate::currentDate();
+        queryDate = d.toString("yyyy-MM-dd");
+    }
+
+    QDateTime startDt(d, QTime(0, 0, 0));
+    QDateTime endDt(d, QTime(23, 59, 59, 999));
+    qint64 startMs = startDt.toMSecsSinceEpoch();
+    qint64 endMs = endDt.toMSecsSinceEpoch();
+
+    res["date"] = queryDate;
+    res["active_minutes"] = 0;
+    res["user_chat_count"] = 0;
+    res["coding_task_count"] = 0;
+
+    // 1. 活跃工作分钟数（按分钟去重）
+    const char *sqlMins = "SELECT count(DISTINCT timestamp / 60000) FROM episodic_events WHERE timestamp >= ? AND timestamp <= ?;";
+    sqlite3_stmt *stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sqlMins, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, startMs);
+        sqlite3_bind_int64(stmt, 2, endMs);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            res["active_minutes"] = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    // 2. 主人对话次数
+    const char *sqlChats = "SELECT count(*) FROM episodic_events WHERE role = 'user' AND timestamp >= ? AND timestamp <= ?;";
+    if (sqlite3_prepare_v2(db, sqlChats, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, startMs);
+        sqlite3_bind_int64(stmt, 2, endMs);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            res["user_chat_count"] = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    // 3. 编程与智能体任务数
+    const char *sqlTasks = "SELECT count(*) FROM episodic_events WHERE session_id = 'coding_task' AND timestamp >= ? AND timestamp <= ?;";
+    if (sqlite3_prepare_v2(db, sqlTasks, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, startMs);
+        sqlite3_bind_int64(stmt, 2, endMs);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            res["coding_task_count"] = sqlite3_column_int(stmt, 0);
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    // 4. 最活跃应用排行榜 (Top 5)
+    const char *sqlApps = "SELECT role, count(*) FROM episodic_events WHERE session_id = 'desktop_ocr' AND timestamp >= ? AND timestamp <= ? GROUP BY role ORDER BY count(*) DESC LIMIT 5;";
+    QJsonArray topApps;
+    if (sqlite3_prepare_v2(db, sqlApps, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, startMs);
+        sqlite3_bind_int64(stmt, 2, endMs);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            QString app = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0)));
+            int cnt = sqlite3_column_int(stmt, 1);
+            if (!app.isEmpty() && app != "guyi-bot") {
+                QJsonObject appObj;
+                appObj["app"] = app;
+                appObj["count"] = cnt;
+                topApps.append(appObj);
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+    res["top_apps"] = topApps;
+
+    // 5. 今日编程任务/主要工作摘录 (最多 6 条)
+    const char *sqlRecentTasks = "SELECT content FROM episodic_events WHERE session_id = 'coding_task' AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp DESC LIMIT 6;";
+    QJsonArray tasksArr;
+    if (sqlite3_prepare_v2(db, sqlRecentTasks, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, startMs);
+        sqlite3_bind_int64(stmt, 2, endMs);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            QString task = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0))).trimmed();
+            if (!task.isEmpty()) {
+                tasksArr.append(task);
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+    res["recent_tasks"] = tasksArr;
+
+    // 6. 今日主人探讨话题/问题摘录 (最多 5 条)
+    const char *sqlTopics = "SELECT content FROM episodic_events WHERE role = 'user' AND timestamp >= ? AND timestamp <= ? ORDER BY timestamp DESC LIMIT 5;";
+    QJsonArray topicsArr;
+    if (sqlite3_prepare_v2(db, sqlTopics, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, startMs);
+        sqlite3_bind_int64(stmt, 2, endMs);
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            QString q = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0))).trimmed();
+            if (!q.isEmpty()) {
+                topicsArr.append(q);
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+    res["recent_topics"] = topicsArr;
+
+    // 7. 起止活跃时间
+    const char *sqlTimeRange = "SELECT min(timestamp), max(timestamp) FROM episodic_events WHERE timestamp >= ? AND timestamp <= ?;";
+    if (sqlite3_prepare_v2(db, sqlTimeRange, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_int64(stmt, 1, startMs);
+        sqlite3_bind_int64(stmt, 2, endMs);
+        if (sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_type(stmt, 0) != SQLITE_NULL) {
+            qint64 minTs = sqlite3_column_int64(stmt, 0);
+            qint64 maxTs = sqlite3_column_int64(stmt, 1);
+            res["first_active_time"] = QDateTime::fromMSecsSinceEpoch(minTs).toString("HH:mm");
+            res["last_active_time"] = QDateTime::fromMSecsSinceEpoch(maxTs).toString("HH:mm");
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    return res;
 }
 
 // === 异步反思提炼流水线 (Reflection Engine) ===
@@ -1093,6 +1267,8 @@ void LongTermMemoryEngine::triggerAsyncReflection(const QString &userMsg,
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     req.setRawHeader("Authorization", ("Bearer " + apiKey.trimmed()).toUtf8());
+    req.setTransferTimeout(20000); // 20秒超时保护
+    req.setTransferTimeout(20000); // 20秒超时保护
 
     QJsonObject promptSys;
     promptSys["role"] = "system";
@@ -1117,7 +1293,7 @@ void LongTermMemoryEngine::triggerAsyncReflection(const QString &userMsg,
 
     QJsonObject userObj;
     userObj["role"] = "user";
-    userObj["content"] = QString("【用户说】:\n%1\n\n【AI回复】:\n%2").arg(userMsg, assistantMsg);
+    userObj["content"] = QString("【用户说】:\n%1\n\n【AI回复】:\n%2").arg(userMsg.left(500), assistantMsg.left(1000));
 
     QJsonArray msgs;
     msgs.append(promptSys);
@@ -1258,6 +1434,7 @@ void LongTermMemoryEngine::triggerRollingCompaction(const QJsonArray &overflowMe
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     req.setRawHeader("Authorization", ("Bearer " + apiKey.trimmed()).toUtf8());
+    req.setTransferTimeout(20000); // 20秒超时保护
 
     QString dialogTranscript;
     for (const auto &v : overflowMessages) {
@@ -1378,6 +1555,7 @@ void LongTermMemoryEngine::requestEmbeddingAsync(const QString &text,
     QNetworkRequest req(url);
     req.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
     req.setRawHeader("Authorization", ("Bearer " + apiKey.trimmed()).toUtf8());
+    req.setTransferTimeout(20000); // 20秒超时保护
 
     QJsonObject root;
     root["model"] = "text-embedding-3-small";

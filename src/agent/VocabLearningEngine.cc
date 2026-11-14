@@ -3,6 +3,9 @@
 #include "BehaviorEngine.hpp"
 #include "ShijimaWidget.hpp"
 #include "ShijimaManager.hpp"
+#include "LongTermMemoryEngine.hpp"
+#include "AgentService.hpp"
+#include "FastTranslateService.hpp"
 #include <sqlite3.h>
 #include <QDir>
 #include <QFile>
@@ -13,8 +16,19 @@
 #include <QRegularExpression>
 #include <QCoreApplication>
 #include <QStandardPaths>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QUrl>
+#include <QUrlQuery>
+#include <QTimer>
 #include <cmath>
+#include <memory>
 #include <iostream>
+
+static bool containsChinese(const QString &text) {
+    static const QRegularExpression re(R"([\x{4e00}-\x{9fa5}])");
+    return text.contains(re);
+}
 
 VocabLearningEngine *VocabLearningEngine::instance()
 {
@@ -23,6 +37,7 @@ VocabLearningEngine *VocabLearningEngine::instance()
 }
 
 VocabLearningEngine::VocabLearningEngine()
+    : m_nam(new QNetworkAccessManager())
 {
     initDb();
 }
@@ -33,6 +48,10 @@ VocabLearningEngine::~VocabLearningEngine()
     if (m_sqliteHandle) {
         sqlite3_close(static_cast<sqlite3*>(m_sqliteHandle));
         m_sqliteHandle = nullptr;
+    }
+    if (m_nam) {
+        m_nam->deleteLater();
+        m_nam = nullptr;
     }
 }
 
@@ -227,6 +246,7 @@ VocabStats VocabLearningEngine::stats() const
 bool VocabLearningEngine::shouldTriggerQuiz() const
 {
     if (!isEnabled()) return false;
+    if (!AgentService::instance()->isWithinInteractionTimeWindow()) return false;
 
     qint64 now = QDateTime::currentMSecsSinceEpoch();
     int intervalMs = quizIntervalMinutes() * 60 * 1000;
@@ -260,6 +280,44 @@ VocabCard VocabLearningEngine::getCardById(qint64 id)
     sqlite3_stmt *stmt = nullptr;
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_int64(stmt, 1, id);
+        if (sqlite3_step(stmt) == SQLITE_ROW) {
+            c.id = sqlite3_column_int64(stmt, 0);
+            c.word = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
+            c.phonetic = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2)));
+            c.pos = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3)));
+            c.definition = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 4)));
+            c.example = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5)));
+            c.memoryTip = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6)));
+            c.category = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 7)));
+            c.masteryLevel = sqlite3_column_int(stmt, 8);
+            c.nextReviewTime = sqlite3_column_int64(stmt, 9);
+            c.reviewCount = sqlite3_column_int(stmt, 10);
+            c.wrongCount = sqlite3_column_int(stmt, 11);
+            c.lastReviewedAt = sqlite3_column_int64(stmt, 12);
+            c.createdAt = sqlite3_column_int64(stmt, 13);
+        }
+        sqlite3_finalize(stmt);
+    }
+    return c;
+}
+
+VocabCard VocabLearningEngine::getCardByWord(const QString &word)
+{
+    QString trimmed = word.trimmed().toLower();
+    if (trimmed.isEmpty()) return VocabCard();
+
+    QMutexLocker locker(&m_mutex);
+    VocabCard c;
+    sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
+    if (!db) return c;
+
+    const char *sql = 
+        "SELECT id, word, phonetic, pos, definition, example, memory_tip, category, "
+        "       mastery_level, next_review_time, review_count, wrong_count, last_reviewed_at, created_at "
+        "FROM vocabulary_cards WHERE LOWER(word) = ? LIMIT 1;";
+    sqlite3_stmt *stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK) {
+        sqlite3_bind_text(stmt, 1, trimmed.toUtf8().constData(), -1, SQLITE_TRANSIENT);
         if (sqlite3_step(stmt) == SQLITE_ROW) {
             c.id = sqlite3_column_int64(stmt, 0);
             c.word = QString::fromUtf8(reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1)));
@@ -419,7 +477,7 @@ VocabQuizItem VocabLearningEngine::generateNextQuiz()
     // 格式化呈现
     QString prompt = QString(
         "🎓 **桌宠单词闪击**（%1 · 今日背词: %2/%3 词）\n\n"
-        "【%4】`%5`\n"
+        "【%4】`%5`  👉 [🔊 发音](vocab://speak?word=%4)\n"
         "• 考点词性: *%6*\n"
         "• 请选出最准确的释义：\n\n"
     ).arg(typeTitle)
@@ -439,7 +497,222 @@ VocabQuizItem VocabLearningEngine::generateNextQuiz()
 
     item.promptText = prompt;
     m_currentQuiz = item;
+
+    // 预热与补全：在用户审题答题的几秒窗口内，后台异步富化双语例句与助记妙招
+    enrichBilingualCardAsync(chosenCard);
+
     return item;
+}
+
+QString VocabLearningEngine::formatBilingualExample(const QString &example) const
+{
+    QString trimmed = example.trimmed();
+    if (trimmed.isEmpty()) return "";
+
+    // 剔除可能存在的 HTML 标签（如 API 返回的 <b> 标签）
+    static const QRegularExpression tagRe("<[^>]*>");
+    trimmed.remove(tagRe);
+
+    if (trimmed.contains('\n')) {
+        QStringList lines = trimmed.split('\n', Qt::SkipEmptyParts);
+        if (lines.size() >= 2) {
+            QString en = lines[0].trimmed();
+            QString zh = lines[1].trimmed();
+            en.remove(QRegularExpression(R"(^(en|例句|原句)[:：\s]*)", QRegularExpression::CaseInsensitiveOption));
+            zh.remove(QRegularExpression(R"(^(zh|cn|译文|释义|翻译|↳\s*译文)[:：\s]*)", QRegularExpression::CaseInsensitiveOption));
+            return QString("• 📖 双语例句：%1\n  ↳ 译文：%2\n").arg(en, zh);
+        }
+    }
+
+    int slashIdx = trimmed.indexOf(" // ");
+    if (slashIdx != -1) {
+        QString en = trimmed.left(slashIdx).trimmed();
+        QString zh = trimmed.mid(slashIdx + 4).trimmed();
+        return QString("• 📖 双语例句：%1\n  ↳ 译文：%2\n").arg(en, zh);
+    }
+
+    return QString("• 📖 例句：%1\n").arg(trimmed);
+}
+
+void VocabLearningEngine::updateCardExampleAndTip(qint64 cardId, const QString &example, const QString &memoryTip)
+{
+    if (cardId <= 0) return;
+    QMutexLocker locker(&m_mutex);
+    sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
+    if (!db) return;
+
+    QString sql;
+    if (!example.isEmpty() && !memoryTip.isEmpty()) {
+        sql = "UPDATE vocabulary_cards SET example = ?, memory_tip = ? WHERE id = ?;";
+    } else if (!example.isEmpty()) {
+        sql = "UPDATE vocabulary_cards SET example = ? WHERE id = ?;";
+    } else if (!memoryTip.isEmpty()) {
+        sql = "UPDATE vocabulary_cards SET memory_tip = ? WHERE id = ?;";
+    } else {
+        return;
+    }
+
+    sqlite3_stmt *stmt = nullptr;
+    if (sqlite3_prepare_v2(db, sql.toUtf8().constData(), -1, &stmt, nullptr) == SQLITE_OK) {
+        int idx = 1;
+        if (!example.isEmpty()) {
+            sqlite3_bind_text(stmt, idx++, example.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+        }
+        if (!memoryTip.isEmpty()) {
+            sqlite3_bind_text(stmt, idx++, memoryTip.toUtf8().constData(), -1, SQLITE_TRANSIENT);
+        }
+        sqlite3_bind_int64(stmt, idx++, cardId);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
+}
+
+void VocabLearningEngine::enrichBilingualCardAsync(VocabCard card, std::function<void(const VocabCard &enrichedCard)> callback)
+{
+    if (card.id <= 0 || card.word.trimmed().isEmpty()) {
+        if (callback) callback(card);
+        return;
+    }
+
+    bool hasBilingualEx = card.example.contains('\n') && containsChinese(card.example);
+    bool hasTip = !card.memoryTip.trimmed().isEmpty();
+
+    // 如果该词卡已经同时具备双语例句与助记妙招，直接返回
+    if (hasBilingualEx && hasTip) {
+        if (callback) callback(card);
+        return;
+    }
+
+    if (!m_nam) {
+        m_nam = new QNetworkAccessManager();
+    }
+
+    QString word = card.word.trimmed();
+    QUrl url(QString("https://dict.youdao.com/jsonapi?q=%1").arg(QUrl::toPercentEncoding(word)));
+    QNetworkRequest req(url);
+    req.setHeader(QNetworkRequest::UserAgentHeader, "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)");
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+
+    QNetworkReply *reply = m_nam->get(req);
+    QObject::connect(reply, &QNetworkReply::finished, [this, reply, card, hasBilingualEx, hasTip, callback]() {
+        reply->deleteLater();
+
+        VocabCard enriched = card;
+        QString fetchedTip;
+        QString fetchedExample;
+
+        if (reply->error() == QNetworkReply::NoError) {
+            QByteArray data = reply->readAll();
+            QJsonDocument doc = QJsonDocument::fromJson(data);
+            if (doc.isObject()) {
+                QJsonObject root = doc.object();
+
+                // 1. 提取助记妙招 (Mnemonic / Etymology)
+                if (!hasTip) {
+                    QJsonObject indiv = root["individual"].toObject();
+                    QJsonObject mn = indiv["mnemonic"].toObject();
+                    QString method = mn["method"].toString().trimmed();
+                    if (!method.isEmpty()) {
+                        fetchedTip = method;
+                    }
+
+                    if (fetchedTip.isEmpty()) {
+                        QJsonObject etym = root["etym"].toObject();
+                        QJsonObject etyms = etym["etyms"].toObject();
+                        QJsonArray zhArr = etyms["zh"].toArray();
+                        if (!zhArr.isEmpty()) {
+                            QString desc = zhArr[0].toObject()["desc"].toString().trimmed();
+                            if (!desc.isEmpty()) {
+                                fetchedTip = desc;
+                            } else {
+                                QString val = zhArr[0].toObject()["value"].toString().trimmed();
+                                if (!val.isEmpty()) {
+                                    int endPos = val.indexOf('\n');
+                                    if (endPos > 0) val = val.left(endPos).trimmed();
+                                    if (val.length() > 60) val = val.left(60) + "...";
+                                    fetchedTip = val;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 2. 提取权威考试或双语语境例句
+                if (!hasBilingualEx) {
+                    QJsonObject indiv = root["individual"].toObject();
+                    QJsonArray pastSents = indiv["pastExamSents"].toArray();
+                    QString enSent, zhSent;
+
+                    if (!pastSents.isEmpty()) {
+                        QJsonObject firstPast = pastSents[0].toObject();
+                        enSent = firstPast["en"].toString().trimmed();
+                        zhSent = firstPast["zh"].toString().trimmed();
+                    }
+
+                    if (enSent.isEmpty() || zhSent.isEmpty()) {
+                        QJsonObject blng = root["blng_sents_part"].toObject();
+                        QJsonArray sentPairs = blng["sentence-pair"].toArray();
+                        if (!sentPairs.isEmpty()) {
+                            QJsonObject firstPair = sentPairs[0].toObject();
+                            enSent = firstPair["sentence-eng"].toString().trimmed();
+                            zhSent = firstPair["sentence-translation"].toString().trimmed();
+                        }
+                    }
+
+                    static const QRegularExpression tagRe("<[^>]*>");
+                    enSent.remove(tagRe);
+                    zhSent.remove(tagRe);
+
+                    if (!enSent.isEmpty() && !zhSent.isEmpty()) {
+                        fetchedExample = enSent.trimmed() + "\n" + zhSent.trimmed();
+                    }
+                }
+            }
+        }
+
+        // 处理卡片本身已有专业领域英文例句，但缺失中文译文的情况
+        if (!hasBilingualEx && !card.example.trimmed().isEmpty() && !containsChinese(card.example)) {
+            QString originalEn = card.example.trimmed();
+            FastTranslateService::instance()->translateEdge(originalEn, "中文", [this, card, originalEn, fetchedTip, hasTip, callback](const EngineTranslationResult &transRes) {
+                VocabCard finalCard = card;
+                QString finalEx;
+                if (transRes.success && !transRes.translatedText.trimmed().isEmpty()) {
+                    finalEx = originalEn + "\n" + transRes.translatedText.trimmed();
+                } else {
+                    finalEx = originalEn;
+                }
+                QString finalTip = (!hasTip && !fetchedTip.isEmpty()) ? fetchedTip : card.memoryTip;
+
+                updateCardExampleAndTip(card.id, finalEx, finalTip);
+                finalCard.example = finalEx;
+                finalCard.memoryTip = finalTip;
+
+                if (m_currentQuiz.card.id == card.id) {
+                    m_currentQuiz.card = finalCard;
+                }
+
+                if (callback) callback(finalCard);
+            });
+            return;
+        }
+
+        QString finalEx = card.example;
+        if (!hasBilingualEx && !fetchedExample.isEmpty()) {
+            finalEx = fetchedExample;
+        }
+        QString finalTip = (!hasTip && !fetchedTip.isEmpty()) ? fetchedTip : card.memoryTip;
+
+        if (finalEx != card.example || finalTip != card.memoryTip) {
+            updateCardExampleAndTip(card.id, finalEx, finalTip);
+            enriched.example = finalEx;
+            enriched.memoryTip = finalTip;
+            if (m_currentQuiz.card.id == card.id) {
+                m_currentQuiz.card = enriched;
+            }
+        }
+
+        if (callback) callback(enriched);
+    });
 }
 
 void VocabLearningEngine::submitQuizAnswer(qint64 cardId, int chosenIndex)
@@ -503,15 +776,18 @@ void VocabLearningEngine::submitQuizAnswer(qint64 cardId, int chosenIndex)
 
     VocabStats st = stats();
 
-    // 驱动桌宠动作与反馈气泡
-    PetActionCommand cmd;
-    cmd.type = PetActionType::Talk;
-    cmd.durationMs = 9000;
-    cmd.moveToCenter = false;
-    cmd.forceImmediate = true;
+    // 联动记忆系统：若用户在跟进中已完成该单词测验，自动标记相应回访事件为已闭环
+    LongTermMemoryEngine::instance()->resolveFollowupsByWord(c.word);
 
+    // 驱动桌宠动作与反馈气泡
     if (isCorrect) {
         BehaviorEngine::instance()->addAffection(2, 5);
+
+        PetActionCommand cmd;
+        cmd.type = PetActionType::Talk;
+        cmd.durationMs = 9000;
+        cmd.moveToCenter = false;
+        cmd.forceImmediate = true;
         cmd.emote = PetEmoteType::HappyHeart;
 
         QString feedback = QString(
@@ -522,8 +798,9 @@ void VocabLearningEngine::submitQuizAnswer(qint64 cardId, int chosenIndex)
 
         if (!c.memoryTip.isEmpty()) {
             feedback += QString("• 💡 助记巧思：%1\n").arg(c.memoryTip);
-        } else if (!c.example.isEmpty()) {
-            feedback += QString("• 📖 例句：%1\n").arg(c.example);
+        }
+        if (!c.example.isEmpty()) {
+            feedback += formatBilingualExample(c.example);
         }
         feedback += QString("\n📈 熟练度: **Lv.%1** · 今日已背: **%2/%3** 词")
             .arg(c.masteryLevel)
@@ -531,40 +808,71 @@ void VocabLearningEngine::submitQuizAnswer(qint64 cardId, int chosenIndex)
             .arg(st.todayTarget);
 
         cmd.speechText = feedback;
+        BehaviorEngine::instance()->executeAction(cmd);
 
         if (BehaviorEngine::instance()->activeWidget()) {
             BehaviorEngine::instance()->activeWidget()->motionController().triggerStretch(0.88f, 1.15f);
         }
     } else {
-        cmd.emote = PetEmoteType::DizzySwirl;
+        auto sendWrongFeedback = [this](const VocabCard &cardToUse) {
+            PetActionCommand cmd;
+            cmd.type = PetActionType::Talk;
+            cmd.durationMs = 12000;
+            cmd.moveToCenter = false;
+            cmd.forceImmediate = true;
+            cmd.emote = PetEmoteType::DizzySwirl;
 
-        QString feedback = QString(
-            "❌ **哎呀，记错了喵~** 🌀\n\n"
-            "单词：**%1** %2\n"
-            "• 正确释义：**%3**\n"
-        ).arg(c.word, c.phonetic, c.definition);
+            QString feedback = QString(
+                "❌ **哎呀，记错了喵~** 🌀\n\n"
+                "单词：**%1** %2\n"
+                "• 正确释义：**%3**\n"
+            ).arg(cardToUse.word, cardToUse.phonetic, cardToUse.definition);
 
-        if (!c.memoryTip.isEmpty()) {
-            feedback += QString("• 💡 记忆小妙招：%1\n").arg(c.memoryTip);
-        } else if (!c.example.isEmpty()) {
-            feedback += QString("• 📖 实战语境：%1\n").arg(c.example);
+            if (!cardToUse.memoryTip.isEmpty()) {
+                feedback += QString("• 💡 记忆小妙招：%1\n").arg(cardToUse.memoryTip);
+            }
+            if (!cardToUse.example.isEmpty()) {
+                feedback += formatBilingualExample(cardToUse.example);
+            }
+            feedback += "\n别灰心！这个词已为你加入稍后强化复习队列，今天一定拿下它！💪";
+
+            cmd.speechText = feedback;
+            BehaviorEngine::instance()->executeAction(cmd);
+        };
+
+        bool hasBilingualEx = c.example.contains('\n') && containsChinese(c.example);
+        bool hasTip = !c.memoryTip.trimmed().isEmpty();
+
+        if (hasBilingualEx && hasTip) {
+            sendWrongFeedback(c);
+        } else {
+            auto called = std::make_shared<bool>(false);
+            auto safeSend = [called, sendWrongFeedback](const VocabCard &cardToUse) {
+                if (*called) return;
+                *called = true;
+                sendWrongFeedback(cardToUse);
+            };
+
+            // 1000ms 兜底保护，网络不畅或超时时绝不阻塞桌宠反馈
+            QTimer::singleShot(1000, [safeSend, c]() {
+                safeSend(c);
+            });
+
+            enrichBilingualCardAsync(c, [safeSend](const VocabCard &enriched) {
+                safeSend(enriched);
+            });
         }
-        feedback += "\n别灰心！这个词已为你加入稍后强化复习队列，今天一定拿下它！💪";
-
-        cmd.speechText = feedback;
     }
-
-    BehaviorEngine::instance()->executeAction(cmd);
 }
 
-void VocabLearningEngine::triggerQuizForCard(qint64 cardId)
+VocabQuizItem VocabLearningEngine::generateQuizForCard(qint64 cardId)
 {
     VocabCard c = getCardById(cardId);
-    if (c.id == 0) return;
+    if (c.id == 0) return VocabQuizItem();
 
     QMutexLocker locker(&m_mutex);
     sqlite3 *db = static_cast<sqlite3*>(m_sqliteHandle);
-    if (!db) return;
+    if (!db) return VocabQuizItem();
 
     // 抽取 2 个干扰项释义
     QStringList distractorDefs;
@@ -592,11 +900,14 @@ void VocabLearningEngine::triggerQuizForCard(qint64 cardId)
     item.options = opts;
     item.correctIndex = correctIdx;
 
+    QString catBadge = (c.category == "upgrade_exam") ? "🎓 专升本核心" :
+                       (c.category == "programming") ? "💻 编程实战" : "⭐ 生词本";
+
     QString prompt = QString(
-        "✍️ **专属生词即测即练**\n\n"
-        "【%1】`%2`\n"
-        "• 请选出对应的中文释义：\n\n"
-    ).arg(c.word, c.phonetic);
+        "🎓 **桌宠单词抽查**（%1 · 【**%2**】）👉 [🔊 发音](vocab://speak?word=%2)\n"
+        "• 考点词性: *%3*\n"
+        "• 请选出最准确的释义：\n\n"
+    ).arg(catBadge, c.word, c.pos.isEmpty() ? "重点考查" : c.pos);
 
     static const QStringList letters = { "A", "B", "C", "D" };
     for (int i = 0; i < opts.size(); ++i) {
@@ -608,10 +919,21 @@ void VocabLearningEngine::triggerQuizForCard(qint64 cardId)
     item.promptText = prompt;
     m_currentQuiz = item;
 
+    // 预热与补全：异步富化该指定单词卡
+    enrichBilingualCardAsync(c);
+
+    return item;
+}
+
+void VocabLearningEngine::triggerQuizForCard(qint64 cardId)
+{
+    VocabQuizItem item = generateQuizForCard(cardId);
+    if (item.card.id == 0 || item.promptText.isEmpty()) return;
+
     PetActionCommand cmd;
     cmd.type = PetActionType::Talk;
-    cmd.speechText = prompt;
-    cmd.durationMs = 18000;
+    cmd.speechText = item.promptText;
+    cmd.durationMs = 20000;
     cmd.emote = PetEmoteType::ThinkingBulb;
     cmd.forceImmediate = true;
     BehaviorEngine::instance()->executeAction(cmd);
@@ -639,6 +961,8 @@ void VocabLearningEngine::markCardKnown(qint64 cardId)
         }
     }
 
+    LongTermMemoryEngine::instance()->resolveFollowupsByWord(c.word);
+
     PetActionCommand cmd;
     cmd.type = PetActionType::Talk;
     cmd.speechText = QString("✅ 收到！已将【%1】标记为【熟知】状态，为你安排在下周轻松抽查~ ✨").arg(c.word);
@@ -648,9 +972,25 @@ void VocabLearningEngine::markCardKnown(qint64 cardId)
     BehaviorEngine::instance()->executeAction(cmd);
 }
 
+QString VocabLearningEngine::formatVocabBadge(const VocabCard &c) const
+{
+    if (c.id <= 0 || c.word.isEmpty()) return "";
+    QString badge = QString(
+        "\n\n---\n"
+        "🎓 **英语伴学生词卡**：【**%1**】 `%2` · *%3* %4\n"
+        "👉 [🔊 发音](vocab://speak?word=%1)  [✍️ 闪击测验](vocab://quiz?id=%5)  [✅ 标记熟知](vocab://mark_known?id=%5)"
+    ).arg(c.word,
+         c.phonetic.isEmpty() ? "生词学习" : c.phonetic,
+         c.pos.isEmpty() ? "核心考点" : c.pos,
+         c.definition,
+         QString::number(c.id));
+    return badge;
+}
+
 void VocabLearningEngine::handleOcrSnippet(const QString &appName, const QString &ocrText)
 {
     if (!isEnabled() || !isOcrSniperEnabled()) return;
+    if (!AgentService::instance()->isWithinInteractionTimeWindow()) return;
 
     qint64 now = QDateTime::currentMSecsSinceEpoch();
     if ((now - m_lastOcrSnipeTime) < 600000) { // 10分钟生词捕获冷却，绝不打扰正常视线
@@ -697,6 +1037,9 @@ void VocabLearningEngine::handleOcrSnippet(const QString &appName, const QString
         m_lastOcrSnipeTime = now;
         m_recentSnipedWords[snipedCard.word.toLower()] = now;
 
+        // 异步富化捕捉到的生词卡
+        enrichBilingualCardAsync(snipedCard);
+
         std::cout << "[VocabLearningEngine] OCR 屏幕生词捕获命中: " 
                   << snipedCard.word.toStdString() << " 来自应用: " << appName.toStdString() << std::endl;
 
@@ -708,11 +1051,14 @@ void VocabLearningEngine::handleOcrSnippet(const QString &appName, const QString
 
         if (!snipedCard.memoryTip.isEmpty()) {
             msg += QString("• 💡 助记巧思：%1\n").arg(snipedCard.memoryTip);
-        } else if (!snipedCard.example.isEmpty()) {
-            msg += QString("• 📖 例句：%1\n").arg(snipedCard.example);
+        }
+        if (!snipedCard.example.isEmpty()) {
+            msg += formatBilingualExample(snipedCard.example);
         }
 
-        msg += QString("\n👉 [做题测验 ✍️](vocab://quiz?id=%1)  [标记熟知 ✅](vocab://mark_known?id=%1)").arg(snipedCard.id);
+        msg += QString("\n👉 [🔊 听发音](vocab://speak?word=%1)  [做题测验 ✍️](vocab://quiz?id=%2)  [标记熟知 ✅](vocab://mark_known?id=%2)")
+            .arg(snipedCard.word)
+            .arg(snipedCard.id);
 
         PetActionCommand cmd;
         cmd.type = PetActionType::Talk;

@@ -18,13 +18,14 @@ public:
     void start(ShijimaWidget *pet, const QString &fileName = "garbage.tmp", const QString &realFilePath = "", const QPointF &customSpawnPos = QPointF(-1, -1));
 
     bool isRunning() const { return m_running; }
+    void cancel() { finish(); }
+    void finish();
 
 private:
     FileDisposalSequence();
     ~FileDisposalSequence();
 
     void step();
-    void finish();
 
     bool m_running = false;
     qint64 m_lastStartTime = 0;

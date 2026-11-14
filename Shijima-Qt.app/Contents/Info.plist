@@ -5,7 +5,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>guyi-bot</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.4.0</string>
+	<string>1.5.3</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13</string>
 	<key>CFBundleExecutable</key>
@@ -22,6 +22,8 @@
 	<string>APPL</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>guyi-bot 需要屏幕视窗读取权限，以便智能感知当前前台视窗内容并辅助英语生词学习与记忆。</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

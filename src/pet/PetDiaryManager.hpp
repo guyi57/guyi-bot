@@ -37,8 +37,11 @@ public:
     QList<DiaryEntry> allEntries();
     DiaryEntry getEntryByDate(const QString &date);
 
-    // 驱动大模型生成日记（若已生成则返回当日日记）
-    void generateDailyDiary(bool forceRegenerate, std::function<void(bool success, const DiaryEntry &entry)> callback);
+    // 驱动大模型生成日记（若已生成则返回当日日记，可指定 targetDate 重新提炼任意历史日期的日记）
+    void generateDailyDiary(bool forceRegenerate, std::function<void(bool success, const DiaryEntry &entry)> callback, const QString &targetDate = "");
+
+    // 自动扫描并修复历史上统计为空或只有默认保底模板的日记
+    void repairHistoricalEntries();
 
     // 夜间自动写日记检测 (21:00 ~ 23:59 触发一次)
     void checkAutoNightDiary();
@@ -48,7 +51,7 @@ private:
     void loadFromDb();
     void saveToDb();
 
-    QMutex m_mutex;
+    QRecursiveMutex m_mutex;
     QList<DiaryEntry> m_entries;
 
     // 当日实时累计统计
@@ -59,4 +62,5 @@ private:
     int m_todayChatCount = 0;
     int m_todayTrashCount = 0;
     bool m_todayDiaryGenerated = false;
+    bool m_todayNightFinalized = false;
 };

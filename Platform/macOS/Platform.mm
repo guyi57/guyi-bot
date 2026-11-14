@@ -23,14 +23,14 @@
 #include <objc/runtime.h>
 #include <QProcess>
 
-static BOOL NeverBecomeKey(id self, SEL _cmd) {
+static BOOL CanBecomeKey(id self, SEL _cmd) {
     (void)self; (void)_cmd;
-    return NO;
+    return YES;
 }
 
-static BOOL NeverBecomeMain(id self, SEL _cmd) {
+static BOOL CanBecomeMain(id self, SEL _cmd) {
     (void)self; (void)_cmd;
-    return NO;
+    return YES;
 }
 
 namespace Platform {
@@ -68,6 +68,21 @@ void setupFloatingBubbleWindow(QWidget *widget) {
         [bubbleWin setOpaque:NO];
         [bubbleWin setBackgroundColor:[NSColor clearColor]];
         [bubbleWin setHasShadow:NO];
+
+        Class originalClass = object_getClass(bubbleWin);
+        const char *subclassName = "ShijimaBubbleInteractiveNSWindow";
+        Class subclass = objc_getClass(subclassName);
+        if (!subclass) {
+            subclass = objc_allocateClassPair(originalClass, subclassName, 0);
+            if (subclass) {
+                class_addMethod(subclass, @selector(canBecomeKeyWindow), (IMP)CanBecomeKey, "c@:");
+                class_addMethod(subclass, @selector(canBecomeMainWindow), (IMP)CanBecomeMain, "c@:");
+                objc_registerClassPair(subclass);
+            }
+        }
+        if (subclass) {
+            object_setClass(bubbleWin, subclass);
+        }
     }
 }
 

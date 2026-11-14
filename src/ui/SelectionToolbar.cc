@@ -3,6 +3,7 @@
 // 
 
 #include "SelectionToolbar.hpp"
+#include "AudioSpeechService.hpp"
 #include <QPainter>
 #include <QPainterPath>
 #include <QGraphicsDropShadowEffect>
@@ -20,6 +21,7 @@ SelectionToolbar::SelectionToolbar(QWidget *parent)
     layout->setSpacing(6);
 
     m_translateBtn = new QPushButton("🌐 翻译", this);
+    m_speakBtn = new QPushButton("🔊 朗读", this);
     m_askBtn = new QPushButton("💬 提问", this);
     m_closeBtn = new QPushButton("✕", this);
 
@@ -55,14 +57,29 @@ SelectionToolbar::SelectionToolbar(QWidget *parent)
         "}";
 
     m_translateBtn->setStyleSheet(btnStyle);
+    m_speakBtn->setStyleSheet(
+        "QPushButton {"
+        "  background-color: #059669;"
+        "  color: white;"
+        "  font-size: 12px;"
+        "  font-weight: 500;"
+        "  border: none;"
+        "  border-radius: 6px;"
+        "  padding: 4px 10px;"
+        "}"
+        "QPushButton:hover { background-color: #10b981; }"
+        "QPushButton:pressed { background-color: #047857; }"
+    );
     m_askBtn->setStyleSheet(btnStyle);
     m_closeBtn->setStyleSheet(closeBtnStyle);
 
     m_translateBtn->setCursor(Qt::PointingHandCursor);
+    m_speakBtn->setCursor(Qt::PointingHandCursor);
     m_askBtn->setCursor(Qt::PointingHandCursor);
     m_closeBtn->setCursor(Qt::PointingHandCursor);
 
     layout->addWidget(m_translateBtn);
+    layout->addWidget(m_speakBtn);
     layout->addWidget(m_askBtn);
     layout->addWidget(m_closeBtn);
 
@@ -70,6 +87,14 @@ SelectionToolbar::SelectionToolbar(QWidget *parent)
         hide();
         if (onTranslateRequested) {
             onTranslateRequested(m_selectedText);
+        }
+    });
+
+    connect(m_speakBtn, &QPushButton::clicked, this, [this]() {
+        QString textToSpeak = m_selectedText.trimmed();
+        hide();
+        if (!textToSpeak.isEmpty()) {
+            AudioSpeechService::instance()->speak(textToSpeak);
         }
     });
 

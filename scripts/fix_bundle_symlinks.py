@@ -47,9 +47,44 @@ def fix_frameworks(app_path):
             else:
                 shutil.rmtree(root_headers)
 
-    # 递归签名整个 app
-    subprocess.run(['codesign', '--force', '--deep', '--sign', '-', app_path], check=False)
-    print(f"[fix_bundle_symlinks] 成功规范化并完成 Ad-Hoc 签名: {app_path}")
+    # 移除 Contents/MacOS 下非二进制的脚本目录
+    bad_scripts = os.path.join(app_path, 'Contents', 'MacOS', 'scripts')
+    if os.path.exists(bad_scripts):
+        shutil.rmtree(bad_scripts)
+
+    # 检测本机是否存在合法开发者证书 (Developer ID)，若存在则签名以获得持久稳定的 TCC 录屏/辅助功能权限
+    identity = '-'
+    try:
+        out = subprocess.check_output(['security', 'find-identity', '-p', 'codesigning', '-v'], text=True)
+        if "Developer ID Application: Beijing Knownsec Information Technology Co., Ltd (BTG378TG6Z)" in out:
+            identity = "Developer ID Application: Beijing Knownsec Information Technology Co., Ltd (BTG378TG6Z)"
+    except Exception:
+        pass
+
+    # 依次自内向外完成签名，避免 macOS TCC 权限因 cdhash 变化被系统重置
+    sign_args = ['--force']
+    if identity != '-':
+        sign_args.extend(['--timestamp=none', '--sign', identity])
+    else:
+        sign_args.extend(['--sign', '-'])
+
+    for pattern in [
+        os.path.join(app_path, 'Contents', 'PlugIns', '*', '*.dylib'),
+        os.path.join(app_path, 'Contents', 'Frameworks', '*.dylib'),
+        os.path.join(app_path, 'Contents', 'Frameworks', '*.framework'),
+        os.path.join(app_path, 'Contents', 'MacOS', '*.dylib'),
+        os.path.join(app_path, 'Contents', 'MacOS', 'guyi-bot'),
+    ]:
+        for item in glob.glob(pattern):
+            subprocess.run(['codesign'] + sign_args + [item], check=False)
+
+    app_sign_cmd = ['codesign'] + sign_args + ['--identifier', 'com.guyi.guyibot']
+    if identity == '-':
+        dr = 'designated => identifier "com.guyi.guyibot"'
+        app_sign_cmd.append('-r=' + dr)
+    app_sign_cmd.append(app_path)
+    subprocess.run(app_sign_cmd, check=False)
+    print(f"[fix_bundle_symlinks] 成功规范化并完成稳定签名 ({'Developer ID' if identity != '-' else 'Ad-Hoc'}): {app_path}")
 
 if __name__ == '__main__':
     if len(sys.argv) > 1:

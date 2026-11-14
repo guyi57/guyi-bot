@@ -72,14 +72,22 @@ QString SensorManager::sensorDirectory() const
 
 bool SensorManager::isBlacklisted(const QString &bundleId, const QString &appName) const
 {
+    QString lowerId = bundleId.toLower();
+    QString lowerName = appName.toLower();
+
+    // 桌宠自身或授权告警弹窗绝不作为目标感知工作应用
+    if (lowerName == "guyi-bot" || lowerId == "com.guyi.guyibot" || lowerId == "com.guyi.pet" || lowerName == "shijima-qt") {
+        return true;
+    }
+    if (lowerName.contains("universalaccessauthwarn") || lowerId.contains("universalaccessauthwarn")) {
+        return true;
+    }
+
     static const QStringList kBlacklist = {
         "1password", "keychain", "securityagent", "com.apple.keychainaccess",
         "lastpass", "bitwarden", "keepass", "authenticator", "bank",
-        "com.apple.Preferences", "System Settings"
+        "com.apple.preferences", "system settings", "系统设置"
     };
-
-    QString lowerId = bundleId.toLower();
-    QString lowerName = appName.toLower();
 
     for (const auto &item : kBlacklist) {
         if (lowerId.contains(item) || lowerName.contains(item)) {
@@ -504,10 +512,21 @@ void SensorManager::onAppActivated(const QString &appName, const QString &bundle
             }
         }
 
-        // 持久化到长期记忆主数据库 (L2 Episodic Events)
-        QString eventSummary = QString("[应用感知] %1: %2 %3")
-            .arg(appName, newContext.semanticActivity, newContext.detail.isEmpty() ? "" : ("(" + newContext.detail + ")"));
-        LongTermMemoryEngine::instance()->recordEpisodicEvent("desktop_timeline", "system", eventSummary);
+        // 持久化到长期记忆主数据库 (L2 Episodic Events，带 2 分钟去重防刷)
+        static QString s_lastRecordedTimelineApp;
+        static QString s_lastRecordedTimelineDetail;
+        static qint64 s_lastRecordedTimelineTime = 0;
+        qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        bool isSameEvent = (s_lastRecordedTimelineApp == appName && s_lastRecordedTimelineDetail == newContext.detail);
+        if (!isSameEvent || (nowMs - s_lastRecordedTimelineTime > 120000)) {
+            s_lastRecordedTimelineApp = appName;
+            s_lastRecordedTimelineDetail = newContext.detail;
+            s_lastRecordedTimelineTime = nowMs;
+
+            QString eventSummary = QString("[应用感知] %1: %2 %3")
+                .arg(appName, newContext.semanticActivity, newContext.detail.isEmpty() ? "" : ("(" + newContext.detail + ")"));
+            LongTermMemoryEngine::instance()->recordEpisodicEvent("desktop_timeline", "system", eventSummary);
+        }
 
         std::cout << "[SensorManager] 实时应用语义捕获: [" 
                   << appName.toStdString() << "] " 
@@ -521,15 +540,27 @@ void SensorManager::onAppActivated(const QString &appName, const QString &bundle
 void SensorManager::updateOcrSummary(const QString &appName, const QString &bundleId, const QString &contentSummary)
 {
     QMutexLocker locker(&m_mutex);
-    if (m_currentContext.appName == appName || m_currentContext.bundleId == bundleId) {
-        m_currentContext.contentSummary = contentSummary;
-        if (!m_activityHistory.isEmpty()) {
-            QJsonObject hist = m_activityHistory.first();
-            hist["content_summary"] = contentSummary;
-            m_activityHistory[0] = hist;
-        }
-        std::cout << "[SensorManager] 原生 Vision OCR 摘要已更新: " << contentSummary.left(80).toStdString() << "..." << std::endl;
+    if (!appName.isEmpty() && (m_currentContext.appName.isEmpty() || m_currentContext.appName == "guyi-bot")) {
+        m_currentContext.appName = appName;
+        m_currentContext.bundleId = bundleId;
+        m_currentContext.semanticActivity = QString("在 %1 中进行操作").arg(appName);
     }
+    m_currentContext.contentSummary = contentSummary;
+    if (m_currentContext.detail.isEmpty() || m_currentContext.detail == appName || m_currentContext.semanticActivity == QString("正在使用 %1").arg(appName)) {
+        QString firstSnippet = contentSummary.section('|', 0, 0).trimmed();
+        if (!firstSnippet.isEmpty() && firstSnippet.length() > 1) {
+            m_currentContext.detail = firstSnippet;
+        }
+    }
+    if (!m_activityHistory.isEmpty()) {
+        QJsonObject hist = m_activityHistory.first();
+        hist["content_summary"] = contentSummary;
+        hist["detail"] = m_currentContext.detail;
+        m_activityHistory[0] = hist;
+    } else {
+        m_activityHistory.prepend(m_currentContext.toJson());
+    }
+    std::cout << "[SensorManager] 原生 Vision OCR 摘要已更新 (" << appName.toStdString() << "): " << contentSummary.left(80).toStdString() << "..." << std::endl;
 }
 
 QJsonObject SensorManager::currentContext() const

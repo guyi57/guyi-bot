@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QTextStream>
 #include <QRegularExpression>
+#include <QFileSystemWatcher>
 #include <QDebug>
 #include <iostream>
 
@@ -30,6 +31,15 @@ void SkillManager::init() {
     }
     ensureDefaultSkills();
     scanSkills();
+
+    if (!m_watcher) {
+        m_watcher = new QFileSystemWatcher();
+        m_watcher->addPath(m_skillsDir);
+        QObject::connect(m_watcher, &QFileSystemWatcher::directoryChanged, [this](const QString &) {
+            std::cout << "[SkillManager] 检测到 Skills 目录变动，自动重新扫描..." << std::endl;
+            scanSkills();
+        });
+    }
 }
 
 void SkillManager::ensureDefaultSkills() {
@@ -42,7 +52,8 @@ void SkillManager::ensureDefaultSkills() {
         if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&file);
             out << "---\n"
-                << "name: Git Commit 专家\n"
+                << "name: git-committer\n"
+                << "display_name: Git Commit 专家\n"
                 << "description: 自动根据变更内容生成符合 Conventional Commits 规范的清晰提交信息\n"
                 << "author: guyi\n"
                 << "---\n\n"
@@ -65,7 +76,8 @@ void SkillManager::ensureDefaultSkills() {
         if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&file);
             out << "---\n"
-                << "name: 代码审查与优化助手\n"
+                << "name: code-reviewer\n"
+                << "display_name: 代码审查与优化助手\n"
                 << "description: 从安全性、健壮性、时间空间复杂度及重构角度分析代码\n"
                 << "author: guyi\n"
                 << "---\n\n"
@@ -86,7 +98,8 @@ void SkillManager::ensureDefaultSkills() {
         if (file.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream out(&file);
             out << "---\n"
-                << "name: 精准多语言翻译\n"
+                << "name: translator-pro\n"
+                << "display_name: 精准多语言翻译\n"
                 << "description: 提供符合母语习惯的专业技术术语信达雅翻译\n"
                 << "author: guyi\n"
                 << "---\n\n"
@@ -113,7 +126,37 @@ void SkillManager::scanSkills() {
             parseSkillFile(skillFile, subDirInfo.fileName());
         }
     }
-    std::cout << "[SkillManager] 扫描完成，共加载 " << m_skills.size() << " 个技能" << std::endl;
+    syncSkillsToDshDirs();
+    std::cout << "[SkillManager] 扫描完成，共加载 " << m_skills.size() << " 个技能并同步至 dsh" << std::endl;
+}
+
+void SkillManager::syncSkillsToDshDirs() {
+    QString home = QDir::homePath();
+    QString dshSkillsDir = home + "/.dsh/skills";
+    QString agentsSkillsDir = home + "/.agents/skills";
+    QDir().mkpath(dshSkillsDir);
+    QDir().mkpath(agentsSkillsDir);
+
+    for (const auto &skill : m_skills) {
+        if (!skill.enabled) continue;
+        QString skillDir = QFileInfo(skill.path).absolutePath();
+        QString kebabId = skill.name;
+        if (kebabId.isEmpty()) kebabId = skill.id.toLower().replace('_', '-');
+        if (kebabId == "aipy-computer-use-macos") kebabId = "aipy-computer-use";
+
+        QString targetDsh = dshSkillsDir + "/" + kebabId;
+        QString targetAgents = agentsSkillsDir + "/" + kebabId;
+
+        if (QFileInfo::exists(targetDsh) || QFileInfo(targetDsh).isSymLink()) {
+            QFile::remove(targetDsh);
+        }
+        if (QFileInfo::exists(targetAgents) || QFileInfo(targetAgents).isSymLink()) {
+            QFile::remove(targetAgents);
+        }
+
+        QFile::link(skillDir, targetDsh);
+        QFile::link(skillDir, targetAgents);
+    }
 }
 
 void SkillManager::parseSkillFile(const QString &filePath, const QString &folderName) {
@@ -128,7 +171,8 @@ void SkillManager::parseSkillFile(const QString &filePath, const QString &folder
 
     SkillInfo skill;
     skill.id = folderName;
-    skill.name = folderName;
+    skill.name = folderName.toLower().replace('_', '-');
+    skill.displayName = folderName;
     skill.description = "";
     skill.author = "community";
     skill.path = filePath;
@@ -147,12 +191,27 @@ void SkillManager::parseSkillFile(const QString &filePath, const QString &folder
                 QString key = line.left(colonIdx).trimmed().toLower();
                 QString val = line.mid(colonIdx + 1).trimmed();
                 if (key == "name") skill.name = val;
+                else if (key == "display_name") skill.displayName = val;
                 else if (key == "description") skill.description = val;
                 else if (key == "author") skill.author = val;
             }
         }
     } else {
         skill.prompt = content.trimmed();
+    }
+
+    // 校验并确保 skill.name 始终符合 dsh 的 kebab-case 规则
+    static const QRegularExpression kebabRe(R"(^[a-z0-9]+(?:-[a-z0-9]+)*$)");
+    if (!kebabRe.match(skill.name).hasMatch()) {
+        if (skill.displayName.isEmpty() || skill.displayName == folderName) {
+            skill.displayName = skill.name;
+        }
+        QString kebabFolder = folderName.toLower().replace('_', '-');
+        if (kebabFolder == "aipy-computer-use-macos") kebabFolder = "aipy-computer-use";
+        skill.name = kebabFolder;
+    }
+    if (skill.displayName.isEmpty()) {
+        skill.displayName = skill.name;
     }
 
     // 从 SettingsDb 加载启用状态，默认 true
@@ -194,4 +253,61 @@ QString SkillManager::getSystemPromptExtensions() const {
         }
     }
     return extensions;
+}
+
+QStringList SkillManager::getEnabledSkillDirectories() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    QStringList dirs;
+    for (const auto &skill : m_skills) {
+        if (skill.enabled) {
+            QString skillDir = QFileInfo(skill.path).absolutePath();
+            if (!dirs.contains(skillDir)) {
+                dirs.append(skillDir);
+            }
+        }
+    }
+    return dirs;
+}
+
+QString SkillManager::getDshSkillsInstruction() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
+    QStringList activeSkills;
+    for (const auto &skill : m_skills) {
+        if (!skill.enabled) continue;
+        QString skillDir = QFileInfo(skill.path).absolutePath();
+        QString desc = skill.description.isEmpty() ? skill.displayName : skill.description;
+        QString kebabId = skill.name;
+        if (kebabId.isEmpty()) kebabId = skill.id.toLower().replace('_', '-');
+        if (kebabId == "aipy-computer-use-macos") kebabId = "aipy-computer-use";
+
+        // 探测该技能目录下是否有专属可执行脚本或入口 (如 aipy-computer-use, run.sh 等)
+        QString entryNotice;
+        QFileInfo wrapperFi(skillDir + "/" + skill.id);
+        if (!wrapperFi.exists()) wrapperFi.setFile(skillDir + "/aipy-computer-use");
+        if (!wrapperFi.exists()) wrapperFi.setFile(skillDir + "/run.sh");
+        if (!wrapperFi.exists()) wrapperFi.setFile(skillDir + "/main.py");
+        if (wrapperFi.exists()) {
+            entryNotice = QString("- 核心可执行 CLI 工具: `%1`\n"
+                                  "- CLI 调用指令格式: `\"%1\" call <tool> --args '<json>'`\n").arg(wrapperFi.absoluteFilePath());
+        }
+
+        QString item = QString(
+            "#### 技能: %1 (技能标识/工具参数 name: `%2`)\n"
+            "- 适用场景: %3\n"
+            "- 技能根目录: `%4`\n"
+            "%5"
+            "- 调度规范: 遇到匹配任务时，【第一步调用内置 skill(name=\"%2\") 工具加载该技能契约】；技能路径与可执行工具已如上明确给出，【严禁使用 find/grep 进行全盘文件扫描】，应直接通过 bash 工具调用核心 CLI 命令或执行脚本完成操作。\n"
+        ).arg(skill.displayName.isEmpty() ? skill.name : skill.displayName, kebabId, desc, skillDir, entryNotice);
+
+        activeSkills.append(item);
+    }
+
+    if (activeSkills.isEmpty()) return "";
+
+    return QString(
+        "\n\n【本机已挂载并注册的扩展技能库 (Skills & Toolkits)】:\n"
+        "系统已在当前会话注册了以下扩展技能（已挂载至 `<available_skills>` 列表，并已赋予沙盒读写权限）：\n\n"
+        "%1\n"
+        "【重要技能调度铁律】: 当用户任务涉及上述技能的职能（尤其是 macOS 桌面操作、软件自动化、微信/日历/提醒事项等各类 GUI 软件交互、代码规范、多语言翻译等）时，**你必须在第一步调用内置 `skill` 工具加载对应技能（如 `skill(name=\"aipy-computer-use\")`）**，切勿跳过技能或直接盲目猜测！\n"
+    ).arg(activeSkills.join("\n"));
 }

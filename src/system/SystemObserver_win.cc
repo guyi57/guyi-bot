@@ -173,6 +173,17 @@ void SystemObserver::stop() {
     }
 }
 
+void SystemObserver::triggerOcrSnapshot(std::function<void(const QString &appName, const QString &windowTitle, const QString &ocrText)> callback) {
+    if (callback) callback("", "", "");
+}
+
+bool SystemObserver::hasScreenCaptureAccess() const {
+    return true;
+}
+
+void SystemObserver::requestScreenCaptureAccess() {
+}
+
 QString SystemObserver::currentActiveAppName() const {
     if (!m_activeAppName.isEmpty()) return m_activeAppName;
     HWND hwnd = GetForegroundWindow();

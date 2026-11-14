@@ -13,7 +13,7 @@
 #include "AgentAdapter.hpp"
 
 class QNetworkAccessManager;
-class AipyAdapter;
+class DeepSeekHarnessAdapter;
 
 struct AIBehaviorIntent {
     QString intent = "chat";     // "chat", "seek_attention", "celebrate", "comfort", "explore", "rest", "play", "care"
@@ -65,9 +65,16 @@ struct AgentConfig {
     QString hotkeyMusicPrev = "Option+Left";
     QString hotkeyMusicFav = "Option+L";
 
-    // 智能体 Agent 适配器
-    QString activeAgentType = "builtin";
-    QString routingMode = "direct";
+    // 智能体 Agent 适配器 (DeepSeek Harness)
+    QString activeAgentType = "deepseek_harness";
+    QString routingMode = "AUTO";
+    QString dshPath;
+    QString dshKey;
+    QString dshBase = "https://api.deepseek.com";
+    QString dshModel = "deepseek-chat";
+    bool dshAutoApproval = true;
+
+    // 向下兼容旧字段
     QString aipyBase = "http://127.0.0.1:41970";
     QString aipyKey;
 
@@ -77,8 +84,16 @@ struct AgentConfig {
     int stateDebounceSec = 3;
 
     // 灵动拟人化与自主搭讪控制
+    bool enableActiveChat = true; // 允许主动聊天 (自主搭讪、日常问候、情境互动与健康关怀)
+    bool enableNewsPush = true;   // 允许主动推热点 (全网新鲜热点、科技资讯、摸鱼热梗与时事趣闻)
     int banterFrequencyLevel = 2; // 0: 关闭, 1: 偶尔 (30m), 2: 适度 (18m), 3: 活跃 (10m)
     bool enableContextualCare = true; // 启用前台应用感知与工作健康关怀
+
+    // 互动时间段控制 (包含主动搭讪、英语伴学抽查、生词嗅探、日程关切等所有主动交互)
+    bool enableInteractionTimeWindow = true; // 是否限制互动时间段 (默认开启)
+    QString interactionStartTime = "09:00";  // 上班/开始互动时间
+    QString interactionEndTime = "18:00";    // 下班/结束互动时间
+    bool interactionWorkdaysOnly = false;    // 是否仅限工作日 (周一至周五)
 };
 
 class AgentService
@@ -90,6 +105,7 @@ public:
     void saveConfig(QString const& path = "config.json");
     AgentConfig const& config() const { return m_config; }
     void setConfig(AgentConfig const& cfg);
+    bool isWithinInteractionTimeWindow() const;
 
     // 多模型配置池管理
     QVector<ModelProfile> const& modelProfiles() const { return m_config.modelProfiles; }
@@ -103,11 +119,12 @@ public:
     // 智能翻译：支持指定目标语言或中英自动互译
     void translate(QString const& text, std::function<void(bool success, QString const& result)> callback, QString const& targetLanguage = "");
 
-    // 智能提问：支持分流路由（简单问题直答，复杂任务交给 Agent 适配器执行）
+    // 智能提问：支持分流路由（简单问题直答，复杂任务交给 Agent 适配器执行；directLlmOnly 强制直连模型问答）
     void ask(QString const& contextText,
              QString const& question,
              std::function<void(QString const& progressMsg)> progressCallback,
-             std::function<void(bool success, QString const& result, QString const& appTarget)> finishCallback);
+             std::function<void(bool success, QString const& result, QString const& appTarget)> finishCallback,
+             bool directLlmOnly = false);
 
     // 测试模型接口连通性
     void testConnection(QString const& apiBase, QString const& apiKey, QString const& model, std::function<void(bool success, QString const& message)> callback);
@@ -118,8 +135,11 @@ public:
     // 打开指定任务
     void openTask(QString const& taskId);
 
-    // 获取 aipy 适配器对象
-    AipyAdapter *aipyAdapter() const;
+    // 终止当前正在运行的后台 Agent 任务
+    void cancelActiveTask();
+
+    // 获取 DeepSeek Harness (dsh) 适配器对象
+    DeepSeekHarnessAdapter *dshAdapter() const;
 
     // AI 桌面宠物行为意图生成（人格化思考与主动交互）
     void requestPetIntent(const QJsonObject &contextInfo, std::function<void(bool success, const AIBehaviorIntent &intent)> callback);
@@ -147,6 +167,7 @@ public:
     AgentStatusEvent enrichAgentStatusWithLocalTranscript(const AgentStatusEvent &event);
 
     void clearMemory();
+    void appendMemory(QString const& role, QString const& content);
     QJsonArray const& memoryHistory() const { return m_history; }
     void sendChatCompletion(QJsonArray const& messages, std::function<void(bool success, QString const& result)> callback, bool isUserFacing = false);
 
@@ -155,7 +176,6 @@ private:
     void initAdapters();
     void syncAdapterConfigs();
     bool containsChinese(QString const& text);
-    void appendMemory(QString const& role, QString const& content);
     void saveMemoryToFile();
     void loadMemoryFromFile();
 

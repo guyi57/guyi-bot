@@ -32,9 +32,30 @@ bool InitiativeTrigger::evaluateInitiative(PetState &state, const QJsonObject &c
         return false;
     }
 
-    // 读取设置中的搭讪频率
+    // 互动时间段控制（上班专注/下班勿扰：包含主动搭讪、背词抽查、回访跟进等所有自主交互）
+    if (!AgentService::instance()->isWithinInteractionTimeWindow()) {
+        calculatedScore = -999;
+        return false;
+    }
+
+    // 读取设置中的搭讪频率与主动开关
     auto cfg = AgentService::instance()->config();
-    if (cfg.banterFrequencyLevel == 0) {
+
+    int score = 0;
+    QStringList reasons;
+
+    // 0.05 英语背词微测验优先触发 (Vocab Learning Quiz)
+    if (VocabLearningEngine::instance()->shouldTriggerQuiz()) {
+        score += 45;
+        reasons << "vocab_quiz";
+    }
+
+    if (!cfg.enableActiveChat || cfg.banterFrequencyLevel == 0) {
+        if (reasons.contains("vocab_quiz")) {
+            calculatedScore = score;
+            triggerReason = "vocab_quiz";
+            return (score >= m_triggerThreshold);
+        }
         calculatedScore = -999;
         return false;
     }
@@ -57,15 +78,6 @@ bool InitiativeTrigger::evaluateInitiative(PetState &state, const QJsonObject &c
             calculatedScore = -100;
             return false;
         }
-    }
-
-    int score = 0;
-    QStringList reasons;
-
-    // 0.05 英语背词微测验优先触发 (Vocab Learning Quiz)
-    if (VocabLearningEngine::instance()->shouldTriggerQuiz()) {
-        score += 45;
-        reasons << "vocab_quiz";
     }
 
     // 0. 未决事件/日程回访优先判断 (Event Follow-up)
@@ -194,8 +206,13 @@ bool InitiativeTrigger::evaluateInitiative(PetState &state, const QJsonObject &c
     static int s_banterCycle = 0;
     int cycle = (++s_banterCycle) % 3;
     if (cycle == 0) {
-        score += 25;
-        reasons << "hot_trending_meme";
+        if (cfg.enableNewsPush) {
+            score += 25;
+            reasons << "hot_trending_meme";
+        } else {
+            score += 25;
+            reasons << "memory_topic_followup";
+        }
     } else if (cycle == 1) {
         score += 25;
         reasons << "memory_topic_followup";

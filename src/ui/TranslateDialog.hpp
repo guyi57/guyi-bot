@@ -23,6 +23,7 @@ struct TranslationEngineCard {
     QLabel *badgeLabel = nullptr;
     QPushButton *copyBtn = nullptr;
     QPushButton *speakBtn = nullptr;
+    QPushButton *audioBtn = nullptr;
     QTextBrowser *contentBrowser = nullptr;
     QString resultText;
 };
@@ -66,6 +67,7 @@ private:
     QLabel *m_charCountLabel = nullptr;
     QPushButton *m_pasteBtn = nullptr;
     QPushButton *m_clearBtn = nullptr;
+    QPushButton *m_speakInputBtn = nullptr;
 
     QCheckBox *m_enableAiCheck = nullptr;
     QPushButton *m_translateBtn = nullptr;
@@ -73,6 +75,7 @@ private:
 
     QPushButton *m_copyPrimaryBtn = nullptr;
     QPushButton *m_speakPrimaryBtn = nullptr;
+    QPushButton *m_audioPronounceBtn = nullptr;
     QPushButton *m_addToVocabBtn = nullptr;
 
     QScrollArea *m_scrollArea = nullptr;

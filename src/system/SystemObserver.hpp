@@ -49,6 +49,11 @@ public:
     // 连续专注/写代码时长（分钟）
     int continuousWorkMinutes() const;
 
+    // 触发即时屏幕视窗 OCR 感知与生词提取（支持完成回调）
+    void triggerOcrSnapshot(std::function<void(const QString &appName, const QString &windowTitle, const QString &ocrText)> callback = nullptr);
+    bool hasScreenCaptureAccess() const;
+    void requestScreenCaptureAccess();
+
     // 内部由平台监听器通知更新状态
     void recordAppActivation(const QString &appName, const QString &bundleId, const QString &windowTitle, const QString &documentPath = QString());
     void updateContentSummary(const QString &contentSummary);

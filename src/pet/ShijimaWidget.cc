@@ -58,6 +58,8 @@
 #include "PetStatusBarWidget.hpp"
 #include "MusicPlayerManager.hpp"
 #include "SettingsDb.hpp"
+#include "SkillManager.hpp"
+#include "MessageHistoryManager.hpp"
 #include "PetDiaryDialog.hpp"
 #include "SystemObserver.hpp"
 #include <shimejifinder/utils.hpp>
@@ -102,17 +104,15 @@ ShijimaWidget::ShijimaWidget(MascotData *mascotData,
         setWindowFlags(flags);
     }
     setAcceptDrops(true);
+    setMouseTracking(true);
     setFixedSize(m_windowWidth, m_windowHeight);
     m_messageBubble = new MessageBubble(m_windowedMode ? parent : nullptr);
     m_messageBubble->onClosed = [this]() {
+        m_isTaskBubbleUserOpened = false;
         processNextQueuedMessage();
     };
     m_messageBubble->onHoverChanged = [this](bool hovered) {
         m_bubbleHovered = hovered;
-        if (hovered && m_mascot && m_mascot->state) {
-            // 当用户鼠标悬停在消息弹窗上阅读时，让桌宠原地安静坐下或面对鼠标，绝不上蹿下跳
-            trySetBehavior("SitAndFaceMouse") || trySetBehavior("SitDown");
-        }
     };
     m_messageBubble->onReplySubmitted = [this](const QString &question, const QString &replyText) {
         handleUserBubbleReply(question, replyText);
@@ -156,24 +156,17 @@ ShijimaWidget::ShijimaWidget(MascotData *mascotData,
             if (!petPtr) return;
             if (timer.type == TimerType::AiTask) {
                 std::cout << "[定时器调度] 到期自动执行 Agent 任务: " << timer.title.toStdString() << std::endl;
-                petPtr->setWaitingForAgent(true);
-                petPtr->showMessage("🤖 **定时任务触发**\n\n正在自动执行: " + timer.title + "...", 0, "", true);
-
                 QString prompt = timer.taskPrompt.isEmpty() ? timer.title : timer.taskPrompt;
+                petPtr->startTaskProgress("定时任务: " + timer.title, true);
+
                 AgentService::instance()->ask("", prompt,
                     [petPtr, timer](QString const& progressMsg) {
                         if (!petPtr) return;
-                        petPtr->showMessage(QString("🤖 **定时任务: %1**\n\n%2").arg(timer.title, progressMsg), 0, "", true);
+                        petPtr->updateTaskProgress(progressMsg);
                     },
                     [petPtr, timer](bool success, QString const& result, QString const& appTarget) {
                         if (!petPtr) return;
-                        petPtr->setWaitingForAgent(false);
-                        if (success) {
-                            BehaviorEngine::instance()->addAffection(3, 8);
-                            petPtr->showMessage(QString("⏰ **定时任务交付: %1**\n\n%2").arg(timer.title, result), 14000, appTarget, true);
-                        } else {
-                            petPtr->showMessage(QString("❌ **定时任务失败: %1**\n\n%2").arg(timer.title, result), 6000, appTarget, true);
-                        }
+                        petPtr->finishTaskProgress(success, result, appTarget, timer.title);
                     }
                 );
             } else {
@@ -330,7 +323,64 @@ void ShijimaWidget::paintEvent(QPaintEvent *event) {
         painter.drawText(moodRect, Qt::AlignCenter, "☻");
     }
 
-    // 3. 绘制灵动粒子 (音符、爱心、星星、Zzz)
+    // 3. 原生绘制任务执行环形进度微盘 (当有活跃任务且未结束时，渲染环形进度与脉冲光晕)
+    if (m_hasActiveTask) {
+        const int circleSize = 24;
+        int orbCenterY = isAtCeiling ? (m_drawOrigin.y() + scaledSize.height() + 14) 
+                                     : (m_drawOrigin.y() - 14);
+        int centerX = m_drawOrigin.x() + scaledSize.width() / 2;
+        if (showHeadOrb) {
+            orbCenterY = isAtCeiling ? (orbCenterY + 24) : (orbCenterY - 24);
+        }
+
+        m_taskOrbRect = QRect(centerX - circleSize / 2, orbCenterY - circleSize / 2, circleSize, circleSize);
+
+        // A. 脉冲外发光晕 (科技天蓝)
+        float pulse = (std::sin(m_taskPulsePhase) + 1.0f) * 0.5f;
+        int glowAlpha = static_cast<int>(25 + pulse * 50);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(14, 165, 233, glowAlpha));
+        painter.drawEllipse(m_taskOrbRect.adjusted(-3, -3, 3, 3));
+
+        // B. 暗色玻璃质感底盘
+        painter.setBrush(QColor(10, 15, 29, 235));
+        painter.setPen(QPen(m_isTaskOrbHovered ? QColor(56, 189, 248, 220) : QColor(30, 41, 59, 190), 1.5));
+        painter.drawEllipse(m_taskOrbRect);
+
+        // C. 进度底槽轨道 (深灰蓝)
+        QRect trackRect = m_taskOrbRect.adjusted(2, 2, -2, -2);
+        painter.setBrush(Qt::NoBrush);
+        painter.setPen(QPen(QColor(30, 41, 59, 140), 2.2));
+        painter.drawEllipse(trackRect);
+
+        // D. 霓虹青蓝进度条
+        int percent = std::clamp(m_taskPercent, 0, 100);
+        if (percent > 0) {
+            double span = (percent / 100.0) * -360.0 * 16.0;
+            QPen arcPen(QColor(56, 189, 248), 2.4, Qt::SolidLine, Qt::RoundCap);
+            painter.setPen(arcPen);
+            painter.drawArc(trackRect, 90 * 16, static_cast<int>(span));
+        }
+
+        // E. 核心微标 / 百分比文本
+        if (m_isTaskOrbHovered) {
+            painter.setFont(QFont("-apple-system", 8));
+            painter.setPen(QColor(56, 189, 248));
+            painter.drawText(m_taskOrbRect, Qt::AlignCenter, "👁");
+        } else {
+            painter.setFont(QFont("-apple-system", 7, QFont::Bold));
+            painter.setPen(QColor(224, 242, 254));
+            if (percent > 0) {
+                painter.drawText(m_taskOrbRect, Qt::AlignCenter, QString::number(percent));
+            } else {
+                painter.drawText(m_taskOrbRect, Qt::AlignCenter, "⚡");
+            }
+        }
+    } else {
+        m_taskOrbRect = QRect();
+    }
+
+    // 4. 绘制灵动粒子 (音符、爱心、星星、Zzz)
     for (const auto &p : m_motion.particles()) {
         float alphaRatio = (p.maxLife > 0.0f) ? (p.life / p.maxLife) : 0.0f;
         int alpha = std::clamp(static_cast<int>(alphaRatio * 255.0f), 0, 255);
@@ -491,12 +541,17 @@ bool ShijimaWidget::updateOffsets() {
     move(winX, winY);
 
     // 实时更新鼠标悬停提示 (ToolTip 状态卡片)
-    const auto &st = BehaviorEngine::instance()->state();
-    setToolTip(QString("🐾 阿呆桌宠\n⚡ 体力: %1% %2\n😊 心情: %3 | 💕 亲密: %4")
-        .arg(st.stamina)
-        .arg(st.isRestingInCorner ? "(角落休整 💤)" : "(元气探索 🌟)")
-        .arg(st.mood)
-        .arg(st.affection));
+    if (m_hasActiveTask && m_isTaskOrbHovered) {
+        setToolTip(QString("⚡ 任务执行中 · 第 %1 步 (%2%)\n🎯 %3\n💡 点击展开/收起详情卡片")
+            .arg(QString::number(m_taskStep), QString::number(m_taskPercent), m_taskActionTitle));
+    } else {
+        const auto &st = BehaviorEngine::instance()->state();
+        setToolTip(QString("🐾 阿呆桌宠\n⚡ 体力: %1% %2\n😊 心情: %3 | 💕 亲密: %4")
+            .arg(st.stamina)
+            .arg(st.isRestingInCorner ? "(角落休整 💤)" : "(元气探索 🌟)")
+            .arg(st.mood)
+            .arg(st.affection));
+    }
 
     if (m_messageBubble != nullptr && m_messageBubble->hasMessage()) {
         auto env = m_mascot->state->env;
@@ -531,11 +586,23 @@ bool ShijimaWidget::updateOffsets() {
 
         // 3. 动态计算尖角横坐标，确保尖角精准指向桌宠头顶
         int tailRelX = std::clamp(petCenterX - clampedX, 16, bubbleW - 16);
-        m_messageBubble->setTailPosition(tailRelX, isAtCeiling);
+        if (std::abs(m_messageBubble->tailX() - tailRelX) >= 3 || m_messageBubble->isTailFlipped() != isAtCeiling) {
+            m_messageBubble->setTailPosition(tailRelX, isAtCeiling);
+        }
 
         QPoint targetPos(clampedX, clampedY);
-        if (m_messageBubble->pos() != targetPos) {
+        // 关键防死锁机制：气泡展示期间保持屏幕物理锚点稳定，彻底消除 Cocoa 窗口高频移动抖动与事件死锁
+        bool isUserDraggingPet = (m_dragTarget && m_dragTarget->m_mascot && m_dragTarget->m_mascot->state && m_dragTarget->m_mascot->state->dragging);
+        if (!m_messageBubble->isPositionInitialized() || isUserDraggingPet) {
             m_messageBubble->move(targetPos);
+            m_messageBubble->setPositionInitialized(true);
+        } else if (!m_messageBubble->isHovered()) {
+            // 未悬停时，仅在桌宠发生大跨度位移 (>35px，如大幅爬墙或远距离跳跃) 时平稳校准，杜绝动画微小帧差引发窗口震颤
+            int dx = std::abs(m_messageBubble->x() - targetPos.x());
+            int dy = std::abs(m_messageBubble->y() - targetPos.y());
+            if (dx > 35 || dy > 35) {
+                m_messageBubble->move(targetPos);
+            }
         }
     }
 
@@ -545,6 +612,10 @@ bool ShijimaWidget::updateOffsets() {
 bool ShijimaWidget::pointInside(QPoint const& point) {
     if (!m_visible) {
         return false;
+    }
+    // 活跃任务的环形进度微盘命中检测
+    if (m_hasActiveTask && m_taskOrbRect.contains(point)) {
+        return true;
     }
     auto &asset = getActiveAsset();
     auto image = asset.image(isMirroredRender());
@@ -589,12 +660,17 @@ void ShijimaWidget::tick() {
     if (curBeh.contains("SitAndFaceMouse", Qt::CaseInsensitive) ||
         curBeh.contains("ChaseMouse", Qt::CaseInsensitive) ||
         curBeh.contains("LookAtCursor", Qt::CaseInsensitive)) {
-        QPoint curPos = QCursor::pos();
-        QPoint petPos = m_windowedMode ? mapToParent(QPoint(0, 0)) : mapToGlobal(QPoint(0, 0));
-        int petCenterX = petPos.x() + (m_windowWidth / 2);
-        bool shouldLookRight = (curPos.x() >= petCenterX);
-        if (m_mascot && m_mascot->state && m_mascot->state->looking_right != shouldLookRight) {
-            m_mascot->state->looking_right = shouldLookRight;
+        // 如果气泡正在展示，禁止因光标位于气泡上方而左右频繁反转头，杜绝震荡卡顿
+        if (!m_messageBubble || !m_messageBubble->isDisplaying()) {
+            QPoint curPos = QCursor::pos();
+            QPoint petPos = m_windowedMode ? mapToParent(QPoint(0, 0)) : mapToGlobal(QPoint(0, 0));
+            int petCenterX = petPos.x() + (m_windowWidth / 2);
+            if (std::abs(curPos.x() - petCenterX) > 20) {
+                bool shouldLookRight = (curPos.x() >= petCenterX);
+                if (m_mascot && m_mascot->state && m_mascot->state->looking_right != shouldLookRight) {
+                    m_mascot->state->looking_right = shouldLookRight;
+                }
+            }
         }
     }
 
@@ -605,10 +681,8 @@ void ShijimaWidget::tick() {
             beh.contains("Walk", Qt::CaseInsensitive) ||
             beh.contains("Climb", Qt::CaseInsensitive) ||
             beh.contains("Jump", Qt::CaseInsensitive)) {
-            if (!trySetBehavior("SitAndFaceMouse")) {
-                if (!trySetBehavior("SitDown")) {
-                    trySetBehavior("StandUp");
-                }
+            if (!trySetBehavior("SitDown")) {
+                trySetBehavior("StandUp");
             }
         }
     }
@@ -630,10 +704,8 @@ void ShijimaWidget::tick() {
             beh.contains("Walk", Qt::CaseInsensitive) ||
             beh.contains("Climb", Qt::CaseInsensitive) ||
             beh.contains("Jump", Qt::CaseInsensitive)) {
-            if (!trySetBehavior("SitAndFaceMouse")) {
-                if (!trySetBehavior("SitDown")) {
-                    trySetBehavior("StandUp");
-                }
+            if (!trySetBehavior("SitDown")) {
+                trySetBehavior("StandUp");
             }
         }
     }
@@ -678,6 +750,15 @@ void ShijimaWidget::tick() {
     if (m_motion.isDancing() || m_motion.isPetting() || !m_motion.particles().empty() ||
         std::abs(m_motion.scaleX() - 1.0f) > 0.01f || std::abs(m_motion.scaleY() - 1.0f) > 0.01f ||
         std::abs(m_motion.swayAngle()) > 0.1f) {
+        forceRepaint = true;
+    }
+
+    // 活跃任务执行中驱动微盘脉冲光晕与进度动画
+    if (m_hasActiveTask) {
+        m_taskPulsePhase += 0.12f;
+        if (m_taskPulsePhase > 6.2831853f) {
+            m_taskPulsePhase -= 6.2831853f;
+        }
         forceRepaint = true;
     }
 
@@ -790,6 +871,14 @@ void ShijimaWidget::setDragTarget(ShijimaWidget *target) {
 
 void ShijimaWidget::mousePressEvent(QMouseEvent *event) {
     auto pos = event->pos();
+    // 优先拦截任务进度微盘点击 (点击切换展开/收起具体任务步骤卡片)
+    if (m_hasActiveTask && m_taskOrbRect.contains(pos)) {
+        if (event->button() == Qt::LeftButton) {
+            toggleTaskProgressBubble();
+            event->accept();
+            return;
+        }
+    }
     if (m_dragTarget != nullptr) {
         m_dragTarget->m_mascot->state->dragging = false;
     }
@@ -849,6 +938,22 @@ void ShijimaWidget::mousePressEvent(QMouseEvent *event) {
 }
 
 void ShijimaWidget::mouseMoveEvent(QMouseEvent *event) {
+    if (m_hasActiveTask) {
+        bool hovered = m_taskOrbRect.contains(event->pos());
+        if (hovered != m_isTaskOrbHovered) {
+            m_isTaskOrbHovered = hovered;
+            if (hovered) {
+                setCursor(Qt::PointingHandCursor);
+                setToolTip(QString("⚡ 任务执行中 · 第 %1 步 (%2%)\n🎯 %3\n💡 点击展开/收起详情卡片")
+                    .arg(QString::number(m_taskStep), QString::number(m_taskPercent), m_taskActionTitle));
+            } else {
+                unsetCursor();
+                setToolTip("");
+            }
+            update();
+        }
+    }
+
     if (m_dragTarget == nullptr || !m_dragTarget->m_mascot || !m_dragTarget->m_mascot->state) {
         return;
     }
@@ -1028,12 +1133,18 @@ void ShijimaWidget::enterEvent(QEnterEvent *event) {
     QWidget::enterEvent(event);
     m_petHovered = true;
     if (m_messageBubble && m_messageBubble->isDisplaying() && m_mascot && m_mascot->state) {
-        // 用户鼠标悬停在正在说话的桌宠上，原地安静坐下面对鼠标，避免到处乱跑
-        trySetBehavior("SitAndFaceMouse") || trySetBehavior("SitDown");
+        // 用户鼠标悬停在正在说话的桌宠上，原地安静坐下，避免到处乱跑
+        trySetBehavior("SitDown") || trySetBehavior("StandUp");
     }
 }
 
 void ShijimaWidget::leaveEvent(QEvent *event) {
+    if (m_isTaskOrbHovered) {
+        m_isTaskOrbHovered = false;
+        unsetCursor();
+        setToolTip("");
+        update();
+    }
     QWidget::leaveEvent(event);
     m_petHovered = false;
 }
@@ -1424,6 +1535,7 @@ void ShijimaWidget::showMessage(QString const& text, int duration, QString const
 }
 
 void ShijimaWidget::hideMessage() {
+    m_isTaskBubbleUserOpened = false;
     if (m_messageBubble != nullptr) {
         m_messageBubble->hideMessage();
     }
@@ -1546,6 +1658,111 @@ void ShijimaWidget::setWaitingForAgent(bool waiting) {
     }
 }
 
+void ShijimaWidget::startTaskProgress(const QString &initialPrompt, bool showBubbleImmediately) {
+    m_hasActiveTask = true;
+    m_taskPercent = 5;
+    m_taskStep = 1;
+    m_taskActionTitle = initialPrompt.isEmpty() ? "正在分析并规划操作..." : initialPrompt;
+    m_activeTaskCardMarkdown = QString("⚡ **任务正在执行中** · `第 1 步`\n`[ ▱▱▱▱▱▱▱▱▱▱ ] 5%`\n\n> 🎯 **当前操作**: %1\n\n[⏹ 终止任务](agent://cancel)").arg(m_taskActionTitle);
+    m_isTaskBubbleUserOpened = showBubbleImmediately;
+    m_taskPulsePhase = 0.0f;
+    setWaitingForAgent(true);
+
+    if (showBubbleImmediately) {
+        showMessage(m_activeTaskCardMarkdown, 0, "", true, false, true, false);
+    } else {
+        // 默认保持非侵入式安静模式：执行过程不在桌面上持续弹窗打扰用户
+        if (m_messageBubble && m_messageBubble->isDisplaying()) {
+            m_messageBubble->hideMessage();
+        }
+    }
+    update();
+}
+
+void ShijimaWidget::updateTaskProgress(const QString &progressCardMarkdown) {
+    if (m_hasActiveTask && m_activeTaskCardMarkdown == progressCardMarkdown) {
+        return;
+    }
+    if (!m_hasActiveTask) {
+        m_hasActiveTask = true;
+        setWaitingForAgent(true);
+    }
+    m_activeTaskCardMarkdown = progressCardMarkdown;
+
+    // 解析当前进度百分比与步数
+    static QRegularExpression percentRegex(R"((\d{1,3})%)");
+    auto percentMatch = percentRegex.match(progressCardMarkdown);
+    if (percentMatch.hasMatch()) {
+        m_taskPercent = std::clamp(percentMatch.captured(1).toInt(), 0, 100);
+    }
+
+    static QRegularExpression stepRegex(R"(第\s*(\d+)\s*步)");
+    auto stepMatch = stepRegex.match(progressCardMarkdown);
+    if (stepMatch.hasMatch()) {
+        m_taskStep = stepMatch.captured(1).toInt();
+    }
+
+    static QRegularExpression actionRegex(R"(当前操作\*?\*?:\s*([^\n\r]+))");
+    auto actionMatch = actionRegex.match(progressCardMarkdown);
+    if (actionMatch.hasMatch()) {
+        m_taskActionTitle = actionMatch.captured(1).trimmed();
+    }
+
+    // 只有在用户主动点击微盘展开气泡且气泡当前正处于可见展示状态时，才同步刷新卡片步骤
+    // 一旦用户主动点击关闭按钮 ✕ 或关闭气泡，绝不再弹窗打扰，仅静默渲染微盘进度
+    if (m_isTaskBubbleUserOpened && m_messageBubble && m_messageBubble->isVisible()) {
+        m_messageBubble->showMessage(m_activeTaskCardMarkdown, 0, "", false, false);
+    }
+
+    update();
+}
+
+void ShijimaWidget::finishTaskProgress(bool success, const QString &result, const QString &appTarget, const QString &originalQuestion) {
+    m_hasActiveTask = false;
+    m_isTaskBubbleUserOpened = false;
+    m_taskPercent = 100;
+    m_taskOrbRect = QRect(); // 清空区域，环形微盘消失
+    setWaitingForAgent(false);
+
+    if (m_isTaskOrbHovered) {
+        m_isTaskOrbHovered = false;
+        unsetCursor();
+        setToolTip("");
+    }
+
+    // 任务交付：直接弹窗展示完整最终结果
+    if (success) {
+        BehaviorEngine::instance()->addAffection(3, 8);
+        showMessage(result, 25000, appTarget, true, false, true, true);
+        if (!originalQuestion.isEmpty()) {
+            MessageHistoryManager::instance()->addRecord("ask", originalQuestion, result, appTarget);
+        }
+    } else {
+        QString err = result.trimmed().isEmpty() ? "任务执行未成功完成" : result;
+        showMessage("❌ " + err, 9000, appTarget, true, false, true, false);
+    }
+    update();
+}
+
+void ShijimaWidget::toggleTaskProgressBubble() {
+    if (!m_hasActiveTask) return;
+
+    if (m_messageBubble && m_messageBubble->isDisplaying()) {
+        // 用户再次点击微盘，收起气泡
+        m_isTaskBubbleUserOpened = false;
+        m_messageBubble->hideMessage();
+    } else {
+        // 用户点击微盘，展开当前任务执行卡片
+        m_isTaskBubbleUserOpened = true;
+        QString cardText = m_activeTaskCardMarkdown;
+        if (cardText.trimmed().isEmpty()) {
+            cardText = QString("⚡ **任务正在执行中** · `第 %1 步`\n`[ ▱▱▱▱▱▱▱▱▱▱ ] %2%`\n\n> 🎯 **当前操作**: %3\n\n[⏹ 终止任务](agent://cancel)")
+                       .arg(QString::number(m_taskStep), QString::number(m_taskPercent), m_taskActionTitle);
+        }
+        showMessage(cardText, 0, "", true, false, true, false);
+    }
+}
+
 void ShijimaWidget::showTranslateDialog(QString const& text) {
     if (m_translateDialog == nullptr) {
         m_translateDialog = new TranslateDialog(m_windowedMode ? parentWidget() : nullptr);
@@ -1590,47 +1807,89 @@ void ShijimaWidget::showTimerManager() {
 }
 
 void ShijimaWidget::onQuestionSubmitted(QString const& context, QString const& question) {
-    setWaitingForAgent(true);
-    showMessage("🤔 正在分析问题...", 0, "", true);
+    startTaskProgress("正在分析问题...");
+
+    QString effectiveContext = context;
+    if (effectiveContext.trimmed().isEmpty() && m_messageBubble) {
+        qint64 now = QDateTime::currentMSecsSinceEpoch();
+        qint64 topicAge = now - m_messageBubble->lastTopicTime();
+        if (topicAge < 300000 && !m_messageBubble->lastTopicText().isEmpty()) { // 5分钟内的有效主动话题
+            effectiveContext = QString("【桌面宠物刚才主动说】:\n%1").arg(m_messageBubble->lastTopicText());
+        }
+    }
 
     QPointer<ShijimaWidget> petPtr(this);
-    AgentService::instance()->ask(context, question,
+    AgentService::instance()->ask(effectiveContext, question,
         [petPtr](QString const& progressMsg) {
             if (!petPtr) return;
-            petPtr->showMessage(progressMsg, 0, "", true);
+            petPtr->updateTaskProgress(progressMsg);
         },
-        [petPtr](bool success, QString const& result, QString const& appTarget) {
+        [petPtr, question](bool success, QString const& result, QString const& appTarget) {
             if (!petPtr) return;
-            petPtr->setWaitingForAgent(false);
-            if (success) {
-                BehaviorEngine::instance()->addAffection(3, 8);
-                petPtr->showMessage(result, 14000, appTarget, true);
-            } else {
-                petPtr->showMessage("❌ " + result, 5000, appTarget, true);
-            }
+            petPtr->finishTaskProgress(success, result, appTarget, question);
         });
 }
 
 void ShijimaWidget::handleUserBubbleReply(const QString &question, const QString &replyText) {
-    if (replyText.trimmed().isEmpty()) return;
+    QString trimmedReply = replyText.trimmed();
+    if (trimmedReply.isEmpty()) return;
 
-    std::cout << "[桌宠互动] 用户在气泡中直接回答桌宠提问: "
-              << "原提问=" << question.left(30).toStdString()
-              << ", 回答=" << replyText.toStdString() << std::endl;
+    QString lower = trimmedReply.toLower();
+    bool isTaskOrAgent = (
+        lower.contains("agent") || lower.contains("dsh") || lower.contains("智能体") ||
+        lower.contains("分析") || lower.contains("执行") || lower.contains("运行") ||
+        lower.contains("编写") || lower.contains("排查") || lower.contains("清理") ||
+        lower.contains("脚本") || lower.contains("优化") || lower.contains("修改") ||
+        lower.contains("skill") || lower.contains("技能") || lower.contains("电脑") ||
+        lower.contains("桌面") || lower.contains("微信") || lower.contains("qq") ||
+        lower.contains("飞书") || lower.contains("钉钉") || lower.contains("软件") ||
+        lower.contains("应用") || lower.contains("打开") || lower.contains("点击") ||
+        lower.contains("输入") || lower.contains("截图") || lower.contains("截屏") ||
+        lower.contains("按键") || lower.contains("快捷键") || lower.contains("窗口") ||
+        lower.contains("控制") || lower.contains("界面") || lower.contains("操作电脑")
+    );
+    if (!isTaskOrAgent) {
+        for (const auto &skill : SkillManager::instance()->getAllSkills()) {
+            if (skill.enabled) {
+                if (lower.contains(skill.id.toLower()) || lower.contains(skill.name.toLower())) {
+                    isTaskOrAgent = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    std::cout << "[桌宠互动] 用户在气泡中回复桌宠: "
+              << "桌宠前言=" << question.left(30).toStdString()
+              << ", 主人追问/回复=" << trimmedReply.toStdString() << std::endl;
 
     // 1. 增加亲密度与心情
     BehaviorEngine::instance()->addAffection(4, 10);
 
-    // 2. 状态反馈：桌宠显示思考状态
-    showMessage("💭 正在认真听你说...", 0, "", false, false, true, false);
+    // 2. 状态反馈：若为任务指令则启动进度微盘静默追踪；若为日常闲聊则显示思考提示
+    if (isTaskOrAgent) {
+        startTaskProgress(trimmedReply);
+    } else {
+        showMessage("💭 正在认真思考...", 0, "", false, false, true, false);
+    }
 
-    // 3. 构建给 AgentService 的对话上下文
-    QString contextPrompt = QString(
-        "【桌面宠物刚才主动对主人说】\n%1\n\n"
-        "【主人刚刚给出的直接回答】\n%2"
-    ).arg(question, replyText);
+    // 3. 构建给 AgentService 的对话上下文 (承接上一轮用户提问与桌宠前言)
+    QString lastUserQuery;
+    const auto &hist = AgentService::instance()->memoryHistory();
+    for (int i = hist.size() - 1; i >= 0; --i) {
+        auto obj = hist[i].toObject();
+        if (obj["role"].toString() == "user") {
+            lastUserQuery = obj["content"].toString().trimmed();
+            break;
+        }
+    }
 
-    QString lower = replyText.toLower();
+    QString contextPrompt;
+    if (!lastUserQuery.isEmpty()) {
+        contextPrompt += QString("【主人上一轮提问】:\n%1\n\n").arg(lastUserQuery);
+    }
+    contextPrompt += QString("【桌面宠物刚才主动说】:\n%1").arg(question);
+
     bool mentionsResource = lower.contains("卡") || lower.contains("内存") || lower.contains("cpu") || 
                            lower.contains("硬盘") || lower.contains("磁盘") || lower.contains("配置") ||
                            lower.contains("资源") || lower.contains("硬件");
@@ -1639,38 +1898,66 @@ void ShijimaWidget::handleUserBubbleReply(const QString &question, const QString
         contextPrompt += QString("\n\n【系统实时资源占用情况】:\n%1\n（请务必结合上述实际硬件比例数据，生动关切地回答主人，切忌凭空臆想）").arg(stats.formattedSummary());
     }
 
-    QString userQuery = "请以桌宠伴侣的生动口吻，针对主人的直接回答给出温暖、自然、简短（15~35字左右）的回应。如果回答中包含用户的个人喜好、习惯或状态，请在回应中表现出你已经记在心里了。";
+    // 判定是否包含追问/求证/详情意图
+    bool isQuestion = trimmedReply.contains('?') || trimmedReply.contains(QString::fromUtf8("？")) ||
+                      trimmedReply.contains("什么") || trimmedReply.contains("为什么") || trimmedReply.contains("为啥") ||
+                      trimmedReply.contains("怎么") || trimmedReply.contains("谁") || trimmedReply.contains("哪") ||
+                      trimmedReply.contains("细说") || trimmedReply.contains("展开") || trimmedReply.contains("查") ||
+                      trimmedReply.contains("搜") || trimmedReply.contains("多少") || trimmedReply.contains("如何") ||
+                      trimmedReply.contains("详细") || trimmedReply.contains("说说") || trimmedReply.contains("讲讲") ||
+                      trimmedReply.endsWith("呢") || trimmedReply.endsWith("吗");
+
+    if (isTaskOrAgent) {
+        contextPrompt += "\n\n（提示：主人正在指派具体任务或调度智能体分析，请切实调度工具执行并给出详实专业的分析与方案）";
+    } else if (!isQuestion) {
+        contextPrompt += "\n\n（提示：主人做出了日常回应或闲聊反馈，请以生动可爱的桌宠伴侣口吻简短回应20~40字，若包含习惯偏好请记在心里）";
+    } else {
+        contextPrompt += "\n\n（提示：主人正在针对上述分享进行追问或请教！请结合上下文和联网检索直接给出准确、详实、条理分明的回答，切勿只说「我去查查」而没有实际内容，篇幅适中便于气泡阅读）";
+    }
+
+    // 主人的实际回复作为提问
+    QString userQuery = trimmedReply;
 
     QPointer<ShijimaWidget> petPtr(this);
     AgentService::instance()->ask(contextPrompt, userQuery,
-        [petPtr](const QString &) {
+        [petPtr](const QString &progMsg) {
+            if (!petPtr) return;
+            // 无论是任务还是大模型检索/执行，中间过程一律通过静默进度微盘呈现，严禁强制弹窗打扰！
+            petPtr->updateTaskProgress(progMsg);
         },
-        [petPtr, question, replyText](bool success, const QString &result, const QString &appTarget) {
+        [petPtr, question, trimmedReply, isTaskOrAgent](bool success, const QString &result, const QString &appTarget) {
             (void)appTarget;
             if (!petPtr) return;
-            if (success) {
+            if (petPtr->hasActiveTask() || isTaskOrAgent) {
+                petPtr->finishTaskProgress(success, result, appTarget, trimmedReply);
+                return;
+            }
+            if (success && !result.trimmed().isEmpty()) {
                 PetActionCommand cmd;
                 cmd.type = PetActionType::Talk;
                 cmd.speechText = result;
-                cmd.durationMs = 12000;
-                cmd.emote = PetEmoteType::HappyHeart;
+                cmd.durationMs = 16000;
+                cmd.emote = PetEmoteType::Sparkle;
                 cmd.forceImmediate = true;
-                cmd.allowReply = true; // 允许继续聊下去
+                cmd.allowReply = true; // 允许继续聊下去，持续多轮交互
                 petPtr->doAction(cmd);
+                MessageHistoryManager::instance()->addRecord("ask", trimmedReply, result, appTarget);
 
-                // 异步反思并提炼为长期记忆 (记住主人的回答)
+                // 异步反思并提炼为长期记忆 (记住主人的回答与互动)
                 AgentConfig cfg = AgentService::instance()->config();
                 ModelProfile activeProfile = AgentService::instance()->getActiveProfile();
                 QString apiBase = !activeProfile.apiBase.isEmpty() ? activeProfile.apiBase : cfg.apiBase;
                 QString apiKey = !activeProfile.apiKey.isEmpty() ? activeProfile.apiKey : cfg.apiKey;
                 QString model = !activeProfile.model.isEmpty() ? activeProfile.model : cfg.model;
 
-                QString reflectionUserMsg = QString("桌宠问: %1 -> 主人答: %2").arg(question, replyText);
+                QString reflectionUserMsg = QString("桌宠前言: %1 -> 主人追问: %2").arg(question, trimmedReply);
                 LongTermMemoryEngine::instance()->triggerAsyncReflection(reflectionUserMsg, result, apiBase, apiKey, model);
             } else {
-                petPtr->showMessage("💖 收到啦！主人说的我都记在心里啦~", 5000, "", false, false, true, false);
+                petPtr->showMessage("💖 喵呜~ 刚刚网络开小差了，主人再说一次好不好？🥺", 5000, "", false, false, true, true);
             }
-        });
+        },
+        true /* directLlmOnly: 桌宠互动必须直连大模型与全网搜索，绝不调度 AiPy 创建任务 */
+    );
 }
 
 QString ShijimaWidget::currentBehaviorName() const {

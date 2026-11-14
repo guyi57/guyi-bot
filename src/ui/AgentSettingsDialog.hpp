@@ -9,6 +9,7 @@
 #include <QLineEdit>
 #include <QTextEdit>
 #include <QSpinBox>
+#include <QTimeEdit>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QPushButton>
@@ -36,12 +37,16 @@ private:
     void onPersonaChanged(int index);
     void saveAndClose();
     void testConnection();
-    void testAipyConnection();
-    void autoDetectAipyKey();
+    void testDshConnection();
+    void autoDetectDsh();
+    void updateDshBindingLabel();
+    void testAipyConnection() { testDshConnection(); }
+    void autoDetectAipyKey() { autoDetectDsh(); }
 
     void refreshSkillsTab();
     void refreshMcpTab();
     void refreshMemoryTab();
+    void refreshSensorFootprint();
     void onSaveOwnerProfileClicked();
     void onSearchMemoryClicked();
     void onAddMemoryClicked();
@@ -87,10 +92,19 @@ private:
     QTextEdit *m_customPromptEdit;
     QCheckBox *m_showHeadStatusOrbCheck;
     QCheckBox *m_askDialogShortcutCheck;
+    QCheckBox *m_trashAnimationCheck;
     QSlider *m_bubbleOpacitySlider;
     QLabel *m_bubbleOpacityLabel;
+    QCheckBox *m_enableActiveChatCheck;
+    QCheckBox *m_enableNewsPushCheck;
     QComboBox *m_banterFreqCombo;
     QCheckBox *m_contextualCareCheck;
+
+    // ⏰ 活跃与互动时间段 (上班陪伴 / 下班勿扰)
+    QCheckBox *m_enableTimeWindowCheck;
+    QTimeEdit *m_interactionStartTimeEdit;
+    QTimeEdit *m_interactionEndTimeEdit;
+    QCheckBox *m_interactionWorkdaysOnlyCheck;
 
     // 🎓 英语背词学习设置 (Vocab Learning)
     QCheckBox *m_vocabEnabledCheck;
@@ -106,6 +120,7 @@ private:
     QPushButton *m_vocabImportTxtBtn;
     QPushButton *m_vocabTriggerSampleQuizBtn;
     QPushButton *m_vocabSyncDefaultBtn;
+    QPushButton *m_vocabTestSpeechBtn;
 
     // 🧬 繁殖模式与克隆
     QCheckBox *m_breedingEnabledCheck;
@@ -116,13 +131,14 @@ private:
     QCheckBox *m_enableLlmNarrationCheck;
     QSpinBox *m_stateDebounceSpin;
 
-    // 智能体 Agent 适配器配置
+    // 智能体 Agent 适配器配置 (DeepSeek Harness)
     QComboBox *m_agentTypeCombo;
     QComboBox *m_routingModeCombo;
-    QLineEdit *m_aipyBaseEdit;
-    QLineEdit *m_aipyKeyEdit;
-    QPushButton *m_autoDetectKeyBtn;
-    QPushButton *m_testAipyBtn;
+    QLineEdit *m_dshPathEdit;
+    QLabel *m_dshModelBindingLabel;
+    QCheckBox *m_dshAutoApprovalCheck;
+    QPushButton *m_autoDetectDshBtn;
+    QPushButton *m_testDshBtn;
     QLabel *m_agentStatusLabel;
 
     // 🛠️ 技能库 (Skills)
@@ -170,6 +186,9 @@ private:
     QListWidget *m_sensorActivityList;
     QLabel *m_sensorStatsLabel;
     QPushButton *m_sensorRefreshBtn;
+    QPushButton *m_sensorCaptureOcrBtn;
+    QPushButton *m_sensorPermBtn;
+    QPushButton *m_sensorRestartBtn;
     QPushButton *m_sensorOpenFolderBtn;
 
     // ⚙️ 系统与更新 (System & Updates)
@@ -184,4 +203,6 @@ private:
     QPushButton *m_cancelBtn;
 
     int m_memoryListenerId = 0;
+    int m_appActivatedEventId = 0;
+    int m_appOcrEventId = 0;
 };

@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QDateTime>
 #include <QRecursiveMutex>
+#include <QNetworkAccessManager>
 #include <functional>
 
 struct VocabCard {
@@ -80,6 +81,15 @@ public:
     void triggerQuizForCard(qint64 cardId);
     void markCardKnown(qint64 cardId);
 
+    // 词汇检索与互动生词卡
+    VocabCard getCardById(qint64 id);
+    VocabCard getCardByWord(const QString &word);
+    VocabQuizItem generateQuizForCard(qint64 cardId);
+    QString formatVocabBadge(const VocabCard &card) const;
+    QString formatBilingualExample(const QString &example) const;
+    void enrichBilingualCardAsync(VocabCard card, std::function<void(const VocabCard &enrichedCard)> callback = nullptr);
+    void updateCardExampleAndTip(qint64 cardId, const QString &example, const QString &memoryTip);
+
     // 屏幕原生 Vision OCR 生词嗅探与捕获
     void handleOcrSnippet(const QString &appName, const QString &ocrText);
 
@@ -99,11 +109,11 @@ private:
 
     void createTablesIfNeeded();
     void seedDefaultVocabularies();
-    VocabCard getCardById(qint64 id);
 
     mutable QRecursiveMutex m_mutex;
     void *m_sqliteHandle = nullptr;
     QString m_dbPath;
+    QNetworkAccessManager *m_nam = nullptr;
 
     qint64 m_lastQuizTime = 0;
     qint64 m_lastOcrSnipeTime = 0;

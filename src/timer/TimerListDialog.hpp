@@ -29,6 +29,7 @@ public:
 private:
     void setupUi();
     void showAddTimerDialog();
+    void showTimerEditDialog(const ScheduledTimer *existingTimer = nullptr);
 
     QVBoxLayout *m_cardsLayout = nullptr;
     QWidget *m_cardsContainer = nullptr;

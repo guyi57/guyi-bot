@@ -23,6 +23,7 @@
 #include "MusicPlayerDialog.hpp"
 #include "DesktopLyricWidget.hpp"
 #include "FileDisposalSequence.hpp"
+#include "TrashWatcher.hpp"
 #include "UpdateManager.hpp"
 #include "UpdateDialog.hpp"
 #include "AgentService.hpp"
@@ -218,6 +219,13 @@ ShijimaContextMenu::ShijimaContextMenu(ShijimaWidget *parent)
                 QFileInfo fi(filePath);
                 FileDisposalSequence::instance()->start(petPtr.data(), fi.fileName(), filePath, mousePos);
             }
+        });
+
+        action = behaviorsMenu->addAction("🗑️ 启用文件删除感知动画");
+        action->setCheckable(true);
+        action->setChecked(TrashWatcher::instance()->isEnabled());
+        connect(action, &QAction::toggled, [](bool checked){
+            TrashWatcher::instance()->setEnabled(checked);
         });
 
         action = behaviorsMenu->addAction("🔍 桌宠检查器");

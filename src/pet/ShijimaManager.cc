@@ -466,6 +466,7 @@ void ShijimaManager::toggleQuickAskDialog() {
             }
             #endif
             ask->move(x, y);
+            ask->updateEdgeSnapState();
         }
     }
 
